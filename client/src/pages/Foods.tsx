@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
 import { toast } from "sonner";
-import { Plus, Search, Snowflake, Trash2, X } from "lucide-react";
+import { Plus, Search, Snowflake, Trash2 } from "lucide-react";
 import { AxiosError } from "axios";
 
 // ===== Types =====
@@ -44,11 +44,6 @@ function getApiError(e: unknown): string {
   }
   return "Something went wrong";
 }
-
-const round = (n: number, d = 0) => {
-  const m = Math.pow(10, d);
-  return Math.round(n * m) / m;
-};
 
 // Headline calories for a card
 function caloriesDisplay(food: Food) {

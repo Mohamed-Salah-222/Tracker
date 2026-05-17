@@ -379,7 +379,7 @@ function SessionProgress({ session, sets }: { session: Session; sets: SetLog[] }
 // =====================================================================
 // CardioCard (warmup / finisher)
 // =====================================================================
-function CardioCard({ label, icon, minutes, done, onMinutes, onDone, color, staggerIndex }: { label: string; icon: React.ReactNode; minutes: number; done: boolean; onMinutes: (n: number) => void; onDone: (b: boolean) => void; color: "warmup" | "finisher"; staggerIndex: number }) {
+function CardioCard({ label, icon, minutes, done, onMinutes, onDone, staggerIndex }: { label: string; icon: React.ReactNode; minutes: number; done: boolean; onMinutes: (n: number) => void; onDone: (b: boolean) => void; color: "warmup" | "finisher"; staggerIndex: number }) {
   const [localMin, setLocalMin] = useState(minutes.toString());
 
   useEffect(() => {

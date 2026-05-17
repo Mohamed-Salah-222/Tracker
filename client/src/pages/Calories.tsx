@@ -86,14 +86,6 @@ function shiftDay(iso: string, by: number) {
   return d.toISOString().slice(0, 10);
 }
 
-// Sunday-start week
-function sundayOfWeek(iso: string) {
-  const d = new Date(iso);
-  const dow = d.getUTCDay(); // Sun=0
-  d.setUTCDate(d.getUTCDate() - dow);
-  return d.toISOString().slice(0, 10);
-}
-
 function entryTotals(e: Entry) {
   if (e.entryMode === "perUnit") {
     const n = e.units ?? 0;

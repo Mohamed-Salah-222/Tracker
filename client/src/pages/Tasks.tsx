@@ -194,7 +194,7 @@ export default function Tasks() {
 // =====================================================================
 // DayCell
 // =====================================================================
-function DayCell({ iso, day, tasks, isToday, weekend, index, onClick }: { iso: string; day: number; tasks: Task[]; isToday: boolean; weekend: boolean; index: number; onClick: () => void }) {
+function DayCell({ day, tasks, isToday, weekend, index, onClick }: { iso: string; day: number; tasks: Task[]; isToday: boolean; weekend: boolean; index: number; onClick: () => void }) {
   const delay = Math.min(index * 0.012, 0.4);
 
   const hasIncomplete = tasks.some((t) => !t.done);

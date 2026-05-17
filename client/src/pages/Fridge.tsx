@@ -88,8 +88,6 @@ export default function Fridge() {
 
   const totalPortions = items.reduce((s, i) => s + i.count, 0);
   const emptyCount = items.filter((i) => i.count === 0).length;
-  const stockedCount = items.length - emptyCount;
-
   // Sort empty items to the top
   const sortedItems = useMemo(() => {
     return [...items].sort((a, b) => {

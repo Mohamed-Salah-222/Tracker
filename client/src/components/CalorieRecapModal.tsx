@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { Dialog, DialogContent, DialogTitle } from "../components/ui/dialog";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
-import { ChevronLeft, ChevronRight, Cake, TrendingUp, TrendingDown, Award, AlertTriangle } from "lucide-react";
+import { ChevronLeft, ChevronRight, Cake, Award, AlertTriangle } from "lucide-react";
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, PieChart, Pie, Cell } from "recharts";
 import { api } from "../lib/api";
 import { AxiosError } from "axios";
@@ -84,7 +84,7 @@ const MEALS: Meal[] = ["breakfast", "lunch", "dinner", "snack"];
 export function CalorieRecapModal({ open, onOpenChange }: { open: boolean; onOpenChange: (next: boolean) => void }) {
   const [anchor, setAnchor] = useState(() => sundayOfWeek(new Date().toISOString().slice(0, 10)));
   const [data, setData] = useState<WeekSummary | null>(null);
-  const [prevData, setPrevData] = useState<WeekSummary | null>(null);
+  const [, setPrevData] = useState<WeekSummary | null>(null);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -217,10 +217,11 @@ export function CalorieRecapModal({ open, onOpenChange }: { open: boolean; onOpe
                               borderRadius: "8px",
                               fontSize: "12px",
                             }}
-                            labelFormatter={dayLong}
-                            formatter={(v: number, _name, p: { payload?: DaySummary }) => {
-                              const isCheat = p.payload?.isCheat;
-                              return [`${round(v)} cal${isCheat ? " (cheat)" : ""}`, "Calories"];
+                            labelFormatter={(label) => dayLong(label as string)}
+                            formatter={(v, _name, p) => {
+                              const payload = (p as { payload?: DaySummary }).payload;
+                              const isCheat = payload?.isCheat;
+                              return [`${round(Number(v))} cal${isCheat ? " (cheat)" : ""}`, "Calories"];
                             }}
                           />
                           {/* Reference line for target — using a dashed bar trick wouldn't work, so we just rely on the visual target zone */}
@@ -297,8 +298,8 @@ export function CalorieRecapModal({ open, onOpenChange }: { open: boolean; onOpe
                               borderRadius: "8px",
                               fontSize: "12px",
                             }}
-                            labelFormatter={dayLong}
-                            formatter={(v: number, name: string) => [`${round1(v)}g`, name.charAt(0).toUpperCase() + name.slice(1)]}
+                            labelFormatter={(label) => dayLong(label as string)}
+                            formatter={(v, name) => [`${round1(Number(v))}g`, String(name).charAt(0).toUpperCase() + String(name).slice(1)]}
                           />
                           <Bar dataKey="p" stackId="a" fill="var(--color-protein)" radius={[0, 0, 0, 0]} animationDuration={500} />
                           <Bar dataKey="c" stackId="a" fill="var(--color-carbs)" radius={[0, 0, 0, 0]} animationDuration={500} />
@@ -423,7 +424,10 @@ function MacrosDonut({ p, c, f }: { p: number; c: number; f: number }) {
               borderRadius: "8px",
               fontSize: "12px",
             }}
-            formatter={(v: number, name: string) => [`${round(v)} cal (${round((v / total) * 100)}%)`, name]}
+            formatter={(v, name) => {
+              const num = Number(v);
+              return [`${round(num)} cal (${round((num / total) * 100)}%)`, String(name)];
+            }}
           />
         </PieChart>
       </ResponsiveContainer>

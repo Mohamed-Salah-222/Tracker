@@ -944,7 +944,7 @@ function IncomeModal({ open, onClose, data, hidden }: { open: boolean; onClose: 
                       borderRadius: "8px",
                       fontSize: "12px",
                     }}
-                    formatter={(v: number) => [fmtUSD(v), "Income"]}
+                    formatter={(v) => [fmtUSD(Number(v)), "Income"]}
                     labelFormatter={(iso) => new Date(iso).toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric", timeZone: "UTC" })}
                   />
                   <Area type="monotone" dataKey="value" stroke="var(--color-income)" strokeWidth={2} fill="url(#dashIncomeFillBig)" />
@@ -1002,7 +1002,7 @@ function PaymentsModal({ open, onClose, data, hidden }: { open: boolean; onClose
                       borderRadius: "8px",
                       fontSize: "12px",
                     }}
-                    formatter={(v: number) => [fmtEGP(v), "Spent"]}
+                    formatter={(v) => [fmtEGP(Number(v)), "Spent"]}
                     labelFormatter={(iso) => new Date(iso).toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric", timeZone: "UTC" })}
                   />
                   <Bar dataKey="value" fill="var(--color-expense)" radius={[3, 3, 0, 0]} />

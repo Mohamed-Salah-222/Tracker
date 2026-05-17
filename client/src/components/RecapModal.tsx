@@ -252,22 +252,23 @@ export function RecapModal({ open, onOpenChange, period }: { open: boolean; onOp
                             />
                             <YAxis tick={{ fontSize: 10, fill: "var(--color-muted-foreground)" }} tickFormatter={(v: number) => v.toString()} stroke="var(--color-border)" width={40} />
                             <Tooltip
-                              cursor={{ stroke: "var(--color-border)", strokeWidth: 1 }}
+                              cursor={{ fill: "color-mix(in oklch, var(--color-muted-foreground), transparent 90%)" }}
                               contentStyle={{
                                 background: "var(--color-card)",
                                 border: "1px solid var(--color-border)",
                                 borderRadius: "8px",
                                 fontSize: "12px",
                               }}
-                              labelFormatter={(v: string) =>
-                                new Date(v).toLocaleDateString("en-US", {
-                                  weekday: "short",
+                              labelFormatter={(label) => {
+                                const d = new Date(label as string);
+                                return d.toLocaleDateString("en-US", {
+                                  weekday: "long",
                                   month: "short",
                                   day: "numeric",
                                   timeZone: "UTC",
-                                })
-                              }
-                              formatter={(v: number) => [fmtEGP(v), "Spent"]}
+                                });
+                              }}
+                              formatter={(v) => [fmtEGP(Number(v)), "Spent"]}
                             />
                             <Area type="monotone" dataKey="amount" stroke="var(--color-expense)" strokeWidth={2} fill="url(#expenseGrad)" animationDuration={500} />
                           </AreaChart>

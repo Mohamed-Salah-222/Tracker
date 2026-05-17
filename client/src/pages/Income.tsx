@@ -210,7 +210,7 @@ export default function Income() {
   const todayMinutes = todayEntry?.minutes ?? 0;
 
   // Off-day breakdown
-  const offBreakdown = useMemo(() => {
+  useMemo(() => {
     const counts: Record<DayStatusValue, number> = { vacation: 0, sick: 0, holiday: 0 };
     for (const s of data.dayStatuses) counts[s.status]++;
     return counts;
