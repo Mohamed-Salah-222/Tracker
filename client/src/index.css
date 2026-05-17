@@ -1,0 +1,289 @@
+@import "tailwindcss";
+@import url("https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700;800&family=Geist+Mono:wght@400;500;600&display=swap");
+
+/* Tailwind v4: enable .dark class variant */
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  /* ===== Light theme (default) ===== */
+  --color-background: #fafafa;
+  --color-foreground: #09090b;
+
+  --color-card: #ffffff;
+  --color-card-foreground: #09090b;
+
+  --color-popover: #ffffff;
+  --color-popover-foreground: #09090b;
+
+  --color-primary: #18181b;
+  --color-primary-foreground: #fafafa;
+
+  --color-secondary: #f4f4f5;
+  --color-secondary-foreground: #18181b;
+
+  --color-muted: #f4f4f5;
+  --color-muted-foreground: #71717a;
+
+  --color-accent: #f4f4f5;
+  --color-accent-foreground: #18181b;
+
+  --color-destructive: #dc2626;
+  --color-destructive-foreground: #fafafa;
+
+  --color-border: #e4e4e7;
+  --color-border-strong: #d4d4d8;
+  --color-input: #e4e4e7;
+  --color-ring: #18181b;
+
+  /* Semantic colors */
+  --color-income: #16a34a;
+  --color-income-bg: #f0fdf4;
+  --color-income-border: #bbf7d0;
+
+  --color-off-vacation: #2563eb;
+  --color-off-vacation-bg: #eff6ff;
+  --color-off-sick: #dc2626;
+  --color-off-sick-bg: #fef2f2;
+  --color-off-holiday: #9333ea;
+  --color-off-holiday-bg: #faf5ff;
+  --color-off-weekend: #71717a;
+  --color-off-weekend-bg: #f4f4f5;
+
+  --color-success: #16a34a;
+  --color-warning: #ea580c;
+
+  --color-sidebar: #fafafa;
+  --color-sidebar-foreground: #09090b;
+  --color-sidebar-border: #e4e4e7;
+
+  /* Expense category colors */
+  --color-cat-food: #c2410c;
+  --color-cat-food-bg: #fff7ed;
+  --color-cat-transport: #1d4ed8;
+  --color-cat-transport-bg: #eff6ff;
+  --color-cat-bills: #b91c1c;
+  --color-cat-bills-bg: #fef2f2;
+  --color-cat-shopping: #be185d;
+  --color-cat-shopping-bg: #fdf2f8;
+  --color-cat-entertainment: #7e22ce;
+  --color-cat-entertainment-bg: #faf5ff;
+  --color-cat-health: #15803d;
+  --color-cat-health-bg: #f0fdf4;
+  --color-cat-education: #4338ca;
+  --color-cat-education-bg: #eef2ff;
+  --color-cat-other: #52525b;
+  --color-cat-other-bg: #f4f4f5;
+  /* Expense semantic */
+  --color-expense: #dc2626;
+  --color-expense-bg: #fef2f2;
+
+  --radius: 0.625rem;
+
+  /* Food category colors */
+  --color-food-protein: #b91c1c;
+  --color-food-protein-bg: #fef2f2;
+  --color-food-carbs: #b45309;
+  --color-food-carbs-bg: #fffbeb;
+  --color-food-fats: #a16207;
+  --color-food-fats-bg: #fefce8;
+  --color-food-vegetables: #15803d;
+  --color-food-vegetables-bg: #f0fdf4;
+  --color-food-snacks: #be185d;
+  --color-food-snacks-bg: #fdf2f8;
+  --color-food-drinks: #1d4ed8;
+  --color-food-drinks-bg: #eff6ff;
+  --color-food-prepared: #7e22ce;
+  --color-food-prepared-bg: #faf5ff;
+  --color-food-other: #52525b;
+  --color-food-other-bg: #f4f4f5;
+
+  /* Meal slot colors */
+  --color-meal-breakfast: #c2410c;
+  --color-meal-breakfast-bg: #fff7ed;
+  --color-meal-lunch: #15803d;
+  --color-meal-lunch-bg: #f0fdf4;
+  --color-meal-dinner: #6d28d9;
+  --color-meal-dinner-bg: #faf5ff;
+  --color-meal-snack: #be185d;
+  --color-meal-snack-bg: #fdf2f8;
+  /* Nutrition tracking colors */
+  --color-protein: #b91c1c;
+  --color-protein-bg: #fef2f2;
+  --color-carbs: #b45309;
+  --color-carbs-bg: #fffbeb;
+  --color-fat: #a16207;
+  --color-fat-bg: #fefce8;
+  --color-water: #0284c7;
+  --color-water-bg: #f0f9ff;
+
+  /* Workout colors /
+--color-workout-a: #1d4ed8;          / Upper - blue /
+--color-workout-a-bg: #eff6ff;
+--color-workout-b: #15803d;          / Lower - green */
+  --color-workout-b-bg: #f0fdf4;
+  --color-workout-rest: #71717a;
+  --color-workout-rest-bg: #f4f4f5;
+
+  /* Fonts */
+  --font-sans: "Geist", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
+}
+
+/* ===== Dark theme overrides ===== */
+.dark {
+  --color-background: #09090b;
+  --color-foreground: #fafafa;
+
+  --color-card: #0f0f11;
+  --color-card-foreground: #fafafa;
+
+  --color-popover: #0f0f11;
+  --color-popover-foreground: #fafafa;
+
+  --color-primary: #fafafa;
+  --color-primary-foreground: #18181b;
+
+  --color-secondary: #18181b;
+  --color-secondary-foreground: #fafafa;
+
+  --color-muted: #18181b;
+  --color-muted-foreground: #a1a1aa;
+
+  --color-accent: #1c1c1f;
+  --color-accent-foreground: #fafafa;
+
+  --color-destructive: #ef4444;
+  --color-destructive-foreground: #fafafa;
+
+  --color-border: #27272a;
+  --color-border-strong: #3f3f46;
+  --color-input: #27272a;
+  --color-ring: #fafafa;
+
+  --color-income: #4ade80;
+  --color-income-bg: #052e16;
+  --color-income-border: #14532d;
+
+  --color-off-vacation: #60a5fa;
+  --color-off-vacation-bg: #0c1e3a;
+  --color-off-sick: #f87171;
+  --color-off-sick-bg: #2a0e0e;
+  --color-off-holiday: #c084fc;
+  --color-off-holiday-bg: #1f0d2e;
+  --color-off-weekend: #71717a;
+  --color-off-weekend-bg: #18181b;
+
+  --color-sidebar: #0a0a0c;
+  --color-sidebar-foreground: #fafafa;
+  --color-sidebar-border: #27272a;
+
+  /* Expense category colors (dark) */
+  --color-cat-food: #fb923c;
+  --color-cat-food-bg: #2a1407;
+  --color-cat-transport: #60a5fa;
+  --color-cat-transport-bg: #0c1e3a;
+  --color-cat-bills: #f87171;
+  --color-cat-bills-bg: #2a0e0e;
+  --color-cat-shopping: #f472b6;
+  --color-cat-shopping-bg: #2a0d1f;
+  --color-cat-entertainment: #c084fc;
+  --color-cat-entertainment-bg: #1f0d2e;
+  --color-cat-health: #4ade80;
+  --color-cat-health-bg: #052e16;
+  --color-cat-education: #818cf8;
+  --color-cat-education-bg: #161635;
+  --color-cat-other: #a1a1aa;
+  --color-cat-other-bg: #1c1c1f;
+  --color-expense: #f87171;
+  --color-expense-bg: #2a0e0e;
+
+  /* Food category colors (dark) */
+  --color-food-protein: #f87171;
+  --color-food-protein-bg: #2a0e0e;
+  --color-food-carbs: #fbbf24;
+  --color-food-carbs-bg: #2a1a07;
+  --color-food-fats: #fde047;
+  --color-food-fats-bg: #2a2207;
+  --color-food-vegetables: #4ade80;
+  --color-food-vegetables-bg: #052e16;
+  --color-food-snacks: #f472b6;
+  --color-food-snacks-bg: #2a0d1f;
+  --color-food-drinks: #60a5fa;
+  --color-food-drinks-bg: #0c1e3a;
+  --color-food-prepared: #c084fc;
+  --color-food-prepared-bg: #1f0d2e;
+  --color-food-other: #a1a1aa;
+  --color-food-other-bg: #1c1c1f;
+
+  /* Meal slot colors (dark) */
+  --color-meal-breakfast: #fb923c;
+  --color-meal-breakfast-bg: #2a1407;
+  --color-meal-lunch: #4ade80;
+  --color-meal-lunch-bg: #052e16;
+  --color-meal-dinner: #a78bfa;
+  --color-meal-dinner-bg: #1f0d2e;
+  --color-meal-snack: #f472b6;
+  --color-meal-snack-bg: #2a0d1f;
+  /* Nutrition tracking colors (dark) */
+  --color-protein: #f87171;
+  --color-protein-bg: #2a0e0e;
+  --color-carbs: #fbbf24;
+  --color-carbs-bg: #2a1a07;
+  --color-fat: #fde047;
+  --color-fat-bg: #2a2207;
+  --color-water: #38bdf8;
+  --color-water-bg: #0c1e3a;
+
+  /* Workout colors (dark) */
+  --color-workout-a: #60a5fa;
+  --color-workout-a-bg: #0c1e3a;
+  --color-workout-b: #4ade80;
+  --color-workout-b-bg: #052e16;
+  --color-workout-rest: #a1a1aa;
+  --color-workout-rest-bg: #1c1c1f;
+}
+
+html,
+body,
+#root {
+  background: var(--color-background);
+  color: var(--color-foreground);
+  font-family: var(--font-sans);
+}
+
+body {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: "cv11", "ss01", "ss03";
+}
+
+.font-mono,
+.mono {
+  font-family: var(--font-mono);
+  font-feature-settings: "zero", "ss01";
+}
+
+/* Smooth theme transitions on color/border properties only (not transform/layout) */
+*,
+*::before,
+*::after {
+  transition-property: background-color, border-color, color, fill, stroke;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  transition-duration: 150ms;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-border-strong);
+}
