@@ -912,7 +912,7 @@ function GoalDialog({ open, onOpenChange, goal, onSaved }: { open: boolean; onOp
   const [calT, setCalT] = useState("2000");
   const [calB, setCalB] = useState("100");
   const [pMin, setPMin] = useState("160");
-  const [pMax, setPMax] = useState("180");
+  const [pMax, setPMax] = useState("190");
   const [wMin, setWMin] = useState("2500");
   const [wTarget, setWTarget] = useState("3000");
   const [wMax, setWMax] = useState("3500");
