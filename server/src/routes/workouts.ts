@@ -213,4 +213,159 @@ router.get("/last-weights", async (_req, res) => {
   res.json(map);
 });
 
+router.get("/stats", async (req, res) => {
+  const fromStr = req.query.from as string | undefined;
+  const toStr = req.query.to as string | undefined;
+
+  const to = toStr
+    ? toDayUTC(toStr)
+    : (() => {
+        const d = new Date();
+        d.setUTCHours(0, 0, 0, 0);
+        d.setUTCDate(d.getUTCDate() + 1);
+        return d;
+      })();
+  const from = fromStr
+    ? toDayUTC(fromStr)
+    : (() => {
+        const d = new Date(to);
+        d.setUTCDate(d.getUTCDate() - 30);
+        return d;
+      })();
+
+  const sessions = await WorkoutSession.find({
+    date: { $gte: from, $lt: to },
+  }).sort({ date: 1 });
+
+  const sessionIds = sessions.map((s) => s._id);
+
+  const allSets = await SetLog.find({ sessionId: { $in: sessionIds } });
+
+  // Per-session aggregates
+  const setsBySession: Record<string, typeof allSets> = {};
+  for (const s of allSets) {
+    const sid = s.sessionId.toString();
+    (setsBySession[sid] ||= []).push(s);
+  }
+
+  // Totals
+  let totalVolume = 0;
+  let totalSetsDone = 0;
+  let totalReps = 0;
+  const completedSessions = sessions.filter((s) => s.completedAt).length;
+  const sessionsByType = { A: 0, B: 0, rest: 0 };
+
+  for (const s of sessions) {
+    sessionsByType[s.type as "A" | "B" | "rest"]++;
+    const sets = setsBySession[s._id.toString()] ?? [];
+    for (const set of sets) {
+      if (set.done) totalSetsDone++;
+      if (set.weight != null && set.reps != null && set.weight > 0 && set.reps > 0) {
+        totalVolume += set.weight * set.reps;
+        totalReps += set.reps;
+      }
+    }
+  }
+
+  // Per-day frequency map
+  const dayMap: Record<string, { date: string; type: "A" | "B" | "rest"; volume: number; setsDone: number; completed: boolean }> = {};
+  for (const s of sessions) {
+    const iso = s.date.toISOString().slice(0, 10);
+    const sets = setsBySession[s._id.toString()] ?? [];
+    const volume = sets.reduce((acc, set) => {
+      if (set.weight != null && set.reps != null) return acc + set.weight * set.reps;
+      return acc;
+    }, 0);
+    const setsDone = sets.filter((set) => set.done).length;
+    dayMap[iso] = {
+      date: iso,
+      type: s.type as "A" | "B" | "rest",
+      volume,
+      setsDone,
+      completed: !!s.completedAt,
+    };
+  }
+
+  // Best lifts per exercise (max weight ever, in this range)
+  const bestByExercise: Record<string, { weight: number; reps: number; date: string }> = {};
+  for (const s of sessions) {
+    const iso = s.date.toISOString().slice(0, 10);
+    const sets = setsBySession[s._id.toString()] ?? [];
+    for (const set of sets) {
+      if (set.weight != null && set.weight > 0) {
+        const current = bestByExercise[set.exerciseId];
+        if (!current || set.weight > current.weight) {
+          bestByExercise[set.exerciseId] = {
+            weight: set.weight,
+            reps: set.reps ?? 0,
+            date: iso,
+          };
+        }
+      }
+    }
+  }
+
+  res.json({
+    from: from.toISOString().slice(0, 10),
+    to: to.toISOString().slice(0, 10),
+    totalSessions: sessions.length,
+    completedSessions,
+    sessionsByType,
+    totalVolume,
+    totalSetsDone,
+    totalReps,
+    days: Object.values(dayMap).sort((a, b) => a.date.localeCompare(b.date)),
+    bestByExercise,
+  });
+});
+
+// =====================================================================
+// GET /workouts/exercise-progress?exerciseId=X&limit=N
+// Returns history for one exercise — best set per session, last N sessions
+// =====================================================================
+router.get("/exercise-progress", async (req, res) => {
+  const exerciseId = req.query.exerciseId as string;
+  if (!exerciseId) return res.status(400).json({ error: "exerciseId required" });
+  const limit = Math.min(parseInt(req.query.limit as string) || 12, 50);
+
+  // Find all sets for this exercise that have weight or reps logged
+  const sets = await SetLog.find({
+    exerciseId,
+    $or: [{ weight: { $ne: null, $gt: 0 } }, { reps: { $ne: null, $gt: 0 } }],
+  })
+    .populate("sessionId")
+    .sort({ createdAt: -1 });
+
+  // Group by sessionId, take the best set per session (heaviest weight, tiebreaker on reps)
+  type BestSet = { weight: number | null; reps: number | null; sessionId: string; date: string; setNumber: number };
+  const perSession: Record<string, BestSet> = {};
+  for (const s of sets) {
+    const sid = s.sessionId._id ? s.sessionId._id.toString() : s.sessionId.toString();
+    const session = s.sessionId as unknown as { date?: Date; _id?: unknown };
+    const date = session.date ? session.date.toISOString().slice(0, 10) : "";
+    const candidate: BestSet = {
+      weight: s.weight ?? null,
+      reps: s.reps ?? null,
+      sessionId: sid,
+      date,
+      setNumber: s.setNumber,
+    };
+    const cur = perSession[sid];
+    if (!cur) {
+      perSession[sid] = candidate;
+    } else {
+      const w = candidate.weight ?? 0;
+      const cw = cur.weight ?? 0;
+      if (w > cw || (w === cw && (candidate.reps ?? 0) > (cur.reps ?? 0))) {
+        perSession[sid] = candidate;
+      }
+    }
+  }
+
+  const sorted = Object.values(perSession).sort((a, b) => a.date.localeCompare(b.date));
+  const recent = sorted.slice(-limit);
+
+  res.json({ exerciseId, history: recent });
+});
+
 export default router;

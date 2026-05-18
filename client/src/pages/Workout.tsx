@@ -8,7 +8,9 @@ import { Card, CardContent } from "../components/ui/card";
 import { Checkbox } from "../components/ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "../components/ui/dialog";
 import { toast } from "sonner";
-import { Dumbbell, Footprints, Flame, Check, RotateCcw, Trash2 } from "lucide-react";
+import { Dumbbell, Footprints, Flame, Check, RotateCcw, Trash2, ChevronLeft, ChevronRight } from "lucide-react";
+import { BarChart3 } from "lucide-react";
+import { WorkoutRecapModal } from "../components/WorkoutRecapModal";
 import { AxiosError } from "axios";
 
 // =====================================================================
@@ -78,6 +80,12 @@ function getApiError(e: unknown): string {
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
 
+function shiftDay(iso: string, by: number): string {
+  const d = new Date(iso + "T00:00:00Z");
+  d.setUTCDate(d.getUTCDate() + by);
+  return d.toISOString().slice(0, 10);
+}
+
 function workoutLabel(type: WorkoutType) {
   if (type === "A") return "Workout A · Upper";
   if (type === "B") return "Workout B · Lower";
@@ -109,20 +117,28 @@ export default function Workout() {
   const [suggested, setSuggested] = useState<WorkoutType>("A");
   const [sets, setSets] = useState<SetLog[]>([]);
   const [lastWeights, setLastWeights] = useState<LastWeights>({});
+  const [selectedDate, setSelectedDate] = useState(todayISO);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [recapOpen, setRecapOpen] = useState(false);
 
   // ----- Loaders -----
-  const loadToday = useCallback(async () => {
+  const loadSession = useCallback(async () => {
+    const today = todayISO();
     try {
-      const r = await api.get<{ session: Session | null; suggested: WorkoutType | null }>("/workouts/today");
-      setSession(r.data.session);
-      if (r.data.suggested) setSuggested(r.data.suggested);
-      // If there's no session, prompt the picker
-      if (!r.data.session) setPickerOpen(true);
+      if (selectedDate === today) {
+        const r = await api.get<{ session: Session | null; suggested: WorkoutType | null }>("/workouts/today");
+        setSession(r.data.session);
+        if (r.data.suggested) setSuggested(r.data.suggested);
+        if (!r.data.session) setPickerOpen(true);
+      } else {
+        const r = await api.get<Session | null>(`/workouts/session?date=${selectedDate}`);
+        setSession(r.data);
+        if (!r.data) setPickerOpen(true);
+      }
     } catch (e) {
       toast.error(getApiError(e));
     }
-  }, []);
+  }, [selectedDate]);
 
   const loadSets = useCallback(async (sessionId: string) => {
     try {
@@ -143,9 +159,12 @@ export default function Workout() {
   }, []);
 
   useEffect(() => {
-    void loadToday();
+    void loadSession();
+  }, [loadSession]);
+
+  useEffect(() => {
     void loadLastWeights();
-  }, [loadToday, loadLastWeights]);
+  }, [loadLastWeights]);
 
   useEffect(() => {
     if (session) void loadSets(session._id);
@@ -155,7 +174,7 @@ export default function Workout() {
   // ----- Actions -----
   const startSession = async (type: WorkoutType) => {
     try {
-      const r = await api.post<Session>("/workouts/session", { date: todayISO(), type });
+      const r = await api.post<Session>("/workouts/session", { date: selectedDate, type });
       setSession(r.data);
       setPickerOpen(false);
       toast.success(`Started ${workoutLabel(type)}`);
@@ -192,7 +211,7 @@ export default function Workout() {
       await api.delete(`/workouts/session/${session._id}`);
       setSession(null);
       setSets([]);
-      void loadToday();
+      void loadSession();
       toast.success("Session deleted");
     } catch (e) {
       toast.error(getApiError(e));
@@ -221,33 +240,66 @@ export default function Workout() {
           {session && <WorkoutTypeBadge type={session.type} />}
         </div>
         <div className="flex items-center gap-2 self-end sm:self-auto">
-          {session && (
-            <>
-              <Button variant="outline" size="sm" onClick={() => setPickerOpen(true)}>
-                <RotateCcw className="h-3.5 w-3.5 mr-1.5" />
-                Change
-              </Button>
-              {!isCompleted && (
-                <Button variant="default" size="sm" onClick={completeSession}>
-                  <Check className="h-3.5 w-3.5 mr-1.5" />
-                  Complete
-                </Button>
-              )}
-              {isCompleted && (
-                <Button variant="outline" size="sm" onClick={reopenSession}>
-                  Reopen
-                </Button>
-              )}
-            </>
+          <Button variant="outline" size="sm" onClick={() => setRecapOpen(true)}>
+            <BarChart3 className="h-3.5 w-3.5 mr-1.5" />
+            History
+          </Button>
+        </div>
+      </motion.div>
+
+      {/* ===== Date navigation ===== */}
+      <motion.div {...stagger(0)} className="flex items-center gap-2">
+        <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => setSelectedDate(shiftDay(selectedDate, -1))}>
+          <ChevronLeft className="h-4 w-4" />
+        </Button>
+        <div className="flex flex-1 items-center justify-center gap-2">
+          <span className="text-sm font-medium">
+            {new Date(selectedDate + "T00:00:00Z").toLocaleDateString("en-US", {
+              weekday: "short",
+              month: "short",
+              day: "numeric",
+              timeZone: "UTC",
+            })}
+          </span>
+          {selectedDate === todayISO() && (
+            <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Today</span>
           )}
         </div>
+        <Button variant="ghost" size="sm" disabled={selectedDate === todayISO()} onClick={() => setSelectedDate(todayISO())}>
+          Today
+        </Button>
+        <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => setSelectedDate(shiftDay(selectedDate, 1))}>
+          <ChevronRight className="h-4 w-4" />
+        </Button>
       </motion.div>
 
       {/* ===== Headline ===== */}
       <motion.div {...stagger(1)} className="flex items-end justify-between gap-3">
-        <div>
-          <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Today</div>
-          <div className="text-2xl md:text-3xl font-semibold tracking-tight mt-1">{session ? workoutLabel(session.type) : "Not started"}</div>
+        <div className="flex-1 min-w-0">
+          <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">
+            {selectedDate === todayISO() ? "Today" : "Session"}
+          </div>
+          <div className="flex items-center gap-2 mt-1 flex-wrap">
+            <div className="text-2xl md:text-3xl font-semibold tracking-tight">{session ? workoutLabel(session.type) : "Not started"}</div>
+            {session && (
+              <div className="flex items-center gap-1.5">
+                <Button variant="outline" size="sm" onClick={() => setPickerOpen(true)}>
+                  <RotateCcw className="h-3.5 w-3.5 mr-1.5" />
+                  Change
+                </Button>
+                {!isCompleted ? (
+                  <Button variant="default" size="sm" onClick={completeSession}>
+                    <Check className="h-3.5 w-3.5 mr-1.5" />
+                    Complete
+                  </Button>
+                ) : (
+                  <Button variant="outline" size="sm" onClick={reopenSession}>
+                    Reopen
+                  </Button>
+                )}
+              </div>
+            )}
+          </div>
           {isCompleted && (
             <div className="text-xs mt-1 font-medium" style={{ color: "var(--color-income)" }}>
               Completed {new Date(session!.completedAt!).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}
@@ -324,6 +376,7 @@ export default function Workout() {
           }
         }}
       />
+      <WorkoutRecapModal open={recapOpen} onOpenChange={setRecapOpen} />
     </div>
   );
 }
