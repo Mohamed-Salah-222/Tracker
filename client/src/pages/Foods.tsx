@@ -295,8 +295,8 @@ function FoodFormDialog({ open, onOpenChange, onSaved, existing, onDelete }: { o
   const [carbs, setCarbs] = useState("");
   const [fat, setFat] = useState("");
 
-  const handleOpenChange = (next: boolean) => {
-    if (next) {
+  useEffect(() => {
+    if (open) {
       if (existing) {
         setName(existing.name);
         setCategory(existing.category);
@@ -334,8 +334,7 @@ function FoodFormDialog({ open, onOpenChange, onSaved, existing, onDelete }: { o
         setFat("");
       }
     }
-    onOpenChange(next);
-  };
+  }, [open, existing]);
 
   const cal = parseFloat(calories) || 0;
   const p = parseFloat(protein) || 0;
@@ -392,7 +391,7 @@ function FoodFormDialog({ open, onOpenChange, onSaved, existing, onDelete }: { o
   const labelSuffix = entryMode === "perUnit" ? `per ${unitLabel.trim() || "unit"}` : unit === "per100g" ? "/100g" : "/g";
 
   return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
+    <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="!max-w-[520px] max-h-[92vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{existing ? "Edit food" : "Add food"}</DialogTitle>

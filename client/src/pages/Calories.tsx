@@ -389,19 +389,18 @@ function CalorieBar({ value, goal, cheat }: { value: number; goal: Goal; cheat: 
 // =====================================================================
 function ProteinBar({ value, goal, cheat }: { value: number; goal: Goal; cheat: boolean }) {
   const v = round1(value);
-  const inRange = v >= goal.proteinMin && v <= goal.proteinMax;
-  const color = cheat ? "var(--color-muted-foreground)" : inRange ? "var(--color-income)" : "var(--color-foreground)";
+  const aboveMin = v >= goal.proteinMin;
+  const color = cheat ? "var(--color-muted-foreground)" : aboveMin ? "var(--color-income)" : "var(--color-protein)";
 
-  const widthPct = Math.min((v / goal.proteinMax) * 100, 100);
+  // Bar fills toward proteinMin (the threshold) and caps at 100% — extra is just bonus
+  const widthPct = Math.min((v / goal.proteinMin) * 100, 100);
 
   return (
     <Card>
       <CardContent className="p-4">
         <div className="flex items-baseline justify-between gap-2 mb-2">
           <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Protein</span>
-          <span className="text-[10px] font-mono tabular-nums text-muted-foreground">
-            {goal.proteinMin}–{goal.proteinMax}g
-          </span>
+          <span className="text-[10px] font-mono tabular-nums text-muted-foreground">≥ {goal.proteinMin}g</span>
         </div>
         <div className="flex items-baseline gap-1.5">
           <AnimatePresence mode="wait">
@@ -411,23 +410,12 @@ function ProteinBar({ value, goal, cheat }: { value: number; goal: Goal; cheat: 
           </AnimatePresence>
           <span className="text-xs text-muted-foreground font-medium">g</span>
         </div>
-        {/* Range bar with target zone highlighted */}
         <div className="mt-3 h-1.5 rounded-full overflow-hidden relative" style={{ background: "var(--color-muted)" }}>
-          {/* Target zone */}
-          <div
-            className="absolute top-0 bottom-0 opacity-30"
-            style={{
-              left: `${(goal.proteinMin / goal.proteinMax) * 100}%`,
-              width: `${((goal.proteinMax - goal.proteinMin) / goal.proteinMax) * 100}%`,
-              background: "var(--color-income)",
-            }}
-          />
-          {/* Progress */}
-          <motion.div initial={{ width: 0 }} animate={{ width: `${widthPct}%` }} transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }} style={{ background: color, height: "100%", position: "relative" }} />
+          <motion.div initial={{ width: 0 }} animate={{ width: `${widthPct}%` }} transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }} style={{ background: color, height: "100%" }} />
         </div>
         {!cheat && (
-          <div className="text-[10px] mt-1.5 font-medium" style={{ color: inRange ? "var(--color-income)" : "var(--color-muted-foreground)" }}>
-            {inRange ? "In target range" : v < goal.proteinMin ? `${round1(goal.proteinMin - v)}g to min` : `Above max range`}
+          <div className="text-[10px] mt-1.5 font-medium" style={{ color: aboveMin ? "var(--color-income)" : "var(--color-muted-foreground)" }}>
+            {aboveMin ? "Goal hit" : `${round1(goal.proteinMin - v)}g to goal`}
           </div>
         )}
       </CardContent>
