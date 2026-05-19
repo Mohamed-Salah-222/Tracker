@@ -6,7 +6,7 @@ import { Checkbox } from "../components/ui/checkbox";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
-import { Trash2, Plus, Sparkles } from "lucide-react";
+import { Trash2, Plus, Sparkles, ArrowRight } from "lucide-react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { AxiosError } from "axios";
@@ -159,6 +159,19 @@ export default function Today() {
     }
   };
 
+  const moveToTomorrow = async (t: Task) => {
+    try {
+      const tomorrow = new Date(today);
+      tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+      const tomorrowISO = tomorrow.toISOString().slice(0, 10);
+      await api.patch(`/tasks/${t._id}`, { date: tomorrowISO });
+      toast.success(`Moved "${t.title}" to tomorrow`);
+      void load();
+    } catch (e) {
+      toast.error(getApiError(e));
+    }
+  };
+
   const del = async (id: string) => {
     try {
       await api.delete(`/tasks/${id}`);
@@ -274,7 +287,7 @@ export default function Today() {
                 <CardContent className="p-2">
                   <AnimatePresence initial={false}>
                     {incomplete.map((t) => (
-                      <TaskRow key={t._id} task={t} onToggle={toggle} onDelete={del} />
+                      <TaskRow key={t._id} task={t} onToggle={toggle} onDelete={del} onMoveToTomorrow={moveToTomorrow} />
                     ))}
                   </AnimatePresence>
                 </CardContent>
@@ -292,7 +305,7 @@ export default function Today() {
                 <CardContent className="p-2">
                   <AnimatePresence initial={false}>
                     {completed.map((t) => (
-                      <TaskRow key={t._id} task={t} onToggle={toggle} onDelete={del} />
+                      <TaskRow key={t._id} task={t} onToggle={toggle} onDelete={del} onMoveToTomorrow={moveToTomorrow} />
                     ))}
                   </AnimatePresence>
                 </CardContent>
@@ -308,14 +321,19 @@ export default function Today() {
 // =====================================================================
 // TaskRow
 // =====================================================================
-function TaskRow({ task, onToggle, onDelete }: { task: Task; onToggle: (t: Task) => void; onDelete: (id: string) => void }) {
+function TaskRow({ task, onToggle, onDelete, onMoveToTomorrow }: { task: Task; onToggle: (t: Task) => void; onDelete: (id: string) => void; onMoveToTomorrow: (t: Task) => void }) {
   return (
     <motion.div layout initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, x: -8 }} transition={{ duration: 0.2 }} className="flex items-center gap-3 py-2 px-2 group rounded-md hover:bg-muted/40 transition-colors">
       <Checkbox checked={task.done} onCheckedChange={() => onToggle(task)} />
       <motion.span animate={task.done ? { opacity: 0.5 } : { opacity: 1 }} className={`flex-1 text-sm transition-all ${task.done ? "line-through text-muted-foreground" : "text-foreground"}`}>
         {task.title}
       </motion.span>
-      <Button variant="ghost" size="icon" className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => onDelete(task._id)}>
+      {!task.done && (
+        <Button variant="ghost" size="icon" className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => onMoveToTomorrow(task)} title="Move to tomorrow">
+          <ArrowRight className="h-3 w-3" />
+        </Button>
+      )}
+      <Button variant="ghost" size="icon" className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => onDelete(task._id)} title="Delete">
         <Trash2 className="h-3 w-3" />
       </Button>
     </motion.div>

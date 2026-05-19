@@ -8,7 +8,8 @@ import { Card, CardContent } from "../components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "../components/ui/dialog";
 import { Checkbox } from "../components/ui/checkbox";
 import { toast } from "sonner";
-import { ChevronLeft, ChevronRight, Trash2, Plus, Check } from "lucide-react";
+import { ChevronLeft, ChevronRight, Trash2, Plus, Check, ArrowRight } from "lucide-react";
+
 import { AxiosError } from "axios";
 
 // ===== Types =====
@@ -294,6 +295,19 @@ function DayDialog({ date, tasks, onClose, onChanged }: { date: string; tasks: T
     }
   };
 
+  const moveToNextDay = async (t: Task) => {
+    try {
+      const d = new Date(date);
+      d.setUTCDate(d.getUTCDate() + 1);
+      const nextISO = d.toISOString().slice(0, 10);
+      await api.patch(`/tasks/${t._id}`, { date: nextISO });
+      toast.success(`Moved "${t.title}" to next day`);
+      onChanged();
+    } catch (e) {
+      toast.error(getApiError(e));
+    }
+  };
+
   const completedCount = tasks.filter((t) => t.done).length;
 
   return (
@@ -347,7 +361,12 @@ function DayDialog({ date, tasks, onClose, onChanged }: { date: string; tasks: T
                   <motion.div key={t._id} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, x: -8 }} transition={{ duration: 0.2, delay: i * 0.03 }} className="flex items-center gap-3 py-2 group rounded-md hover:bg-muted/40 px-2 -mx-2 transition-colors">
                     <Checkbox checked={t.done} onCheckedChange={() => toggle(t)} />
                     <span className={`flex-1 text-sm transition-all ${t.done ? "line-through text-muted-foreground" : "text-foreground"}`}>{t.title}</span>
-                    <Button variant="ghost" size="icon" className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => del(t._id)}>
+                    {!t.done && (
+                      <Button variant="ghost" size="icon" className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => moveToNextDay(t)} title="Move to next day">
+                        <ArrowRight className="h-3 w-3" />
+                      </Button>
+                    )}
+                    <Button variant="ghost" size="icon" className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => del(t._id)} title="Delete">
                       <Trash2 className="h-3 w-3" />
                     </Button>
                   </motion.div>
