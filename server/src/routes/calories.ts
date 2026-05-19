@@ -382,7 +382,7 @@ router.get("/week-summary", async (req, res) => {
   if (goal) {
     for (const d of tracked) {
       if (d.cal > 0 && d.cal <= goal.caloriesTarget + goal.caloriesBuffer) calorieGoalDays++;
-      if (d.p >= goal.proteinMin && d.p <= goal.proteinMax) proteinGoalDays++;
+      if (d.p >= goal.proteinMin) proteinGoalDays++;
       if (d.water >= goal.waterMin) waterGoalDays++;
     }
   }
