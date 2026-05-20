@@ -114,8 +114,8 @@ router.get("/stats", async (_req, res) => {
   for (const t of topics) {
     byTopicId[t.topicId] = {
       done: t.done,
-      startedAt: t.startedAt,
-      completedAt: t.completedAt,
+      startedAt: t.startedAt ?? null,
+      completedAt: t.completedAt ?? null,
     };
   }
 
