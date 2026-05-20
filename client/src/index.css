@@ -124,6 +124,24 @@
   --color-workout-rest: #71717a;
   --color-workout-rest-bg: #f4f4f5;
 
+  /* Career category colors */
+  --color-career-math: #1d4ed8;
+  --color-career-math-bg: #eff6ff;
+  --color-career-python: #b45309;
+  --color-career-python-bg: #fffbeb;
+  --color-career-ml: #15803d;
+  --color-career-ml-bg: #f0fdf4;
+  --color-career-llm: #7e22ce;
+  --color-career-llm-bg: #faf5ff;
+  --color-career-rag: #be185d;
+  --color-career-rag-bg: #fdf2f8;
+  --color-career-agents: #c2410c;
+  --color-career-agents-bg: #fff7ed;
+  --color-career-deploy: #0e7490;
+  --color-career-deploy-bg: #ecfeff;
+  --color-career-job: #52525b;
+  --color-career-job-bg: #f4f4f5;
+
   /* Fonts */
   --font-sans: "Geist", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
@@ -241,6 +259,24 @@
   --color-workout-b-bg: #052e16;
   --color-workout-rest: #a1a1aa;
   --color-workout-rest-bg: #1c1c1f;
+
+  /* Career category colors (dark) */
+  --color-career-math: #60a5fa;
+  --color-career-math-bg: #0c1e3a;
+  --color-career-python: #fbbf24;
+  --color-career-python-bg: #2a1a07;
+  --color-career-ml: #4ade80;
+  --color-career-ml-bg: #052e16;
+  --color-career-llm: #c084fc;
+  --color-career-llm-bg: #1f0d2e;
+  --color-career-rag: #f472b6;
+  --color-career-rag-bg: #2a0d1f;
+  --color-career-agents: #fb923c;
+  --color-career-agents-bg: #2a1407;
+  --color-career-deploy: #22d3ee;
+  --color-career-deploy-bg: #0a1e22;
+  --color-career-job: #a1a1aa;
+  --color-career-job-bg: #1c1c1f;
 }
 
 html,

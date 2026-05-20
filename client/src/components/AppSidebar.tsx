@@ -1,7 +1,7 @@
 import { Link, useLocation } from "react-router-dom";
 import { motion } from "motion/react";
 import { Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarHeader, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../components/ui/sidebar";
-import { LayoutDashboard, Wallet, CreditCard, CheckSquare, Sun, Apple, Refrigerator, BookOpen, Activity, Dumbbell } from "lucide-react";
+import { LayoutDashboard, Wallet, CreditCard, CheckSquare, Sun, Apple, Refrigerator, BookOpen, Activity, Dumbbell, GraduationCap } from "lucide-react";
 
 type Item = {
   title: string;
@@ -39,6 +39,10 @@ const sections: { label: string; items: Item[] }[] = [
       { title: "Workout", url: "/workout", icon: Dumbbell },
     ],
   },
+  {
+    label: "Career",
+    items: [{ title: "AI Engineering", url: "/career", icon: GraduationCap }],
+  },
 ];
 
 export function AppSidebar() {
@@ -74,7 +78,7 @@ export function AppSidebar() {
             <SidebarGroupContent>
               <SidebarMenu>
                 {section.items.map((item) => {
-                  const isActive = location.pathname === item.url;
+                  const isActive = item.url === "/" ? location.pathname === "/" : location.pathname === item.url || location.pathname.startsWith(item.url + "/");
                   return (
                     <SidebarMenuItem key={item.title}>
                       <SidebarMenuButton isActive={isActive} className="p-0 h-auto">

@@ -10,6 +10,7 @@ import caloriesRouter from "./routes/calories";
 import fridgeRouter from "./routes/fridge";
 import dashboardRouter from "./routes/dashboard";
 import workoutsRouter from "./routes/workouts";
+import careerRouter from "./routes/career";
 
 dotenv.config();
 
@@ -36,6 +37,8 @@ app.use("/api/fridge", fridgeRouter);
 app.use("/api/dashboard", dashboardRouter);
 
 app.use("/api/workouts", workoutsRouter);
+
+app.use("/api/career", careerRouter);
 
 const PORT = process.env.PORT || 5000;
 const MONGO_URI = process.env.MONGO_URI as string;

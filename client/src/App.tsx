@@ -13,6 +13,8 @@ import Calories from "./pages/Calories";
 import Fridge from "./pages/Fridge";
 import { PrivateRoute } from "./components/PrivateRoute";
 import Workout from "./pages/Workout";
+import Career from "./pages/Career";
+import CareerTopic from "./pages/CareerTopic";
 
 export default function App() {
   return (
@@ -52,6 +54,8 @@ export default function App() {
               <Route path="/fridge" element={<Fridge />} />
               <Route path="/foods" element={<Foods />} />
               <Route path="/workout" element={<Workout />} />
+              <Route path="/career" element={<Career />} />
+              <Route path="/career/:topicId" element={<CareerTopic />} />
             </Routes>
           </div>
         </main>
