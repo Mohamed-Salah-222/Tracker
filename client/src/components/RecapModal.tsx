@@ -19,6 +19,7 @@ type Summary = {
   avgPerActiveDay: number;
   daysWithExpenses: number;
   daysInRange: number;
+  externalFundedTotal?: number;
   byCategory: { category: Category; amount: number; count: number }[];
   byDay: { date: string; amount: number }[];
   topExpenses: {
@@ -26,7 +27,8 @@ type Summary = {
     name: string;
     amount: number;
     category: Category;
-    walletNameSnapshot: string;
+    sourceType: string;
+    sourceNameSnapshot: string;
     date: string;
   }[];
 };
@@ -225,6 +227,9 @@ export function RecapModal({ open, onOpenChange, period }: { open: boolean; onOp
                     <StatCard label="Avg / day" value={fmtEGP(data.avgPerDay)} />
                     <StatCard label="Active days" value={`${data.daysWithExpenses} / ${data.daysInRange}`} />
                     <StatCard label="Biggest" value={data.topExpenses[0] ? fmtEGP(data.topExpenses[0].amount) : "—"} />
+                    {!!data.externalFundedTotal && data.externalFundedTotal > 0 && (
+                      <StatCard label="Family funded" value={fmtEGP(data.externalFundedTotal)} />
+                    )}
                   </div>
 
                   {/* Spending over time chart */}
@@ -337,7 +342,7 @@ export function RecapModal({ open, onOpenChange, period }: { open: boolean; onOp
                                 </span>
                                 <span className="text-sm font-medium text-foreground truncate">{e.name}</span>
                                 <span className="hidden md:inline-flex flex-shrink-0">
-                                  <span className="text-[11px] font-medium rounded border border-foreground/40 text-foreground/80 px-2 py-0.5">{e.walletNameSnapshot}</span>
+                                  <span className="text-[11px] font-medium rounded border border-foreground/40 text-foreground/80 px-2 py-0.5">{e.sourceNameSnapshot}</span>
                                 </span>
                               </div>
                               <div className="text-sm font-semibold font-mono tabular-nums flex-shrink-0" style={{ color: "var(--color-expense)" }}>

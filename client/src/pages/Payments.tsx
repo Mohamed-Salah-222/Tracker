@@ -6,30 +6,39 @@ import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Card, CardContent } from "../components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "../components/ui/dialog";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue } from "../components/ui/select";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
 import { toast } from "sonner";
-import { Trash2, Plus, Search, BarChart3, Calendar, Wallet as WalletIcon, Check } from "lucide-react";
+import { Trash2, Plus, Search, BarChart3, Calendar, Wallet as WalletIcon, Check, Landmark, Users, ChevronDown, ArrowLeftRight } from "lucide-react";
 import { AxiosError } from "axios";
 import { RecapModal } from "../components/RecapModal";
+import { MovementsModal } from "../components/MovementsModal";
 
 // ===== Types =====
 type Wallet = { _id: string; name: string; balance: number };
+type BankCurrency = "EGP" | "USD";
+type Bank = { _id: string; name: string; balance: number; currency: BankCurrency };
+type ExternalSource = { _id: string; name: string };
 type Category = "food" | "transport" | "bills" | "shopping" | "entertainment" | "health" | "education" | "other";
+type SourceType = "wallet" | "bank" | "external";
+type SourceSelection = { sourceType: SourceType; sourceId: string };
 type Expense = {
   _id: string;
   name: string;
   amount: number;
   category: Category;
-  walletId: string;
-  walletNameSnapshot: string;
+  sourceType: SourceType;
+  sourceId: string;
+  sourceNameSnapshot: string;
   date: string;
 };
 
 const CATEGORIES: Category[] = ["food", "transport", "bills", "shopping", "entertainment", "health", "education", "other"];
+const BANK_CURRENCIES: BankCurrency[] = ["EGP", "USD"];
 
 // ===== Helpers =====
 const fmtEGP = (n: number) => `${Math.round(n).toLocaleString("en-US")} L.E`;
+const fmtUSD = (n: number) => `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const todayISO = () => new Date().toISOString().slice(0, 10);
 
 function getApiError(e: unknown): string {
@@ -50,27 +59,6 @@ const stagger = (i: number) => ({
   transition: { ...fadeUp.transition, delay: i * 0.04 },
 });
 
-function WalletPicker({ wallets, value, onChange, placeholder = "Select wallet", includeAll = false, triggerClassName = "" }: { wallets: Wallet[]; value: string; onChange: (id: string) => void; placeholder?: string; includeAll?: boolean; triggerClassName?: string }) {
-  const selected = wallets.find((w) => w._id === value);
-  const display = includeAll && value === "all" ? "All" : (selected?.name ?? "");
-
-  return (
-    <Select value={value} onValueChange={(v) => onChange(v ?? "")}>
-      <SelectTrigger className={`w-full ${triggerClassName}`}>
-        <SelectValue placeholder={placeholder}>{display || placeholder}</SelectValue>
-      </SelectTrigger>
-      <SelectContent>
-        {includeAll && <SelectItem value="all">All</SelectItem>}
-        {wallets.map((w) => (
-          <SelectItem key={w._id} value={w._id}>
-            {w.name}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  );
-}
-
 // ===== Category tag =====
 function CategoryTag({ category, size = "sm" }: { category: Category; size?: "xs" | "sm" }) {
   return (
@@ -87,9 +75,119 @@ function CategoryTag({ category, size = "sm" }: { category: Category; size?: "xs
   );
 }
 
-// ===== Wallet pill =====
-function WalletPill({ name, size = "sm" }: { name: string; size?: "xs" | "sm" }) {
-  return <span className={`font-medium rounded border border-foreground/40 text-foreground/80 ${size === "xs" ? "text-[10px] px-1.5 py-0.5" : "text-[11px] px-2 py-0.5"}`}>{name}</span>;
+// ===== Source type icon =====
+function SourceTypeIcon({ sourceType, className = "h-3.5 w-3.5" }: { sourceType: SourceType; className?: string }) {
+  if (sourceType === "bank") return <Landmark className={className} />;
+  if (sourceType === "external") return <Users className={className} />;
+  return <WalletIcon className={className} />;
+}
+
+// ===== Source pill =====
+function SourcePill({ sourceType, name, size = "sm" }: { sourceType: SourceType; name: string; size?: "xs" | "sm" }) {
+  return (
+    <span className={`inline-flex items-center gap-1 font-medium rounded border border-foreground/40 text-foreground/80 ${size === "xs" ? "text-[10px] px-1.5 py-0.5" : "text-[11px] px-2 py-0.5"}`}>
+      <SourceTypeIcon sourceType={sourceType} className={size === "xs" ? "h-2.5 w-2.5" : "h-3 w-3"} />
+      {name}
+    </span>
+  );
+}
+
+// ===== Source picker (dialog-based) =====
+function SourcePicker({
+  wallets,
+  banks,
+  externalSources,
+  value,
+  onChange,
+  placeholder = "Pick source",
+  triggerClassName = "",
+}: {
+  wallets: Wallet[];
+  banks: Bank[];
+  externalSources: ExternalSource[];
+  value: SourceSelection | null;
+  onChange: (s: SourceSelection) => void;
+  placeholder?: string;
+  triggerClassName?: string;
+}) {
+  const [open, setOpen] = useState(false);
+
+  const label = value
+    ? (() => {
+        if (value.sourceType === "wallet") return wallets.find((w) => w._id === value.sourceId)?.name ?? placeholder;
+        if (value.sourceType === "bank") return banks.find((b) => b._id === value.sourceId)?.name ?? placeholder;
+        return externalSources.find((s) => s._id === value.sourceId)?.name ?? placeholder;
+      })()
+    : placeholder;
+
+  const pick = (s: SourceSelection) => {
+    onChange(s);
+    setOpen(false);
+  };
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className={`inline-flex items-center justify-between gap-1.5 rounded-md border border-input bg-background px-3 text-sm ring-offset-background hover:bg-accent hover:text-accent-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 ${triggerClassName}`}
+      >
+        <span className="flex items-center gap-1.5 truncate">
+          {value && <SourceTypeIcon sourceType={value.sourceType} className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />}
+          <span className={value ? "" : "text-muted-foreground"}>{label}</span>
+        </span>
+        <ChevronDown className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
+      </button>
+
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="max-w-xs p-0">
+          <DialogHeader className="px-4 pt-4 pb-2">
+            <DialogTitle className="text-sm">Select source</DialogTitle>
+          </DialogHeader>
+          <div className="pb-3 max-h-80 overflow-y-auto">
+            {wallets.length > 0 && (
+              <div>
+                <div className="px-4 py-1.5 text-[10px] uppercase tracking-wider text-muted-foreground font-medium flex items-center gap-1.5">
+                  <WalletIcon className="h-3 w-3" /> Wallets
+                </div>
+                {wallets.map((w) => (
+                  <button key={w._id} type="button" onClick={() => pick({ sourceType: "wallet", sourceId: w._id })} className="w-full text-left px-4 py-2 text-sm hover:bg-accent flex items-center justify-between">
+                    <span>{w.name}</span>
+                    <span className="text-xs text-muted-foreground font-mono">{fmtEGP(w.balance)}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+            {banks.length > 0 && (
+              <div>
+                <div className="px-4 py-1.5 text-[10px] uppercase tracking-wider text-muted-foreground font-medium flex items-center gap-1.5 mt-1">
+                  <Landmark className="h-3 w-3" /> Banks
+                </div>
+                {banks.map((b) => (
+                  <button key={b._id} type="button" onClick={() => pick({ sourceType: "bank", sourceId: b._id })} className="w-full text-left px-4 py-2 text-sm hover:bg-accent flex items-center justify-between">
+                    <span>{b.name}</span>
+                    <span className="text-xs text-muted-foreground font-mono">{b.currency === "USD" ? fmtUSD(b.balance) : fmtEGP(b.balance)}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+            {externalSources.length > 0 && (
+              <div>
+                <div className="px-4 py-1.5 text-[10px] uppercase tracking-wider text-muted-foreground font-medium flex items-center gap-1.5 mt-1">
+                  <Users className="h-3 w-3" /> Family money
+                </div>
+                {externalSources.map((s) => (
+                  <button key={s._id} type="button" onClick={() => pick({ sourceType: "external", sourceId: s._id })} className="w-full text-left px-4 py-2 text-sm hover:bg-accent">
+                    {s.name}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
 }
 
 // =====================================================================
@@ -97,15 +195,18 @@ function WalletPill({ name, size = "sm" }: { name: string; size?: "xs" | "sm" })
 // =====================================================================
 export default function Payments() {
   const [wallets, setWallets] = useState<Wallet[]>([]);
+  const [banks, setBanks] = useState<Bank[]>([]);
+  const [externalSources, setExternalSources] = useState<ExternalSource[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
 
   const [search, setSearch] = useState("");
   const [filterCategory, setFilterCategory] = useState<string>("all");
-  const [filterWallet, setFilterWallet] = useState<string>("all");
+  const [filterSourceId, setFilterSourceId] = useState<string>("all");
   const [filterFrom, setFilterFrom] = useState("");
   const [filterTo, setFilterTo] = useState("");
 
   const [recapPeriod, setRecapPeriod] = useState<"week" | "month" | null>(null);
+  const [movementsOpen, setMovementsOpen] = useState(false);
 
   const loadWallets = useCallback(async () => {
     try {
@@ -116,12 +217,30 @@ export default function Payments() {
     }
   }, []);
 
+  const loadBanks = useCallback(async () => {
+    try {
+      const r = await api.get<Bank[]>("/payments/banks");
+      setBanks(r.data);
+    } catch (e) {
+      toast.error(getApiError(e));
+    }
+  }, []);
+
+  const loadExternalSources = useCallback(async () => {
+    try {
+      const r = await api.get<ExternalSource[]>("/payments/external-sources");
+      setExternalSources(r.data);
+    } catch (e) {
+      toast.error(getApiError(e));
+    }
+  }, []);
+
   const loadExpenses = useCallback(async () => {
     try {
       const params: Record<string, string> = {};
       if (search) params.search = search;
       if (filterCategory !== "all") params.category = filterCategory;
-      if (filterWallet !== "all") params.walletId = filterWallet;
+      if (filterSourceId !== "all") params.sourceId = filterSourceId;
       if (filterFrom) params.from = filterFrom;
       if (filterTo) params.to = filterTo;
       const r = await api.get<Expense[]>("/payments/expenses", { params });
@@ -129,11 +248,19 @@ export default function Payments() {
     } catch (e) {
       toast.error(getApiError(e));
     }
-  }, [search, filterCategory, filterWallet, filterFrom, filterTo]);
+  }, [search, filterCategory, filterSourceId, filterFrom, filterTo]);
 
   useEffect(() => {
     void loadWallets();
   }, [loadWallets]);
+
+  useEffect(() => {
+    void loadBanks();
+  }, [loadBanks]);
+
+  useEffect(() => {
+    void loadExternalSources();
+  }, [loadExternalSources]);
 
   useEffect(() => {
     void loadExpenses();
@@ -141,6 +268,8 @@ export default function Payments() {
 
   const reloadAll = () => {
     void loadWallets();
+    void loadBanks();
+    void loadExternalSources();
     void loadExpenses();
   };
 
@@ -153,11 +282,11 @@ export default function Payments() {
   }
   const groupKeys = Object.keys(grouped).sort((a, b) => (a < b ? 1 : -1));
 
-  const hasActiveFilters = !!search || filterCategory !== "all" || filterWallet !== "all" || !!filterFrom || !!filterTo;
+  const hasActiveFilters = !!search || filterCategory !== "all" || filterSourceId !== "all" || !!filterFrom || !!filterTo;
   const clearFilters = () => {
     setSearch("");
     setFilterCategory("all");
-    setFilterWallet("all");
+    setFilterSourceId("all");
     setFilterFrom("");
     setFilterTo("");
   };
@@ -170,6 +299,10 @@ export default function Payments() {
           <h1 className="text-[15px] font-semibold tracking-tight">Payments</h1>
         </div>
         <div className="flex items-center gap-2 self-end sm:self-auto">
+          <Button variant="outline" size="sm" onClick={() => setMovementsOpen(true)}>
+            <ArrowLeftRight className="h-3.5 w-3.5 mr-1.5" />
+            Movements
+          </Button>
           <Button variant="outline" size="sm" onClick={() => setRecapPeriod("week")}>
             <BarChart3 className="h-3.5 w-3.5 mr-1.5" />
             Weekly recap
@@ -203,8 +336,57 @@ export default function Payments() {
         <AddWalletCard onAdded={loadWallets} />
       </motion.div>
 
+      {/* ===== Banks header ===== */}
+      <motion.div {...stagger(2)} className="flex items-end justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <Landmark className="h-4 w-4 text-muted-foreground" />
+          <span className="text-sm font-medium">Banks</span>
+        </div>
+        <div className="flex items-end gap-6">
+          <div className="text-right">
+            <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Total EGP</div>
+            <div className="text-2xl md:text-3xl font-semibold font-mono tracking-tight tabular-nums">
+              {fmtEGP(banks.filter((b) => b.currency === "EGP").reduce((s, b) => s + b.balance, 0))}
+            </div>
+          </div>
+          {banks.some((b) => b.currency === "USD") && (
+            <div className="text-right">
+              <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Total USD</div>
+              <div className="text-2xl md:text-3xl font-semibold font-mono tracking-tight tabular-nums">
+                {fmtUSD(banks.filter((b) => b.currency === "USD").reduce((s, b) => s + b.balance, 0))}
+              </div>
+            </div>
+          )}
+        </div>
+      </motion.div>
+
+      {/* ===== Banks grid ===== */}
+      <motion.div {...stagger(2)} className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+        {banks.map((b, i) => (
+          <BankCard key={b._id} bank={b} onChanged={loadBanks} index={i} />
+        ))}
+        <AddBankCard onAdded={loadBanks} />
+      </motion.div>
+
+      {/* ===== Family money header ===== */}
+      <motion.div {...stagger(3)} className="space-y-1">
+        <div className="flex items-center gap-2">
+          <Users className="h-4 w-4 text-muted-foreground" />
+          <span className="text-sm font-medium">Family money</span>
+        </div>
+        <p className="text-xs text-muted-foreground">People who pay for things. No balance tracking.</p>
+      </motion.div>
+
+      {/* ===== Family money grid ===== */}
+      <motion.div {...stagger(3)} className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
+        {externalSources.map((s, i) => (
+          <ExternalSourceCard key={s._id} source={s} onChanged={loadExternalSources} index={i} />
+        ))}
+        <AddExternalSourceCard onAdded={loadExternalSources} />
+      </motion.div>
+
       {/* ===== Add expense ===== */}
-      <AddExpenseForm wallets={wallets} onAdded={reloadAll} />
+      <AddExpenseForm wallets={wallets} banks={banks} externalSources={externalSources} onAdded={reloadAll} />
 
       {/* ===== History section header + filters toggle ===== */}
       <div className="flex items-center justify-between gap-3 pt-2">
@@ -245,8 +427,39 @@ export default function Payments() {
                 </Select>
               </div>
               <div className="space-y-1.5">
-                <Label className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Wallet</Label>
-                <WalletPicker wallets={wallets} value={filterWallet} onChange={setFilterWallet} includeAll triggerClassName="!h-8" />
+                <Label className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Source</Label>
+                <Select value={filterSourceId} onValueChange={(v) => setFilterSourceId(v ?? "all")}>
+                  <SelectTrigger className="w-full !h-8">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All</SelectItem>
+                    {wallets.length > 0 && (
+                      <SelectGroup>
+                        <SelectLabel>Wallets</SelectLabel>
+                        {wallets.map((w) => <SelectItem key={w._id} value={w._id}>{w.name}</SelectItem>)}
+                      </SelectGroup>
+                    )}
+                    {banks.length > 0 && (
+                      <>
+                        <SelectSeparator />
+                        <SelectGroup>
+                          <SelectLabel>Banks</SelectLabel>
+                          {banks.map((b) => <SelectItem key={b._id} value={b._id}>{b.name}</SelectItem>)}
+                        </SelectGroup>
+                      </>
+                    )}
+                    {externalSources.length > 0 && (
+                      <>
+                        <SelectSeparator />
+                        <SelectGroup>
+                          <SelectLabel>Family money</SelectLabel>
+                          {externalSources.map((s) => <SelectItem key={s._id} value={s._id}>{s.name}</SelectItem>)}
+                        </SelectGroup>
+                      </>
+                    )}
+                  </SelectContent>
+                </Select>
               </div>
               <div className="space-y-1.5">
                 <Label className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">From</Label>
@@ -297,7 +510,7 @@ export default function Payments() {
                   </div>
                   <div className="space-y-0.5">
                     {items.map((e) => (
-                      <ExpenseRow key={e._id} expense={e} wallets={wallets} onChanged={reloadAll} />
+                      <ExpenseRow key={e._id} expense={e} wallets={wallets} banks={banks} externalSources={externalSources} onChanged={reloadAll} />
                     ))}
                   </div>
                 </CardContent>
@@ -309,6 +522,9 @@ export default function Payments() {
 
       {/* ===== Recap modal ===== */}
       <RecapModal open={recapPeriod !== null} onOpenChange={(o) => !o && setRecapPeriod(null)} period={recapPeriod ?? "week"} />
+
+      {/* ===== Movements modal ===== */}
+      <MovementsModal open={movementsOpen} onOpenChange={setMovementsOpen} wallets={wallets} banks={banks} externalSources={externalSources} onChanged={reloadAll} />
     </div>
   );
 }
@@ -498,24 +714,25 @@ function AddWalletCard({ onAdded }: { onAdded: () => void }) {
 // =====================================================================
 // AddExpenseForm
 // =====================================================================
-function AddExpenseForm({ wallets, onAdded }: { wallets: Wallet[]; onAdded: () => void }) {
+function AddExpenseForm({ wallets, banks, externalSources, onAdded }: { wallets: Wallet[]; banks: Bank[]; externalSources: ExternalSource[]; onAdded: () => void }) {
   const [name, setName] = useState("");
   const [amount, setAmount] = useState("");
   const [category, setCategory] = useState<Category>("food");
-  const [walletId, setWalletId] = useState<string>("");
+  const [source, setSource] = useState<SourceSelection | null>(null);
   const [date, setDate] = useState(todayISO());
 
   const save = async (originBtn: HTMLElement | null) => {
     const amt = parseFloat(amount);
     if (!name.trim()) return toast.error("Name required");
     if (!amt || amt <= 0) return toast.error("Amount > 0");
-    if (!walletId) return toast.error("Pick a wallet");
+    if (!source) return toast.error("Pick a source");
     try {
       await api.post("/payments/expenses", {
         name: name.trim(),
         amount: amt,
         category,
-        walletId,
+        sourceType: source.sourceType,
+        sourceId: source.sourceId,
         date,
       });
       toast.success(`Logged ${fmtEGP(amt)}`);
@@ -540,7 +757,6 @@ function AddExpenseForm({ wallets, onAdded }: { wallets: Wallet[]; onAdded: () =
             Log expense
           </div>
 
-          {/* Desktop: single grid row. Mobile: stacks. */}
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-[2fr_1fr_1.2fr_1.2fr_1fr] gap-3">
             {/* Name */}
             <div>
@@ -571,21 +787,18 @@ function AddExpenseForm({ wallets, onAdded }: { wallets: Wallet[]; onAdded: () =
               </Select>
             </div>
 
-            {/* Wallet */}
+            {/* Source */}
             <div>
-              <Label className={labelCls}>Wallet</Label>
-              <Select value={walletId} onValueChange={(v) => setWalletId(v ?? "")}>
-                <SelectTrigger className={`w-full ${fieldHeight} !h-8`}>
-                  <SelectValue placeholder="Select wallet">{wallets.find((w) => w._id === walletId)?.name ?? ""}</SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  {wallets.map((w) => (
-                    <SelectItem key={w._id} value={w._id}>
-                      {w.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <Label className={labelCls}>Source</Label>
+              <SourcePicker
+                wallets={wallets}
+                banks={banks}
+                externalSources={externalSources}
+                value={source}
+                onChange={setSource}
+                placeholder="Pick source"
+                triggerClassName={`w-full ${fieldHeight} !h-8`}
+              />
             </div>
 
             {/* Date */}
@@ -633,15 +846,400 @@ function spawnExpenseFlash(originEl: HTMLElement) {
 }
 
 // =====================================================================
+// BankCard
+// =====================================================================
+function BankCard({ bank, onChanged, index }: { bank: Bank; onChanged: () => void; index: number }) {
+  const [editOpen, setEditOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [name, setName] = useState(bank.name);
+  const [balance, setBalance] = useState(bank.balance.toString());
+  const [currency, setCurrency] = useState<BankCurrency>(bank.currency);
+
+  const handleEditOpen = (next: boolean) => {
+    if (next) {
+      setName(bank.name);
+      setBalance(bank.balance.toString());
+      setCurrency(bank.currency);
+    }
+    setEditOpen(next);
+  };
+
+  const save = async () => {
+    const b = parseFloat(balance);
+    if (!name.trim() || isNaN(b)) return toast.error("Invalid input");
+    try {
+      await api.patch(`/payments/banks/${bank._id}`, { name: name.trim(), balance: b, currency });
+      toast.success("Saved");
+      setEditOpen(false);
+      onChanged();
+    } catch (e) {
+      toast.error(getApiError(e));
+    }
+  };
+
+  const del = async () => {
+    try {
+      await api.delete(`/payments/banks/${bank._id}`);
+      toast.success("Deleted");
+      onChanged();
+    } catch (e) {
+      toast.error(getApiError(e));
+    }
+  };
+
+  const fmt = bank.currency === "USD" ? fmtUSD : fmtEGP;
+
+  return (
+    <>
+      <motion.button
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.25, delay: index * 0.04, ease: [0.16, 1, 0.3, 1] }}
+        whileHover={{ y: -2 }}
+        whileTap={{ scale: 0.98 }}
+        onClick={() => handleEditOpen(true)}
+        className="text-left rounded-[10px] border border-border bg-card p-4 hover:border-border-strong hover:shadow-md transition-all relative overflow-hidden"
+      >
+        <div className="text-xs text-muted-foreground truncate font-medium pr-8">{bank.name}</div>
+        <div className="text-xl font-semibold font-mono tracking-tight tabular-nums mt-2">{fmt(bank.balance)}</div>
+        <span
+          className="absolute top-2 right-2 text-[9px] font-bold px-1.5 py-0.5 rounded border"
+          style={
+            bank.currency === "USD"
+              ? { color: "var(--color-income)", borderColor: "var(--color-income)", background: "color-mix(in oklch, var(--color-income), transparent 85%)" }
+              : { color: "var(--color-muted-foreground)", borderColor: "var(--color-border)" }
+          }
+        >
+          {bank.currency}
+        </span>
+      </motion.button>
+
+      <Dialog open={editOpen} onOpenChange={handleEditOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit bank</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <Label>Name</Label>
+              <Input value={name} onChange={(e) => setName(e.target.value)} />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Balance</Label>
+              <Input type="number" step="0.01" value={balance} onChange={(e) => setBalance(e.target.value)} className="font-mono" />
+              <p className="text-xs text-muted-foreground">Use this to manually correct or top up.</p>
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-muted-foreground">Currency</Label>
+              <Select value={currency} onValueChange={(v) => setCurrency(v as BankCurrency)}>
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {BANK_CURRENCIES.map((c) => (
+                    <SelectItem key={c} value={c}>
+                      {c}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {bank.balance !== 0 && <p className="text-xs text-muted-foreground">Changing currency on a non-zero balance is on you.</p>}
+            </div>
+          </div>
+          <DialogFooter className="flex justify-between sm:justify-between">
+            <Button
+              variant="ghost"
+              size="default"
+              onClick={() => {
+                setEditOpen(false);
+                setDeleteOpen(true);
+              }}
+            >
+              Delete
+            </Button>
+            <Button variant="default" size="default" onClick={save}>
+              Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete "{bank.name}"?</AlertDialogTitle>
+            <AlertDialogDescription>The bank is archived.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel variant="outline" size="default">
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction variant="destructive" size="default" onClick={del}>
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
+  );
+}
+
+// =====================================================================
+// AddBankCard
+// =====================================================================
+function AddBankCard({ onAdded }: { onAdded: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [balance, setBalance] = useState("0");
+  const [currency, setCurrency] = useState<BankCurrency>("EGP");
+
+  const handleOpen = (next: boolean) => {
+    if (next) {
+      setName("");
+      setBalance("0");
+      setCurrency("EGP");
+    }
+    setOpen(next);
+  };
+
+  const save = async () => {
+    const b = parseFloat(balance);
+    if (!name.trim() || isNaN(b)) return toast.error("Invalid input");
+    try {
+      await api.post("/payments/banks", { name: name.trim(), balance: b, currency });
+      toast.success("Added");
+      setOpen(false);
+      onAdded();
+    } catch (e) {
+      toast.error(getApiError(e));
+    }
+  };
+
+  return (
+    <>
+      <motion.button
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ duration: 0.25, delay: 0.16 }}
+        whileHover={{ y: -2 }}
+        whileTap={{ scale: 0.98 }}
+        onClick={() => handleOpen(true)}
+        className="rounded-[10px] border-2 border-dashed border-border p-4 hover:border-border-strong hover:bg-muted/50 transition-all flex items-center justify-center min-h-[80px] text-muted-foreground hover:text-foreground"
+      >
+        <Plus className="h-4 w-4 mr-1.5" />
+        <span className="text-sm font-medium">Add bank</span>
+      </motion.button>
+
+      <Dialog open={open} onOpenChange={handleOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Add bank</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <Label>Name</Label>
+              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="CIB, HSBC, Banque Misr..." />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Starting balance</Label>
+              <Input type="number" step="0.01" value={balance} onChange={(e) => setBalance(e.target.value)} className="font-mono" />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Currency</Label>
+              <Select value={currency} onValueChange={(v) => setCurrency(v as BankCurrency)}>
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {BANK_CURRENCIES.map((c) => (
+                    <SelectItem key={c} value={c}>
+                      {c}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="default" size="default" onClick={save}>
+              Add
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+// =====================================================================
+// ExternalSourceCard
+// =====================================================================
+function ExternalSourceCard({ source, onChanged, index }: { source: ExternalSource; onChanged: () => void; index: number }) {
+  const [editOpen, setEditOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [name, setName] = useState(source.name);
+
+  const handleEditOpen = (next: boolean) => {
+    if (next) setName(source.name);
+    setEditOpen(next);
+  };
+
+  const save = async () => {
+    if (!name.trim()) return toast.error("Name required");
+    try {
+      await api.patch(`/payments/external-sources/${source._id}`, { name: name.trim() });
+      toast.success("Saved");
+      setEditOpen(false);
+      onChanged();
+    } catch (e) {
+      toast.error(getApiError(e));
+    }
+  };
+
+  const del = async () => {
+    try {
+      await api.delete(`/payments/external-sources/${source._id}`);
+      toast.success("Deleted");
+      onChanged();
+    } catch (e) {
+      toast.error(getApiError(e));
+    }
+  };
+
+  return (
+    <>
+      <motion.button
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.25, delay: index * 0.04, ease: [0.16, 1, 0.3, 1] }}
+        whileHover={{ y: -2 }}
+        whileTap={{ scale: 0.98 }}
+        onClick={() => handleEditOpen(true)}
+        className="text-left rounded-[10px] border border-border bg-card px-3 py-2.5 hover:border-border-strong hover:shadow-sm transition-all min-h-[52px] flex items-center"
+      >
+        <div className="text-sm font-medium truncate">{source.name}</div>
+      </motion.button>
+
+      <Dialog open={editOpen} onOpenChange={handleEditOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit person</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <Label>Name</Label>
+              <Input value={name} onChange={(e) => setName(e.target.value)} />
+            </div>
+          </div>
+          <DialogFooter className="flex justify-between sm:justify-between">
+            <Button
+              variant="ghost"
+              size="default"
+              onClick={() => {
+                setEditOpen(false);
+                setDeleteOpen(true);
+              }}
+            >
+              Delete
+            </Button>
+            <Button variant="default" size="default" onClick={save}>
+              Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove "{source.name}"?</AlertDialogTitle>
+            <AlertDialogDescription>This person will be archived.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel variant="outline" size="default">
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction variant="destructive" size="default" onClick={del}>
+              Remove
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
+  );
+}
+
+// =====================================================================
+// AddExternalSourceCard
+// =====================================================================
+function AddExternalSourceCard({ onAdded }: { onAdded: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+
+  const handleOpen = (next: boolean) => {
+    if (next) setName("");
+    setOpen(next);
+  };
+
+  const save = async () => {
+    if (!name.trim()) return toast.error("Name required");
+    try {
+      await api.post("/payments/external-sources", { name: name.trim() });
+      toast.success("Added");
+      setOpen(false);
+      onAdded();
+    } catch (e) {
+      toast.error(getApiError(e));
+    }
+  };
+
+  return (
+    <>
+      <motion.button
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ duration: 0.25, delay: 0.16 }}
+        whileHover={{ y: -2 }}
+        whileTap={{ scale: 0.98 }}
+        onClick={() => handleOpen(true)}
+        className="rounded-[10px] border-2 border-dashed border-border px-3 py-2.5 hover:border-border-strong hover:bg-muted/50 transition-all flex items-center justify-center min-h-[52px] text-muted-foreground hover:text-foreground"
+      >
+        <Plus className="h-3.5 w-3.5 mr-1" />
+        <span className="text-sm font-medium">Add person</span>
+      </motion.button>
+
+      <Dialog open={open} onOpenChange={handleOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Add person</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <Label>Name</Label>
+              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Dad, Mom, Sister..." />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="default" size="default" onClick={save}>
+              Add
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+// =====================================================================
 // ExpenseRow
 // =====================================================================
-function ExpenseRow({ expense, wallets, onChanged }: { expense: Expense; wallets: Wallet[]; onChanged: () => void }) {
+function ExpenseRow({ expense, wallets, banks, externalSources, onChanged }: { expense: Expense; wallets: Wallet[]; banks: Bank[]; externalSources: ExternalSource[]; onChanged: () => void }) {
   const [editOpen, setEditOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [name, setName] = useState(expense.name);
   const [amount, setAmount] = useState(expense.amount.toString());
   const [category, setCategory] = useState<Category>(expense.category);
-  const [walletId, setWalletId] = useState<string>(expense.walletId);
+  const [source, setSource] = useState<SourceSelection>({ sourceType: expense.sourceType, sourceId: expense.sourceId });
   const [date, setDate] = useState(expense.date.slice(0, 10));
 
   const handleEditOpen = (next: boolean) => {
@@ -649,7 +1247,7 @@ function ExpenseRow({ expense, wallets, onChanged }: { expense: Expense; wallets
       setName(expense.name);
       setAmount(expense.amount.toString());
       setCategory(expense.category);
-      setWalletId(expense.walletId);
+      setSource({ sourceType: expense.sourceType, sourceId: expense.sourceId });
       setDate(expense.date.slice(0, 10));
     }
     setEditOpen(next);
@@ -657,13 +1255,14 @@ function ExpenseRow({ expense, wallets, onChanged }: { expense: Expense; wallets
 
   const save = async () => {
     const amt = parseFloat(amount);
-    if (!name.trim() || !amt || amt <= 0 || !walletId) return toast.error("Invalid input");
+    if (!name.trim() || !amt || amt <= 0) return toast.error("Invalid input");
     try {
       await api.patch(`/payments/expenses/${expense._id}`, {
         name: name.trim(),
         amount: amt,
         category,
-        walletId,
+        sourceType: source.sourceType,
+        sourceId: source.sourceId,
         date,
       });
       toast.success("Saved");
@@ -684,17 +1283,22 @@ function ExpenseRow({ expense, wallets, onChanged }: { expense: Expense; wallets
     }
   };
 
+  const deleteDesc =
+    expense.sourceType === "external"
+      ? `${fmtEGP(expense.amount)} paid by ${expense.sourceNameSnapshot} — no balance change.`
+      : `${fmtEGP(expense.amount)} will be returned to ${expense.sourceNameSnapshot}.`;
+
   return (
     <>
       <button type="button" onClick={() => handleEditOpen(true)} className="w-full flex items-center justify-between py-2 hover:bg-muted/40 rounded-md transition-colors text-left cursor-pointer">
         <div className="flex items-center gap-2.5 min-w-0 flex-1">
           <CategoryTag category={expense.category} />
           <span className="text-sm font-medium text-foreground truncate">{expense.name}</span>
-          <span className="hidden md:inline-flex flex-shrink-0">
-            <WalletPill name={expense.walletNameSnapshot} />
+          <span className="hidden md:inline-flex shrink-0">
+            <SourcePill sourceType={expense.sourceType} name={expense.sourceNameSnapshot} />
           </span>
         </div>
-        <span className="text-sm font-semibold font-mono tabular-nums flex-shrink-0" style={{ color: "var(--color-expense)" }}>
+        <span className="text-sm font-semibold font-mono tabular-nums shrink-0" style={{ color: "var(--color-expense)" }}>
           {fmtEGP(expense.amount)}
         </span>
       </button>
@@ -729,8 +1333,15 @@ function ExpenseRow({ expense, wallets, onChanged }: { expense: Expense; wallets
               </Select>
             </div>
             <div className="space-y-1.5">
-              <Label>Wallet</Label>
-              <WalletPicker wallets={wallets} value={walletId} onChange={setWalletId} />
+              <Label>Source</Label>
+              <SourcePicker
+                wallets={wallets}
+                banks={banks}
+                externalSources={externalSources}
+                value={source}
+                onChange={setSource}
+                triggerClassName="w-full h-9"
+              />
             </div>
             <div className="space-y-1.5">
               <Label>Date</Label>
@@ -760,9 +1371,7 @@ function ExpenseRow({ expense, wallets, onChanged }: { expense: Expense; wallets
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Delete this expense?</AlertDialogTitle>
-            <AlertDialogDescription>
-              {fmtEGP(expense.amount)} will be returned to {expense.walletNameSnapshot}.
-            </AlertDialogDescription>
+            <AlertDialogDescription>{deleteDesc}</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel variant="outline" size="default">

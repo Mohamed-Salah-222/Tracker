@@ -27,7 +27,7 @@ type Expense = {
   name: string;
   amount: number;
   category: string;
-  walletNameSnapshot: string;
+  sourceNameSnapshot: string;
   date: string;
 };
 
@@ -49,6 +49,7 @@ type Dash = {
     walletTotal: number;
     spentToday: number;
     spentMonth: number;
+    externalFundedToday?: number;
     wallets: Wallet[];
     recentExpenses: Expense[];
     sparkline: SparkPoint[];
@@ -1033,7 +1034,7 @@ function PaymentsModal({ open, onClose, data, hidden }: { open: boolean; onClose
                 <div key={e._id} className="text-sm py-1.5 border-b border-border flex items-center justify-between gap-3">
                   <span className="truncate">
                     {e.name}
-                    <span className="text-muted-foreground text-xs ml-1">· {e.walletNameSnapshot}</span>
+                    <span className="text-muted-foreground text-xs ml-1">· {e.sourceNameSnapshot}</span>
                   </span>
                   <span className="font-mono tabular-nums font-semibold flex-shrink-0">{maskedOrEGP(e.amount, hidden)}</span>
                 </div>

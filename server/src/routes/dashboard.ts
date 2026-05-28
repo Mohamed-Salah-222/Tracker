@@ -77,6 +77,9 @@ router.get("/", async (_req, res) => {
   }
   const spendSparkline = days.map((d) => ({ date: d, value: spendByDay[d] }));
   const spentToday = spendByDay[todayISO] ?? 0;
+  const externalFundedToday = expenseRecent
+    .filter((e) => e.sourceType === "external" && e.date.toISOString().slice(0, 10) === todayISO)
+    .reduce((s, e) => s + e.amount, 0);
 
   const expenseMonth = await Expense.find({
     date: { $gte: monthStart, $lt: monthEnd },
@@ -199,6 +202,7 @@ router.get("/", async (_req, res) => {
       walletTotal,
       spentToday,
       spentMonth,
+      externalFundedToday,
       wallets,
       recentExpenses,
       sparkline: spendSparkline,

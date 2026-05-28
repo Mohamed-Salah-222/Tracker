@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "ts-node-dev --respawn src/index.ts",
     "build": "tsc",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "migrate:expense-source": "ts-node-dev --transpile-only --no-notify src/scripts/migrate-expense-source.ts"
   },
   "keywords": [],
   "author": "",
