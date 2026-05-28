@@ -6,7 +6,7 @@ import { Card, CardContent } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "../components/ui/dialog";
 import { ResponsiveContainer, AreaChart, Area, BarChart, Bar, Tooltip, XAxis, YAxis, CartesianGrid } from "recharts";
-import { Wallet as WalletIcon, CreditCard, CheckSquare, Dumbbell, Droplet, ArrowRight, Flame, Snowflake, AlertCircle, Cake, Eye, EyeOff } from "lucide-react";
+import { Wallet as WalletIcon, CreditCard, CheckSquare, Dumbbell, Droplet, ArrowRight, Flame, Snowflake, AlertCircle, Cake, Eye, EyeOff, Repeat, Scale, ShoppingBag, GraduationCap, ExternalLink } from "lucide-react";
 
 // ====================================================================
 // TYPES
@@ -21,6 +21,24 @@ type Task = {
 };
 
 type Wallet = { _id: string; name: string; balance: number };
+type Bank = { _id: string; name: string; balance: number; currency: "EGP" | "USD" };
+
+export type Subscription = {
+  _id: string;
+  name: string;
+  price: number;
+  sourceNameSnapshot: string;
+  billingDay: number;
+};
+
+type WishlistItem = {
+  _id: string;
+  name: string;
+  price: number;
+  priority: "high" | "medium" | "low";
+  link: string;
+  bought: boolean;
+};
 
 type Expense = {
   _id: string;
@@ -47,12 +65,45 @@ type Dash = {
   income: { monthTotal: number; todayAmount: number; sparkline: SparkPoint[] };
   payments: {
     walletTotal: number;
+    totalEgp: number;
+    totalUsd: number;
     spentToday: number;
     spentMonth: number;
-    externalFundedToday?: number;
+    externalFundedToday: number;
     wallets: Wallet[];
+    banks: Bank[];
     recentExpenses: Expense[];
     sparkline: SparkPoint[];
+  };
+  subscriptions: {
+    monthlyTotal: number;
+    count: number;
+    next: {
+      name: string;
+      price: number;
+      billingDay: number;
+      daysUntil: number;
+      sourceNameSnapshot: string;
+    } | null;
+  };
+  weight: {
+    current: number | null;
+    target: number;
+    earliest: { date: string; weightKg: number } | null;
+    lostSinceStart: number;
+    remainingToTarget: number;
+    sparkline: { date: string; value: number }[];
+  };
+  wishlist: {
+    totalToBuy: number;
+    countLeft: number;
+    topPriority: WishlistItem[];
+  };
+  career: {
+    doneCount: number;
+    totalTopics: number;
+    percent: number;
+    recentlyCompleted: number;
   };
   tasksToday: { list: Task[]; done: number; total: number };
   tasksUpcoming: { list: Task[] };
@@ -119,26 +170,33 @@ const stagger = (i: number) => ({
 // ====================================================================
 // MAIN
 // ====================================================================
-type OpenCard = "targets" | "tasks" | "workout" | "fridge" | "income" | "payments" | null;
+type OpenCard = "targets" | "tasks" | "workout" | "fridge" | "income" | "payments" | "subscriptions" | null;
+type YearCard = "weight" | "wishlist" | "career" | null;
+type MoneyHidden = { income: boolean; payments: boolean; subscriptions: boolean };
 
-const MONEY_HIDDEN_KEY = "dashboard:money-hidden";
+const MONEY_HIDDEN_KEY = "dashboard:money-hidden-v2";
+const DEFAULT_MONEY_HIDDEN: MoneyHidden = { income: false, payments: false, subscriptions: false };
 
 export default function Dashboard() {
   const [data, setData] = useState<Dash | null>(null);
   const [openCard, setOpenCard] = useState<OpenCard>(null);
-  const [moneyHidden, setMoneyHidden] = useState<boolean>(() => {
+  const [openYearCard, setOpenYearCard] = useState<YearCard>(null);
+  const [moneyHidden, setMoneyHidden] = useState<MoneyHidden>(() => {
     try {
-      return localStorage.getItem(MONEY_HIDDEN_KEY) === "1";
+      const raw = localStorage.getItem(MONEY_HIDDEN_KEY);
+      if (!raw) return DEFAULT_MONEY_HIDDEN;
+      const parsed = JSON.parse(raw) as Partial<MoneyHidden>;
+      return { ...DEFAULT_MONEY_HIDDEN, ...parsed };
     } catch {
-      return false;
+      return DEFAULT_MONEY_HIDDEN;
     }
   });
 
-  const toggleMoneyHidden = useCallback(() => {
+  const toggleMoneyHidden = useCallback((key: keyof MoneyHidden) => {
     setMoneyHidden((prev) => {
-      const next = !prev;
+      const next = { ...prev, [key]: !prev[key] };
       try {
-        localStorage.setItem(MONEY_HIDDEN_KEY, next ? "1" : "0");
+        localStorage.setItem(MONEY_HIDDEN_KEY, JSON.stringify(next));
       } catch {
         // ignore quota errors
       }
@@ -199,9 +257,6 @@ export default function Dashboard() {
               </div>
             </div>
           )}
-          <Button variant="ghost" size="icon" className="h-8 w-8 flex-shrink-0" onClick={toggleMoneyHidden} aria-label={moneyHidden ? "Show money" : "Hide money"} title={moneyHidden ? "Show money" : "Hide money"}>
-            {moneyHidden ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-          </Button>
         </div>
       </motion.div>
 
@@ -209,7 +264,7 @@ export default function Dashboard() {
         Desktop layout (3 cols):
           [ TARGETS (2-col) ] [ TASKS (1-col, 2-row) ]
           [ WORKOUT ] [ FRIDGE ] [    "    ]
-          [ INCOME ]  [ PAYMENTS ]
+          [ INCOME ]  [ PAYMENTS ] [ SUBSCRIPTIONS ]
       */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3 md:auto-rows-min">
         {/* Targets — big, spans 2 cols */}
@@ -234,25 +289,47 @@ export default function Dashboard() {
 
         {/* Income */}
         <motion.div {...stagger(5)}>
-          <IncomeCard data={data} onClick={() => setOpenCard("income")} hidden={moneyHidden} />
+          <IncomeCard data={data} onClick={() => setOpenCard("income")} hidden={moneyHidden.income} onToggleHidden={() => toggleMoneyHidden("income")} />
         </motion.div>
 
         {/* Payments */}
         <motion.div {...stagger(6)}>
-          <PaymentsCard data={data} onClick={() => setOpenCard("payments")} hidden={moneyHidden} />
+          <PaymentsCard data={data} onClick={() => setOpenCard("payments")} hidden={moneyHidden.payments} onToggleHidden={() => toggleMoneyHidden("payments")} />
         </motion.div>
 
-        {/* (Empty cell on the right to keep alignment when needed) */}
-        <div className="hidden md:block" />
+        {/* Subscriptions */}
+        <motion.div {...stagger(7)}>
+          <SubscriptionsCard data={data} onClick={() => setOpenCard("subscriptions")} hidden={moneyHidden.subscriptions} onToggleHidden={() => toggleMoneyHidden("subscriptions")} />
+        </motion.div>
       </div>
+
+      {/* ===== Year so far ===== */}
+      <motion.div {...stagger(8)} className="pt-3">
+        <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-3">Year so far</div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <motion.div {...stagger(9)}>
+            <WeightCard data={data} onClick={() => setOpenYearCard("weight")} />
+          </motion.div>
+          <motion.div {...stagger(10)}>
+            <WishlistCard data={data} onClick={() => setOpenYearCard("wishlist")} />
+          </motion.div>
+          <motion.div {...stagger(11)}>
+            <CareerCard data={data} onClick={() => setOpenYearCard("career")} />
+          </motion.div>
+        </div>
+      </motion.div>
 
       {/* ===== Modals ===== */}
       <TargetsModal open={openCard === "targets"} onClose={() => setOpenCard(null)} data={data} />
       <TasksModal open={openCard === "tasks"} onClose={() => setOpenCard(null)} data={data} />
       <WorkoutModal open={openCard === "workout"} onClose={() => setOpenCard(null)} data={data} />
       <FridgeModal open={openCard === "fridge"} onClose={() => setOpenCard(null)} data={data} />
-      <IncomeModal open={openCard === "income"} onClose={() => setOpenCard(null)} data={data} hidden={moneyHidden} />
-      <PaymentsModal open={openCard === "payments"} onClose={() => setOpenCard(null)} data={data} hidden={moneyHidden} />
+      <IncomeModal open={openCard === "income"} onClose={() => setOpenCard(null)} data={data} hidden={moneyHidden.income} />
+      <PaymentsModal open={openCard === "payments"} onClose={() => setOpenCard(null)} data={data} hidden={moneyHidden.payments} />
+      <SubscriptionsCardModal open={openCard === "subscriptions"} onClose={() => setOpenCard(null)} data={data} hidden={moneyHidden.subscriptions} />
+      <WeightCardModal open={openYearCard === "weight"} onClose={() => setOpenYearCard(null)} data={data} />
+      <WishlistCardModal open={openYearCard === "wishlist"} onClose={() => setOpenYearCard(null)} data={data} />
+      <CareerCardModal open={openYearCard === "career"} onClose={() => setOpenYearCard(null)} data={data} />
     </div>
   );
 }
@@ -291,6 +368,36 @@ function CardShell({ children, onClick, className }: { children: React.ReactNode
       </Card>
     </motion.button>
   );
+}
+
+function MoneyEyeButton({ hidden, onToggle }: { hidden: boolean; onToggle: () => void }) {
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      className="h-6 w-6 flex-shrink-0"
+      onClick={(e) => {
+        e.stopPropagation();
+        onToggle();
+      }}
+      aria-label={hidden ? "Show money" : "Hide money"}
+      title={hidden ? "Show money" : "Hide money"}
+    >
+      {hidden ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+    </Button>
+  );
+}
+
+function nextRenewalText(daysUntil: number) {
+  if (daysUntil === 0) return "today";
+  if (daysUntil === 1) return "tomorrow";
+  return `in ${daysUntil}d`;
+}
+
+function priorityColor(priority: WishlistItem["priority"]) {
+  if (priority === "high") return "var(--color-expense)";
+  if (priority === "medium") return "var(--color-warning)";
+  return "var(--color-muted-foreground)";
 }
 
 // ----- TargetsCard -----
@@ -507,7 +614,7 @@ function FridgeCard({ data, onClick }: { data: Dash; onClick: () => void }) {
 }
 
 // ----- IncomeCard -----
-function IncomeCard({ data, onClick, hidden }: { data: Dash; onClick: () => void; hidden: boolean }) {
+function IncomeCard({ data, onClick, hidden, onToggleHidden }: { data: Dash; onClick: () => void; hidden: boolean; onToggleHidden: () => void }) {
   const { income } = data;
 
   return (
@@ -517,6 +624,7 @@ function IncomeCard({ data, onClick, hidden }: { data: Dash; onClick: () => void
           <WalletIcon className="h-3 w-3" />
           Income · month
         </span>
+        <MoneyEyeButton hidden={hidden} onToggle={onToggleHidden} />
       </div>
 
       <div className="flex items-end justify-between gap-3 flex-1">
@@ -549,7 +657,7 @@ function IncomeCard({ data, onClick, hidden }: { data: Dash; onClick: () => void
 }
 
 // ----- PaymentsCard -----
-function PaymentsCard({ data, onClick, hidden }: { data: Dash; onClick: () => void; hidden: boolean }) {
+function PaymentsCard({ data, onClick, hidden, onToggleHidden }: { data: Dash; onClick: () => void; hidden: boolean; onToggleHidden: () => void }) {
   const { payments } = data;
 
   return (
@@ -559,6 +667,7 @@ function PaymentsCard({ data, onClick, hidden }: { data: Dash; onClick: () => vo
           <CreditCard className="h-3 w-3" />
           Payments · month
         </span>
+        <MoneyEyeButton hidden={hidden} onToggle={onToggleHidden} />
       </div>
 
       <div className="flex items-end justify-between gap-3 flex-1">
@@ -566,7 +675,8 @@ function PaymentsCard({ data, onClick, hidden }: { data: Dash; onClick: () => vo
           <div className="text-2xl font-semibold font-mono tabular-nums tracking-tight" style={{ color: "var(--color-expense)" }}>
             {maskedOrEGP(payments.spentMonth, hidden)}
           </div>
-          <div className="text-[10px] text-muted-foreground font-mono tabular-nums mt-0.5">Balance: {maskedOrEGP(payments.walletTotal, hidden)}</div>
+          <div className="text-[10px] text-muted-foreground font-mono tabular-nums mt-0.5">Balance: {maskedOrEGP(payments.totalEgp, hidden)}</div>
+          {payments.totalUsd > 0 && <div className="text-[10px] text-muted-foreground font-mono tabular-nums mt-0.5">{maskedOrUSD(payments.totalUsd, hidden)} USD</div>}
         </div>
         <div className="h-12 w-24 flex-shrink-0">
           {hidden ? (
@@ -579,6 +689,155 @@ function PaymentsCard({ data, onClick, hidden }: { data: Dash; onClick: () => vo
             </ResponsiveContainer>
           )}
         </div>
+      </div>
+    </CardShell>
+  );
+}
+
+// ----- SubscriptionsCard -----
+function SubscriptionsCard({ data, onClick, hidden, onToggleHidden }: { data: Dash; onClick: () => void; hidden: boolean; onToggleHidden: () => void }) {
+  const { subscriptions } = data;
+  const empty = subscriptions.count === 0;
+
+  return (
+    <CardShell onClick={onClick}>
+      <div className="flex items-baseline justify-between mb-2">
+        <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium flex items-center gap-1.5">
+          <Repeat className="h-3 w-3" />
+          Subscriptions
+        </span>
+        <MoneyEyeButton hidden={hidden} onToggle={onToggleHidden} />
+      </div>
+
+      <div className="flex-1 flex flex-col justify-between">
+        <div>
+          {empty ? (
+            <div className="text-sm text-muted-foreground italic">No subscriptions</div>
+          ) : (
+            <>
+              <div className="text-2xl font-semibold font-mono tabular-nums tracking-tight" style={{ color: "var(--color-expense)" }}>
+                {maskedOrEGP(subscriptions.monthlyTotal, hidden)}
+              </div>
+              <div className="text-[10px] text-muted-foreground font-mono tabular-nums mt-0.5">{subscriptions.count} active</div>
+            </>
+          )}
+        </div>
+        {subscriptions.next && (
+          <div className="text-xs text-muted-foreground truncate mt-3">
+            {subscriptions.next.name} {nextRenewalText(subscriptions.next.daysUntil)}
+          </div>
+        )}
+      </div>
+    </CardShell>
+  );
+}
+
+// ----- WeightCard -----
+function WeightCard({ data, onClick }: { data: Dash; onClick: () => void }) {
+  const { weight } = data;
+  const hasWeight = weight.current !== null;
+
+  return (
+    <CardShell onClick={onClick}>
+      <div className="flex items-baseline justify-between mb-2">
+        <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium flex items-center gap-1.5">
+          <Scale className="h-3 w-3" />
+          Weight
+        </span>
+        {hasWeight && <span className="text-[10px] text-muted-foreground font-mono tabular-nums">→ {Math.round(weight.target)} kg</span>}
+      </div>
+
+      {!hasWeight ? (
+        <div className="text-sm text-muted-foreground italic">No weigh-ins yet</div>
+      ) : (
+        <div className="flex-1 flex flex-col justify-between">
+          <div>
+            <div className="text-3xl font-semibold font-mono tabular-nums tracking-tight">{Math.round(weight.current ?? 0)} kg</div>
+            {weight.lostSinceStart > 0 && <div className="text-[10px] text-muted-foreground font-mono tabular-nums mt-0.5">-{weight.lostSinceStart.toFixed(1)} kg since start</div>}
+          </div>
+          {weight.sparkline.length > 1 && (
+            <div className="h-9 mt-3">
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={weight.sparkline}>
+                  <defs>
+                    <linearGradient id="dashWeightFill" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="var(--color-foreground)" stopOpacity={0.22} />
+                      <stop offset="100%" stopColor="var(--color-foreground)" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <Area type="monotone" dataKey="value" stroke="var(--color-foreground)" strokeOpacity={0.75} strokeWidth={1.5} fill="url(#dashWeightFill)" />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+        </div>
+      )}
+    </CardShell>
+  );
+}
+
+// ----- WishlistCard -----
+function WishlistCard({ data, onClick }: { data: Dash; onClick: () => void }) {
+  const { wishlist } = data;
+
+  return (
+    <CardShell onClick={onClick}>
+      <div className="flex items-baseline justify-between mb-2">
+        <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium flex items-center gap-1.5">
+          <ShoppingBag className="h-3 w-3" />
+          Wishlist
+        </span>
+      </div>
+
+      {wishlist.countLeft === 0 ? (
+        <div className="text-sm text-muted-foreground italic">Nothing on the list</div>
+      ) : (
+        <div className="flex-1 flex flex-col">
+          <div className="flex items-baseline gap-1.5 mb-2">
+            <span className="text-3xl font-semibold font-mono tabular-nums tracking-tight">{wishlist.countLeft}</span>
+            <span className="text-xs text-muted-foreground">to buy</span>
+          </div>
+          <div className="text-[10px] text-muted-foreground font-mono tabular-nums mb-3">{fmtEGP(wishlist.totalToBuy)} pending</div>
+          <div className="space-y-1 min-h-0">
+            {wishlist.topPriority.map((item) => (
+              <div key={item._id} className="text-xs flex items-center gap-2">
+                <span className="h-2 w-2 rounded-full flex-shrink-0" style={{ background: priorityColor(item.priority) }} />
+                <span className="truncate flex-1">{item.name}</span>
+                <span className="font-mono tabular-nums font-semibold flex-shrink-0">{fmtEGP(item.price)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </CardShell>
+  );
+}
+
+// ----- CareerCard -----
+function CareerCard({ data, onClick }: { data: Dash; onClick: () => void }) {
+  const { career } = data;
+
+  return (
+    <CardShell onClick={onClick}>
+      <div className="flex items-baseline justify-between mb-2">
+        <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium flex items-center gap-1.5">
+          <GraduationCap className="h-3 w-3" />
+          AI Roadmap
+        </span>
+        <span className="text-sm font-semibold font-mono tabular-nums">{career.percent}%</span>
+      </div>
+
+      <div className="flex-1 flex flex-col justify-between">
+        <div>
+          <div className="text-3xl font-semibold font-mono tabular-nums tracking-tight">
+            {career.doneCount}
+            <span className="text-muted-foreground text-lg"> / {career.totalTopics}</span>
+          </div>
+          <div className="h-2 rounded-full overflow-hidden mt-3" style={{ background: "var(--color-muted)" }}>
+            <motion.div initial={{ width: 0 }} animate={{ width: `${career.percent}%` }} transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }} style={{ background: "var(--color-foreground)", height: "100%" }} />
+          </div>
+        </div>
+        {career.recentlyCompleted > 0 && <div className="text-xs text-muted-foreground mt-3">+{career.recentlyCompleted} this week</div>}
       </div>
     </CardShell>
   );
@@ -978,9 +1237,39 @@ function PaymentsModal({ open, onClose, data, hidden }: { open: boolean; onClose
           </div>
           <div>
             <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Total balance</div>
-            <div className="text-xl font-semibold font-mono tabular-nums tracking-tight mt-1">{maskedOrEGP(payments.walletTotal, hidden)}</div>
+            <div className="text-xl font-semibold font-mono tabular-nums tracking-tight mt-1">{maskedOrEGP(payments.totalEgp, hidden)}</div>
           </div>
+          {payments.totalUsd > 0 && (
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Total USD</div>
+              <div className="text-xl font-semibold font-mono tabular-nums tracking-tight mt-1">{maskedOrUSD(payments.totalUsd, hidden)}</div>
+            </div>
+          )}
+          {payments.externalFundedToday > 0 && (
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Family-funded today</div>
+              <div className="text-xl font-semibold font-mono tabular-nums tracking-tight mt-1">{maskedOrEGP(payments.externalFundedToday, hidden)}</div>
+            </div>
+          )}
         </div>
+
+        {(payments.wallets.length > 0 || payments.banks.length > 0) && (
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-2">Accounts</div>
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              <div className="rounded-md p-3" style={{ background: "var(--color-muted)" }}>
+                <div className="text-muted-foreground">EGP total</div>
+                <div className="font-semibold font-mono tabular-nums mt-0.5">{maskedOrEGP(payments.totalEgp, hidden)}</div>
+              </div>
+              {payments.totalUsd > 0 && (
+                <div className="rounded-md p-3" style={{ background: "var(--color-muted)" }}>
+                  <div className="text-muted-foreground">USD total</div>
+                  <div className="font-semibold font-mono tabular-nums mt-0.5">{maskedOrUSD(payments.totalUsd, hidden)}</div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         <div>
           <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-2">Last 7 days · spending</div>
@@ -1026,6 +1315,22 @@ function PaymentsModal({ open, onClose, data, hidden }: { open: boolean; onClose
             </div>
           </div>
         )}
+        {payments.banks.length > 0 && (
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-2">Banks</div>
+            <div className="space-y-0">
+              {payments.banks.map((b) => (
+                <div key={b._id} className="text-sm py-1.5 border-b border-border flex items-center justify-between gap-3">
+                  <span className="truncate flex items-center gap-2">
+                    {b.name}
+                    <span className="text-[9px] font-bold px-1.5 py-0.5 rounded border border-border text-muted-foreground">{b.currency}</span>
+                  </span>
+                  <span className="font-mono tabular-nums font-semibold">{b.currency === "USD" ? maskedOrUSD(b.balance, hidden) : maskedOrEGP(b.balance, hidden)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
         {payments.recentExpenses.length > 0 && (
           <div>
             <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-2">Recent expenses</div>
@@ -1042,6 +1347,190 @@ function PaymentsModal({ open, onClose, data, hidden }: { open: boolean; onClose
             </div>
           </div>
         )}
+      </div>
+    </BaseModal>
+  );
+}
+
+// ----- Subscriptions modal -----
+function SubscriptionsCardModal({ open, onClose, data, hidden }: { open: boolean; onClose: () => void; data: Dash; hidden: boolean }) {
+  const { subscriptions } = data;
+  const next = subscriptions.next;
+  const daysText = next ? (next.daysUntil === 0 ? "today" : next.daysUntil === 1 ? "tomorrow" : `in ${next.daysUntil} days`) : "";
+
+  return (
+    <BaseModal open={open} onClose={onClose} title="Subscriptions" page="/payments">
+      <div className="space-y-4">
+        <div className="flex items-baseline gap-4">
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Monthly total</div>
+            <div className="text-3xl font-semibold font-mono tabular-nums tracking-tight" style={{ color: subscriptions.count > 0 ? "var(--color-expense)" : "var(--color-muted-foreground)" }}>
+              {maskedOrEGP(subscriptions.monthlyTotal, hidden)}
+            </div>
+          </div>
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Active</div>
+            <div className="text-xl font-semibold font-mono tabular-nums tracking-tight mt-1">{subscriptions.count}</div>
+          </div>
+        </div>
+
+        {next ? (
+          <div className="rounded-md p-4 border border-border" style={{ background: "var(--color-muted)" }}>
+            <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Next renewal</div>
+            <div className="text-base font-semibold mt-1">{next.name}</div>
+            <div className="text-sm text-muted-foreground mt-1">
+              Renews on day {next.billingDay} - {daysText}
+            </div>
+            <div className="text-sm font-mono tabular-nums mt-2">
+              {maskedOrEGP(next.price, hidden)}
+              <span className="text-muted-foreground font-sans ml-1">from {next.sourceNameSnapshot}</span>
+            </div>
+          </div>
+        ) : (
+          <div className="text-sm text-muted-foreground italic">No active subscriptions.</div>
+        )}
+      </div>
+    </BaseModal>
+  );
+}
+
+// ----- Weight modal -----
+function WeightCardModal({ open, onClose, data }: { open: boolean; onClose: () => void; data: Dash }) {
+  const { weight } = data;
+
+  return (
+    <BaseModal open={open} onClose={onClose} title="Weight" page="/calories">
+      <div className="space-y-4">
+        {weight.current === null ? (
+          <div className="text-sm text-muted-foreground italic">No weigh-ins yet.</div>
+        ) : (
+          <>
+            <div className="flex items-baseline gap-3 flex-wrap">
+              <div>
+                <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Current</div>
+                <div className="text-3xl font-semibold font-mono tabular-nums tracking-tight">{Math.round(weight.current)} kg</div>
+              </div>
+              <div className="text-2xl text-muted-foreground">→</div>
+              <div>
+                <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Target</div>
+                <div className="text-2xl font-semibold font-mono tabular-nums tracking-tight">{Math.round(weight.target)} kg</div>
+              </div>
+            </div>
+            {weight.lostSinceStart > 0 && (
+              <div className="text-sm text-muted-foreground font-mono tabular-nums">-{weight.lostSinceStart.toFixed(1)} kg since start</div>
+            )}
+            <div className="h-44">
+              {weight.sparkline.length > 1 ? (
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={weight.sparkline} margin={{ top: 5, right: 5, left: 0, bottom: 0 }}>
+                    <defs>
+                      <linearGradient id="dashWeightFillBig" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="var(--color-foreground)" stopOpacity={0.22} />
+                        <stop offset="100%" stopColor="var(--color-foreground)" stopOpacity={0} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid stroke="var(--color-border)" strokeDasharray="3 3" vertical={false} />
+                    <XAxis dataKey="date" tick={{ fontSize: 10, fill: "var(--color-muted-foreground)" }} tickFormatter={(iso) => new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" })} stroke="var(--color-border)" />
+                    <YAxis tick={{ fontSize: 10, fill: "var(--color-muted-foreground)" }} stroke="var(--color-border)" width={40} />
+                    <Tooltip
+                      cursor={{ stroke: "var(--color-border)" }}
+                      contentStyle={{
+                        background: "var(--color-card)",
+                        border: "1px solid var(--color-border)",
+                        borderRadius: "8px",
+                        fontSize: "12px",
+                      }}
+                      formatter={(v) => [`${Number(v).toFixed(1)} kg`, "Weight"]}
+                      labelFormatter={(iso) => new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" })}
+                    />
+                    <Area type="monotone" dataKey="value" stroke="var(--color-foreground)" strokeOpacity={0.75} strokeWidth={2} fill="url(#dashWeightFillBig)" />
+                  </AreaChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="h-full w-full rounded-md flex items-center justify-center text-xs text-muted-foreground" style={{ background: "var(--color-muted)" }}>
+                  Add another weigh-in to see the trend.
+                </div>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    </BaseModal>
+  );
+}
+
+// ----- Wishlist modal -----
+function WishlistCardModal({ open, onClose, data }: { open: boolean; onClose: () => void; data: Dash }) {
+  const { wishlist } = data;
+
+  return (
+    <BaseModal open={open} onClose={onClose} title="Wishlist" page="/payments">
+      <div className="space-y-4">
+        <div className="flex items-baseline gap-4">
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Total to buy</div>
+            <div className="text-3xl font-semibold font-mono tabular-nums tracking-tight">{fmtEGP(wishlist.totalToBuy)}</div>
+          </div>
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Items</div>
+            <div className="text-xl font-semibold font-mono tabular-nums tracking-tight mt-1">{wishlist.countLeft}</div>
+          </div>
+        </div>
+
+        {wishlist.topPriority.length === 0 ? (
+          <div className="text-sm text-muted-foreground italic">Nothing on the list.</div>
+        ) : (
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-2">Top priority</div>
+            <div className="space-y-0">
+              {wishlist.topPriority.map((item) => (
+                <div key={item._id} className="text-sm py-1.5 border-b border-border flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="h-2 w-2 rounded-full flex-shrink-0" style={{ background: priorityColor(item.priority) }} />
+                    {item.link ? (
+                      <a href={item.link} target="_blank" rel="noopener noreferrer" className="truncate hover:underline flex items-center gap-1">
+                        {item.name}
+                        <ExternalLink className="h-3 w-3 flex-shrink-0 text-muted-foreground" />
+                      </a>
+                    ) : (
+                      <span className="truncate">{item.name}</span>
+                    )}
+                  </div>
+                  <span className="font-mono tabular-nums font-semibold flex-shrink-0">{fmtEGP(item.price)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </BaseModal>
+  );
+}
+
+// ----- Career modal -----
+function CareerCardModal({ open, onClose, data }: { open: boolean; onClose: () => void; data: Dash }) {
+  const { career } = data;
+
+  return (
+    <BaseModal open={open} onClose={onClose} title="AI Roadmap" page="/career">
+      <div className="space-y-4">
+        <div className="flex items-end justify-between gap-4">
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Completed</div>
+            <div className="text-3xl font-semibold font-mono tabular-nums tracking-tight">
+              {career.doneCount}
+              <span className="text-muted-foreground text-2xl">/{career.totalTopics}</span>
+            </div>
+          </div>
+          <div className="text-right">
+            <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Complete</div>
+            <div className="text-3xl font-semibold font-mono tabular-nums tracking-tight">{career.percent}%</div>
+          </div>
+        </div>
+        <div className="h-3 rounded-full overflow-hidden" style={{ background: "var(--color-muted)" }}>
+          <motion.div initial={{ width: 0 }} animate={{ width: `${career.percent}%` }} transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }} style={{ background: "var(--color-foreground)", height: "100%" }} />
+        </div>
+        {career.recentlyCompleted > 0 && <div className="text-sm text-muted-foreground">+{career.recentlyCompleted} completed this week</div>}
       </div>
     </BaseModal>
   );

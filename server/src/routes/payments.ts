@@ -4,6 +4,8 @@ import { Bank, BANK_CURRENCIES } from "../models/Bank";
 import { ExternalSource } from "../models/ExternalSource";
 import { Expense, EXPENSE_CATEGORIES, EXPENSE_SOURCE_TYPES } from "../models/Expense";
 import { MoneyMovement, MOVEMENT_TYPES, MovementType } from "../models/MoneyMovement";
+import { Subscription, SUBSCRIPTION_SOURCE_TYPES } from "../models/Subscription";
+import { WishlistItem, WISHLIST_PRIORITIES } from "../models/WishlistItem";
 import { validateMovementShape } from "../lib/movement-validation";
 import { toDayUTC } from "../lib/dates";
 import mongoose from "mongoose";
@@ -701,6 +703,208 @@ router.delete("/movements/:id", async (req, res) => {
   } finally {
     await session.endSession();
   }
+});
+
+// ===== SUBSCRIPTIONS =====
+
+type SubscriptionSourceType = (typeof SUBSCRIPTION_SOURCE_TYPES)[number];
+
+async function resolveSubscriptionSource(sourceType: SubscriptionSourceType, sourceId: string) {
+  if (sourceType === "wallet") {
+    const wallet = await Wallet.findById(sourceId);
+    if (!wallet || wallet.archived) return null;
+    return { sourceId: wallet._id, sourceNameSnapshot: wallet.name };
+  }
+
+  if (sourceType === "bank") {
+    const bank = await Bank.findById(sourceId);
+    if (!bank || bank.archived) return null;
+    return { sourceId: bank._id, sourceNameSnapshot: bank.name };
+  }
+
+  const ext = await ExternalSource.findById(sourceId);
+  if (!ext || ext.archived) return null;
+  return { sourceId: ext._id, sourceNameSnapshot: ext.name };
+}
+
+router.get("/subscriptions", async (_req, res) => {
+  const subscriptions = await Subscription.find({ archived: false }).sort({ billingDay: 1, name: 1 });
+  res.json(subscriptions);
+});
+
+router.post("/subscriptions", async (req, res) => {
+  const { name, price, sourceType, sourceId, billingDay } = req.body;
+  if (!name || typeof name !== "string" || !name.trim()) {
+    return res.status(400).json({ error: "name required" });
+  }
+  if (typeof price !== "number" || price < 0) {
+    return res.status(400).json({ error: "invalid price" });
+  }
+  if (!SUBSCRIPTION_SOURCE_TYPES.includes(sourceType)) {
+    return res.status(400).json({ error: "invalid sourceType" });
+  }
+  if (!sourceId) {
+    return res.status(400).json({ error: "sourceId required" });
+  }
+  if (!Number.isInteger(billingDay) || billingDay < 1 || billingDay > 31) {
+    return res.status(400).json({ error: "invalid billingDay" });
+  }
+
+  const source = await resolveSubscriptionSource(sourceType, sourceId);
+  if (!source) return res.status(404).json({ error: `${sourceType} not found` });
+
+  const subscription = await Subscription.create({
+    name: name.trim(),
+    price,
+    sourceType,
+    sourceId: source.sourceId,
+    sourceNameSnapshot: source.sourceNameSnapshot,
+    billingDay,
+  });
+  res.json(subscription);
+});
+
+router.patch("/subscriptions/:id", async (req, res) => {
+  const subscription = await Subscription.findById(req.params.id);
+  if (!subscription || subscription.archived) return res.status(404).json({ error: "not found" });
+
+  const { name, price, sourceType, sourceId, billingDay } = req.body;
+
+  if ("name" in req.body) {
+    if (typeof name !== "string" || !name.trim()) return res.status(400).json({ error: "name required" });
+    subscription.name = name.trim();
+  }
+
+  if ("price" in req.body) {
+    if (typeof price !== "number" || price < 0) return res.status(400).json({ error: "invalid price" });
+    subscription.price = price;
+  }
+
+  const sourceTypeProvided = "sourceType" in req.body;
+  const sourceIdProvided = "sourceId" in req.body;
+  if (sourceTypeProvided !== sourceIdProvided) {
+    return res.status(400).json({ error: "sourceType and sourceId must be provided together" });
+  }
+  if (sourceTypeProvided && sourceIdProvided) {
+    if (!SUBSCRIPTION_SOURCE_TYPES.includes(sourceType)) {
+      return res.status(400).json({ error: "invalid sourceType" });
+    }
+    if (!sourceId) return res.status(400).json({ error: "sourceId required" });
+    const source = await resolveSubscriptionSource(sourceType, sourceId);
+    if (!source) return res.status(404).json({ error: `${sourceType} not found` });
+    subscription.sourceType = sourceType;
+    subscription.sourceId = source.sourceId;
+    subscription.sourceNameSnapshot = source.sourceNameSnapshot;
+  }
+
+  if ("billingDay" in req.body) {
+    if (!Number.isInteger(billingDay) || billingDay < 1 || billingDay > 31) {
+      return res.status(400).json({ error: "invalid billingDay" });
+    }
+    subscription.billingDay = billingDay;
+  }
+
+  await subscription.save();
+  res.json(subscription);
+});
+
+router.delete("/subscriptions/:id", async (req, res) => {
+  const subscription = await Subscription.findById(req.params.id);
+  if (!subscription || subscription.archived) return res.status(404).json({ error: "not found" });
+  subscription.archived = true;
+  await subscription.save();
+  res.json({ ok: true });
+});
+
+// ===== WISHLIST =====
+
+type WishlistPriority = (typeof WISHLIST_PRIORITIES)[number];
+const wishlistPriorityRank: Record<WishlistPriority, number> = {
+  high: 0,
+  medium: 1,
+  low: 2,
+};
+
+function todayUTC() {
+  return toDayUTC(new Date().toISOString().slice(0, 10));
+}
+
+router.get("/wishlist", async (_req, res) => {
+  const items = await WishlistItem.find({ archived: false });
+  items.sort((a, b) => {
+    if (a.bought !== b.bought) return a.bought ? 1 : -1;
+    const priorityDiff = wishlistPriorityRank[a.priority as WishlistPriority] - wishlistPriorityRank[b.priority as WishlistPriority];
+    if (priorityDiff !== 0) return priorityDiff;
+    return b.createdAt.getTime() - a.createdAt.getTime();
+  });
+  res.json(items);
+});
+
+router.post("/wishlist", async (req, res) => {
+  const { name, price, link, priority, notes } = req.body;
+  if (!name || typeof name !== "string" || !name.trim()) {
+    return res.status(400).json({ error: "name required" });
+  }
+  if (typeof price !== "number" || price < 0) {
+    return res.status(400).json({ error: "invalid price" });
+  }
+  const nextPriority = priority ?? "medium";
+  if (!WISHLIST_PRIORITIES.includes(nextPriority)) {
+    return res.status(400).json({ error: "invalid priority" });
+  }
+
+  const item = await WishlistItem.create({
+    name: name.trim(),
+    price,
+    bought: false,
+    dateBought: null,
+    link: typeof link === "string" ? link.trim() : "",
+    priority: nextPriority,
+    notes: typeof notes === "string" ? notes.trim() : "",
+  });
+  res.json(item);
+});
+
+router.patch("/wishlist/:id", async (req, res) => {
+  const item = await WishlistItem.findById(req.params.id);
+  if (!item || item.archived) return res.status(404).json({ error: "not found" });
+
+  const { name, price, link, priority, notes, bought } = req.body;
+
+  if ("name" in req.body) {
+    if (typeof name !== "string" || !name.trim()) return res.status(400).json({ error: "name required" });
+    item.name = name.trim();
+  }
+  if ("price" in req.body) {
+    if (typeof price !== "number" || price < 0) return res.status(400).json({ error: "invalid price" });
+    item.price = price;
+  }
+  if ("priority" in req.body) {
+    if (!WISHLIST_PRIORITIES.includes(priority)) return res.status(400).json({ error: "invalid priority" });
+    item.priority = priority;
+  }
+  if ("link" in req.body) item.link = typeof link === "string" ? link.trim() : "";
+  if ("notes" in req.body) item.notes = typeof notes === "string" ? notes.trim() : "";
+  if ("bought" in req.body) {
+    if (typeof bought !== "boolean") return res.status(400).json({ error: "invalid bought" });
+    if (!item.bought && bought) {
+      item.dateBought = todayUTC();
+    } else if (item.bought && !bought) {
+      item.dateBought = null;
+    }
+    item.bought = bought;
+  }
+
+  await item.save();
+  res.json(item);
+});
+
+router.delete("/wishlist/:id", async (req, res) => {
+  const item = await WishlistItem.findById(req.params.id);
+  if (!item || item.archived) return res.status(404).json({ error: "not found" });
+  item.archived = true;
+  await item.save();
+  res.json({ ok: true });
 });
 
 export default router;

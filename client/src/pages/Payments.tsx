@@ -9,10 +9,12 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue } from "../components/ui/select";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
 import { toast } from "sonner";
-import { Trash2, Plus, Search, BarChart3, Calendar, Wallet as WalletIcon, Check, Landmark, Users, ChevronDown, ArrowLeftRight } from "lucide-react";
+import { Trash2, Plus, Search, BarChart3, Calendar, Wallet as WalletIcon, Check, Landmark, Users, ChevronDown, ArrowLeftRight, Repeat, ShoppingBag } from "lucide-react";
 import { AxiosError } from "axios";
 import { RecapModal } from "../components/RecapModal";
 import { MovementsModal } from "../components/MovementsModal";
+import { SubscriptionsModal } from "../components/SubscriptionsModal";
+import { WishlistModal } from "../components/WishlistModal";
 
 // ===== Types =====
 type Wallet = { _id: string; name: string; balance: number };
@@ -207,6 +209,8 @@ export default function Payments() {
 
   const [recapPeriod, setRecapPeriod] = useState<"week" | "month" | null>(null);
   const [movementsOpen, setMovementsOpen] = useState(false);
+  const [subscriptionsOpen, setSubscriptionsOpen] = useState(false);
+  const [wishlistOpen, setWishlistOpen] = useState(false);
 
   const loadWallets = useCallback(async () => {
     try {
@@ -302,6 +306,14 @@ export default function Payments() {
           <Button variant="outline" size="sm" onClick={() => setMovementsOpen(true)}>
             <ArrowLeftRight className="h-3.5 w-3.5 mr-1.5" />
             Movements
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => setSubscriptionsOpen(true)}>
+            <Repeat className="h-3.5 w-3.5 mr-1.5" />
+            Subscriptions
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => setWishlistOpen(true)}>
+            <ShoppingBag className="h-3.5 w-3.5 mr-1.5" />
+            Wishlist
           </Button>
           <Button variant="outline" size="sm" onClick={() => setRecapPeriod("week")}>
             <BarChart3 className="h-3.5 w-3.5 mr-1.5" />
@@ -525,6 +537,12 @@ export default function Payments() {
 
       {/* ===== Movements modal ===== */}
       <MovementsModal open={movementsOpen} onOpenChange={setMovementsOpen} wallets={wallets} banks={banks} externalSources={externalSources} onChanged={reloadAll} />
+
+      {/* ===== Subscriptions modal ===== */}
+      <SubscriptionsModal open={subscriptionsOpen} onOpenChange={setSubscriptionsOpen} wallets={wallets} banks={banks} externalSources={externalSources} onChanged={reloadAll} />
+
+      {/* ===== Wishlist modal ===== */}
+      <WishlistModal open={wishlistOpen} onOpenChange={setWishlistOpen} onChanged={reloadAll} />
     </div>
   );
 }

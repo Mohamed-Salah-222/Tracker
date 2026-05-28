@@ -5,6 +5,8 @@ import { FridgeItem } from "../models/FridgeItem";
 import { CheatDay } from "../models/CheatDay";
 import { WaterEntry } from "../models/WaterEntry";
 import { Goal } from "../models/Goal";
+import { WeightEntry } from "../models/WeightEntry";
+import { WeightGoal } from "../models/WeightGoal";
 import { toDayUTC } from "../lib/dates";
 
 const router = Router();
@@ -93,6 +95,19 @@ router.post("/", async (req, res) => {
     });
     res.json(entry);
   }
+});
+
+router.patch("/weight-goal", async (req, res) => {
+  const { targetKg } = req.body;
+  if (typeof targetKg !== "number" || targetKg <= 0) {
+    return res.status(400).json({ error: "positive targetKg required" });
+  }
+
+  let goal = await WeightGoal.findOne();
+  if (!goal) goal = await WeightGoal.create({});
+  goal.targetKg = targetKg;
+  await goal.save();
+  res.json(goal);
 });
 
 router.patch("/:id", async (req, res) => {
@@ -405,6 +420,66 @@ router.get("/week-summary", async (req, res) => {
     },
     goal,
   });
+});
+
+// ===========================================================
+// WEIGHT JOURNEY
+// ===========================================================
+
+router.get("/weight", async (_req, res) => {
+  const entries = await WeightEntry.find({ deletedAt: null }).sort({ date: 1 });
+  res.json(entries);
+});
+
+router.post("/weight", async (req, res) => {
+  const { date, weightKg, note } = req.body;
+  if (!date) return res.status(400).json({ error: "date required" });
+  if (typeof weightKg !== "number" || weightKg <= 0) {
+    return res.status(400).json({ error: "positive weightKg required" });
+  }
+
+  const day = toDayUTC(date);
+  const entry = await WeightEntry.findOneAndUpdate(
+    { date: day, deletedAt: null },
+    { weightKg, note: note ?? "" },
+    { upsert: true, new: true },
+  );
+  res.json(entry);
+});
+
+router.patch("/weight/:id", async (req, res) => {
+  const entry = await WeightEntry.findById(req.params.id);
+  if (!entry || entry.deletedAt) return res.status(404).json({ error: "not found" });
+
+  const { weightKg, note, date } = req.body;
+  if ("weightKg" in req.body) {
+    if (typeof weightKg !== "number" || weightKg <= 0) {
+      return res.status(400).json({ error: "positive weightKg required" });
+    }
+    entry.weightKg = weightKg;
+  }
+  if ("note" in req.body) entry.note = note ?? "";
+  if ("date" in req.body) {
+    if (!date) return res.status(400).json({ error: "date required" });
+    entry.date = toDayUTC(date);
+  }
+
+  await entry.save();
+  res.json(entry);
+});
+
+router.delete("/weight/:id", async (req, res) => {
+  const entry = await WeightEntry.findById(req.params.id);
+  if (!entry || entry.deletedAt) return res.status(404).json({ error: "not found" });
+  entry.deletedAt = new Date();
+  await entry.save();
+  res.json({ ok: true });
+});
+
+router.get("/weight-goal", async (_req, res) => {
+  let goal = await WeightGoal.findOne();
+  if (!goal) goal = await WeightGoal.create({});
+  res.json(goal);
 });
 
 export default router;

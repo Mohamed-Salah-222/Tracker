@@ -9,9 +9,10 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
 import { toast } from "sonner";
-import { ChevronLeft, ChevronRight, Plus, Search, Snowflake, Trash2, Droplet, BarChart3, Target, Cake } from "lucide-react";
+import { ChevronLeft, ChevronRight, Plus, Search, Snowflake, Trash2, Droplet, BarChart3, Target, Cake, Scale } from "lucide-react";
 import { AxiosError } from "axios";
 import { CalorieRecapModal } from "../components/CalorieRecapModal";
+import { WeightModal } from "../components/WeightModal";
 
 // ===== Types =====
 type Meal = "breakfast" | "lunch" | "dinner" | "snack";
@@ -131,6 +132,7 @@ export default function Calories() {
   const [pendingMeal, setPendingMeal] = useState<Meal>("breakfast");
   const [recapOpen, setRecapOpen] = useState(false);
   const [goalOpen, setGoalOpen] = useState(false);
+  const [weightOpen, setWeightOpen] = useState(false);
 
   // ----- Loaders -----
   const loadFoods = useCallback(async () => {
@@ -249,6 +251,10 @@ export default function Calories() {
             <Target className="h-3.5 w-3.5 mr-1.5" />
             Goals
           </Button>
+          <Button variant="ghost" size="sm" onClick={() => setWeightOpen(true)}>
+            <Scale className="h-3.5 w-3.5 mr-1.5" />
+            Weight
+          </Button>
           <Button variant="outline" size="sm" onClick={() => setRecapOpen(true)}>
             <BarChart3 className="h-3.5 w-3.5 mr-1.5" />
             Weekly recap
@@ -306,6 +312,7 @@ export default function Calories() {
       {/* ===== Dialogs ===== */}
       <FoodPickerDialog open={pickerOpen} onOpenChange={setPickerOpen} foods={foods} recentIds={recentIds} meal={pendingMeal} date={date} onSaved={reload} />
       <GoalDialog open={goalOpen} onOpenChange={setGoalOpen} goal={goal} onSaved={loadGoal} />
+      <WeightModal open={weightOpen} onOpenChange={setWeightOpen} />
       <CalorieRecapModal open={recapOpen} onOpenChange={setRecapOpen} />
     </div>
   );

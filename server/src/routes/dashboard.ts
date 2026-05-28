@@ -2,6 +2,7 @@ import { Router } from "express";
 import { IncomeEntry } from "../models/IncomeEntry";
 import { Expense } from "../models/Expense";
 import { Wallet } from "../models/Wallet";
+import { Bank } from "../models/Bank";
 import { Task } from "../models/Task";
 import { CalorieEntry } from "../models/CalorieEntry";
 import { FridgeItem } from "../models/FridgeItem";
@@ -10,6 +11,11 @@ import { CheatDay } from "../models/CheatDay";
 import { Goal } from "../models/Goal";
 import { WorkoutSession } from "../models/WorkoutSession";
 import { SetLog } from "../models/SetLog";
+import { Subscription } from "../models/Subscription";
+import { WeightEntry } from "../models/WeightEntry";
+import { WeightGoal } from "../models/WeightGoal";
+import { WishlistItem } from "../models/WishlistItem";
+import { CareerTopic } from "../models/CareerTopic";
 import { toDayUTC, monthRange } from "../lib/dates";
 
 const router = Router();
@@ -28,6 +34,43 @@ function last7DaysISO(): string[] {
 // Hardcoded workout exercise counts (mirror of frontend constants)
 const WORKOUT_A_SET_COUNT = 4 + 4 + 3 + 3 + 3 + 3 + 3; // 23 sets
 const WORKOUT_B_SET_COUNT = 4 + 3 + 3 + 3 + 3; // 16 sets
+
+// Mirrors client/src/lib/career-curriculum.ts TOTAL_TOPICS.
+const TOTAL_CAREER_TOPICS = 177;
+
+type DashboardSubscriptions = {
+  monthlyTotal: number;
+  count: number;
+  next: {
+    name: string;
+    price: number;
+    billingDay: number;
+    daysUntil: number;
+    sourceNameSnapshot: string;
+  } | null;
+};
+
+type DashboardWeight = {
+  current: number | null;
+  target: number;
+  earliest: { date: string; weightKg: number } | null;
+  lostSinceStart: number;
+  remainingToTarget: number;
+  sparkline: { date: string; value: number }[];
+};
+
+type DashboardWishlist = {
+  totalToBuy: number;
+  countLeft: number;
+  topPriority: Awaited<ReturnType<typeof WishlistItem.find>>;
+};
+
+type DashboardCareer = {
+  doneCount: number;
+  totalTopics: number;
+  percent: number;
+  recentlyCompleted: number;
+};
 
 router.get("/", async (_req, res) => {
   const now = new Date();
@@ -63,7 +106,12 @@ router.get("/", async (_req, res) => {
 
   // ===== Wallets / Payments =====
   const wallets = await Wallet.find({ archived: false }).sort({ createdAt: 1 });
-  const walletTotal = wallets.reduce((s, w) => s + w.balance, 0);
+  const banks = await Bank.find({ archived: false }).sort({ createdAt: 1 });
+  const walletsTotal = wallets.reduce((s, w) => s + w.balance, 0);
+  const egpBanksTotal = banks.filter((b) => b.currency === "EGP").reduce((s, b) => s + b.balance, 0);
+  const totalEgp = walletsTotal + egpBanksTotal;
+  const totalUsd = banks.filter((b) => b.currency === "USD").reduce((s, b) => s + b.balance, 0);
+  const walletTotal = totalEgp;
 
   const expenseRecent = await Expense.find({
     date: { $gte: sevenAgo, $lt: tomorrow },
@@ -88,6 +136,87 @@ router.get("/", async (_req, res) => {
   const spentMonth = expenseMonth.reduce((s, e) => s + e.amount, 0);
 
   const recentExpenses = await Expense.find({ deletedAt: null }).sort({ date: -1, createdAt: -1 }).limit(5);
+
+  // ===== Subscriptions =====
+  const subscriptionDocs = await Subscription.find({ archived: false }).sort({ billingDay: 1, name: 1 });
+  const subscriptionMonthlyTotal = subscriptionDocs.reduce((s, sub) => s + sub.price, 0);
+  const todayDay = today.getUTCDate();
+  let nextSubscription: DashboardSubscriptions["next"] = null;
+  for (const sub of subscriptionDocs) {
+    const daysUntil = sub.billingDay >= todayDay ? sub.billingDay - todayDay : 31 - todayDay + sub.billingDay;
+    if (
+      !nextSubscription ||
+      daysUntil < nextSubscription.daysUntil ||
+      (daysUntil === nextSubscription.daysUntil && sub.price > nextSubscription.price)
+    ) {
+      nextSubscription = {
+        name: sub.name,
+        price: sub.price,
+        billingDay: sub.billingDay,
+        daysUntil,
+        sourceNameSnapshot: sub.sourceNameSnapshot,
+      };
+    }
+  }
+  const subscriptions: DashboardSubscriptions = {
+    monthlyTotal: subscriptionMonthlyTotal,
+    count: subscriptionDocs.length,
+    next: nextSubscription,
+  };
+
+  // ===== Weight =====
+  const weightEntries = await WeightEntry.find({ deletedAt: null }).sort({ date: 1 });
+  let weightGoal = await WeightGoal.findOne();
+  if (!weightGoal) weightGoal = await WeightGoal.create({});
+
+  const firstWeight = weightEntries[0] ?? null;
+  const latestWeight = weightEntries[weightEntries.length - 1] ?? null;
+  const currentWeight = latestWeight?.weightKg ?? null;
+  const targetWeight = weightGoal.targetKg;
+  const weight: DashboardWeight = {
+    current: currentWeight,
+    target: targetWeight,
+    earliest: firstWeight
+      ? {
+          date: firstWeight.date.toISOString().slice(0, 10),
+          weightKg: firstWeight.weightKg,
+        }
+      : null,
+    lostSinceStart: firstWeight && latestWeight && weightEntries.length >= 2 ? firstWeight.weightKg - latestWeight.weightKg : 0,
+    remainingToTarget: currentWeight !== null && currentWeight > targetWeight ? currentWeight - targetWeight : 0,
+    sparkline: weightEntries.slice(-30).map((entry) => ({
+      date: entry.date.toISOString().slice(0, 10),
+      value: entry.weightKg,
+    })),
+  };
+
+  // ===== Wishlist =====
+  const wishlistItems = await WishlistItem.find({ archived: false });
+  const unboughtWishlist = wishlistItems.filter((item) => !item.bought);
+  const wishlistPriorityRank = { high: 0, medium: 1, low: 2 } as const;
+  const wishlist: DashboardWishlist = {
+    totalToBuy: unboughtWishlist.reduce((s, item) => s + item.price, 0),
+    countLeft: unboughtWishlist.length,
+    topPriority: [...unboughtWishlist]
+      .sort((a, b) => {
+        const priorityDiff = wishlistPriorityRank[a.priority] - wishlistPriorityRank[b.priority];
+        if (priorityDiff !== 0) return priorityDiff;
+        return b.createdAt.getTime() - a.createdAt.getTime();
+      })
+      .slice(0, 3),
+  };
+
+  // ===== Career =====
+  const careerTopics = await CareerTopic.find();
+  const sevenDaysAgo = new Date(now);
+  sevenDaysAgo.setUTCDate(sevenDaysAgo.getUTCDate() - 7);
+  const doneCount = careerTopics.filter((topic) => topic.done).length;
+  const career: DashboardCareer = {
+    doneCount,
+    totalTopics: TOTAL_CAREER_TOPICS,
+    percent: Math.round((doneCount / TOTAL_CAREER_TOPICS) * 100),
+    recentlyCompleted: careerTopics.filter((topic) => topic.completedAt && topic.completedAt >= sevenDaysAgo).length,
+  };
 
   // ===== Tasks =====
   const todayTasks = await Task.find({ date: today }).sort({ createdAt: 1 });
@@ -200,13 +329,20 @@ router.get("/", async (_req, res) => {
     },
     payments: {
       walletTotal,
+      totalEgp,
+      totalUsd,
       spentToday,
       spentMonth,
-      externalFundedToday,
+      externalFundedToday: externalFundedToday ?? 0,
       wallets,
+      banks,
       recentExpenses,
       sparkline: spendSparkline,
     },
+    subscriptions,
+    weight,
+    wishlist,
+    career,
     tasksToday: {
       list: todayTasks,
       done: todayDone,
