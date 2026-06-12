@@ -35,14 +35,16 @@ type WeekSummary = {
   goalAttainment: {
     calorieGoalDays: number;
     proteinGoalDays: number;
+    carbsGoalDays: number;
+    fatGoalDays: number;
     waterGoalDays: number;
     totalTrackedDays: number;
   };
   goal: {
     caloriesTarget: number;
-    caloriesBuffer: number;
-    proteinMin: number;
-    proteinMax: number;
+    proteinTarget: number;
+    carbsTarget: number;
+    fatTarget: number;
     waterMin: number;
     waterTarget: number;
     waterMax: number;
@@ -65,11 +67,11 @@ function shiftDay(iso: string, by: number) {
   return d.toISOString().slice(0, 10);
 }
 
-// Sunday-start
-function sundayOfWeek(iso: string) {
+function fridayOnOrBefore(iso: string) {
   const d = new Date(iso);
   const dow = d.getUTCDay();
-  d.setUTCDate(d.getUTCDate() - dow);
+  const back = (dow - 5 + 7) % 7;
+  d.setUTCDate(d.getUTCDate() - back);
   return d.toISOString().slice(0, 10);
 }
 
@@ -82,13 +84,13 @@ const MEALS: Meal[] = ["breakfast", "lunch", "dinner", "snack"];
 // MAIN
 // =====================================================================
 export function CalorieRecapModal({ open, onOpenChange }: { open: boolean; onOpenChange: (next: boolean) => void }) {
-  const [anchor, setAnchor] = useState(() => sundayOfWeek(new Date().toISOString().slice(0, 10)));
+  const [anchor, setAnchor] = useState(() => fridayOnOrBefore(new Date().toISOString().slice(0, 10)));
   const [data, setData] = useState<WeekSummary | null>(null);
   const [, setPrevData] = useState<WeekSummary | null>(null);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (open) setAnchor(sundayOfWeek(new Date().toISOString().slice(0, 10)));
+    if (open) setAnchor(fridayOnOrBefore(new Date().toISOString().slice(0, 10)));
   }, [open]);
 
   const prevAnchor = useMemo(() => shiftDay(anchor, -7), [anchor]);
@@ -183,9 +185,11 @@ export function CalorieRecapModal({ open, onOpenChange }: { open: boolean; onOpe
                 <Card>
                   <CardContent className="p-5">
                     <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-4">Goals hit ({data.goalAttainment.totalTrackedDays} tracked days)</div>
-                    <div className="grid grid-cols-3 gap-4">
+                    <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
                       <GoalProgress label="Calories" hit={data.goalAttainment.calorieGoalDays} total={data.goalAttainment.totalTrackedDays} color="var(--color-income)" />
                       <GoalProgress label="Protein" hit={data.goalAttainment.proteinGoalDays} total={data.goalAttainment.totalTrackedDays} color="var(--color-protein)" />
+                      <GoalProgress label="Carbs" hit={data.goalAttainment.carbsGoalDays} total={data.goalAttainment.totalTrackedDays} color="var(--color-carbs)" />
+                      <GoalProgress label="Fat" hit={data.goalAttainment.fatGoalDays} total={data.goalAttainment.totalTrackedDays} color="var(--color-fat)" />
                       <GoalProgress label="Water" hit={data.goalAttainment.waterGoalDays} total={data.goalAttainment.totalTrackedDays} color="var(--color-water)" />
                     </div>
                   </CardContent>
@@ -228,12 +232,10 @@ export function CalorieRecapModal({ open, onOpenChange }: { open: boolean; onOpe
                           <Bar dataKey="cal" radius={[4, 4, 0, 0]} animationDuration={500}>
                             {data.days.map((d, i) => {
                               const target = data.goal.caloriesTarget;
-                              const buffer = data.goal.caloriesBuffer;
                               let color = "var(--color-income)";
                               if (d.isCheat) color = "color-mix(in oklch, var(--color-meal-snack), transparent 40%)";
                               else if (d.cal === 0) color = "var(--color-border)";
-                              else if (d.cal > target + buffer) color = "var(--color-expense)";
-                              else if (d.cal > target) color = "var(--color-warning)";
+                              else if (d.cal > target) color = "var(--color-expense)";
                               return <Cell key={i} fill={color} />;
                             })}
                           </Bar>
@@ -244,10 +246,6 @@ export function CalorieRecapModal({ open, onOpenChange }: { open: boolean; onOpe
                       <span className="flex items-center gap-1">
                         <span className="w-2 h-2 rounded-sm" style={{ background: "var(--color-income)" }} />
                         On target
-                      </span>
-                      <span className="flex items-center gap-1">
-                        <span className="w-2 h-2 rounded-sm" style={{ background: "var(--color-warning)" }} />
-                        In buffer
                       </span>
                       <span className="flex items-center gap-1">
                         <span className="w-2 h-2 rounded-sm" style={{ background: "var(--color-expense)" }} />

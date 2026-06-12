@@ -9,35 +9,45 @@ import { api } from "../lib/api";
 import { AxiosError } from "axios";
 import { toast } from "sonner";
 
-// Mirror the program from Workout.tsx
-const WORKOUT_A_EXERCISES = [
-  { id: "lat-pulldown", name: "Lat Pulldown" },
+const UPPER_A_EXERCISES = [
   { id: "chest-press-machine", name: "Chest Press Machine" },
-  { id: "seated-cable-row", name: "Seated Cable Row" },
-  { id: "pec-deck", name: "Pec Deck (Chest Fly)" },
-  { id: "cable-lateral-raise", name: "Cable Lateral Raise" },
-  { id: "tricep-pushdown", name: "Tricep Pushdown (Cable)" },
-  { id: "bicep-curl-machine", name: "Bicep Curl Machine" },
+  { id: "chest-fly-machine", name: "Chest Fly Machine" },
+  { id: "shoulder-press-machine", name: "Shoulder Press Machine" },
+  { id: "lateral-raises", name: "Lateral Raises" },
+  { id: "hammer-strength-close", name: "Hammer Strength Close Grip" },
+  { id: "hammer-strength-wide", name: "Hammer Strength Wide Grip" },
+  { id: "high-pulley-curl", name: "High Pulley Curl" },
+  { id: "skull-crushers", name: "Skull Crushers" },
 ];
-const WORKOUT_B_EXERCISES = [
+const LOWER_EXERCISES = [
   { id: "leg-press", name: "Leg Press" },
-  { id: "leg-curl", name: "Leg Curl (Lying or Seated)" },
+  { id: "hack-squats", name: "Hack Squats" },
   { id: "leg-extension", name: "Leg Extension" },
-  { id: "seated-calf-raise", name: "Seated Calf Raise" },
-  { id: "ab-crunch-machine", name: "Ab Crunch Machine" },
+  { id: "romanian-deadlift", name: "Romanian Deadlift" },
+  { id: "calf-raise-hack", name: "Calf Raise on Hack" },
 ];
-const ALL_EXERCISES = [...WORKOUT_A_EXERCISES, ...WORKOUT_B_EXERCISES];
+const UPPER_B_EXERCISES = [
+  { id: "bar-bench-press", name: "Bar Bench Press" },
+  { id: "low-cable-crossover", name: "Low Cable Crossover" },
+  { id: "dumbbell-lateral-raise", name: "Dumbbell Lateral Raise" },
+  { id: "cable-raise", name: "Cable Raise" },
+  { id: "bar-machine", name: "Bar Machine" },
+  { id: "pull-over", name: "Pull Over" },
+  { id: "barbell-bicep-curl", name: "Barbell Bicep Curl" },
+  { id: "rope-overhead", name: "Rope Overhead" },
+];
+const ALL_EXERCISES = [...UPPER_A_EXERCISES, ...LOWER_EXERCISES, ...UPPER_B_EXERCISES];
 const EXERCISE_NAME_BY_ID: Record<string, string> = Object.fromEntries(ALL_EXERCISES.map((e) => [e.id, e.name]));
 
 // ===== Types =====
-type WorkoutType = "A" | "B" | "rest";
+type WorkoutType = "upperA" | "lowerA" | "upperB" | "lowerB" | "rest";
 
 type StatsResp = {
   from: string;
   to: string;
   totalSessions: number;
   completedSessions: number;
-  sessionsByType: { A: number; B: number; rest: number };
+  sessionsByType: { upperA: number; lowerA: number; upperB: number; lowerB: number; rest: number };
   totalVolume: number;
   totalSetsDone: number;
   totalReps: number;
@@ -62,13 +72,27 @@ function getApiError(e: unknown): string {
 const dayShort = (iso: string) => new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
 const dayLong = (iso: string) => new Date(iso).toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric", timeZone: "UTC" });
 
+function workoutLabel(type: WorkoutType) {
+  if (type === "upperA") return "Upper A";
+  if (type === "lowerA") return "Lower A";
+  if (type === "upperB") return "Upper B";
+  if (type === "lowerB") return "Lower B";
+  return "Rest";
+}
+
+function workoutColor(type: WorkoutType) {
+  if (type === "upperA" || type === "upperB") return "var(--color-workout-a)";
+  if (type === "lowerA" || type === "lowerB") return "var(--color-workout-b)";
+  return "var(--color-workout-rest)";
+}
+
 // =====================================================================
 // MAIN
 // =====================================================================
 export function WorkoutRecapModal({ open, onOpenChange }: { open: boolean; onOpenChange: (next: boolean) => void }) {
   const [stats, setStats] = useState<StatsResp | null>(null);
   const [loading, setLoading] = useState(false);
-  const [pickedExercise, setPickedExercise] = useState<string>("lat-pulldown");
+  const [pickedExercise, setPickedExercise] = useState<string>("chest-press-machine");
   const [progress, setProgress] = useState<ProgressResp | null>(null);
   const [progressLoading, setProgressLoading] = useState(false);
 
@@ -143,9 +167,9 @@ export function WorkoutRecapModal({ open, onOpenChange }: { open: boolean; onOpe
                 {/* ===== Top stats ===== */}
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                   <StatCard label="Sessions" value={`${stats!.completedSessions}/${stats!.totalSessions}`} sub="completed" icon={<Calendar className="h-3 w-3" />} />
-                  <StatCard label="Total volume" value={`${stats!.totalVolume.toLocaleString("en-US")}`} sub="kg × reps" icon={<Dumbbell className="h-3 w-3" />} />
-                  <StatCard label="Sets done" value={`${stats!.totalSetsDone}`} sub={`${stats!.totalReps.toLocaleString("en-US")} reps`} icon={<TrendingUp className="h-3 w-3" />} />
-                  <StatCard label="Split" value={`${stats!.sessionsByType.A}A · ${stats!.sessionsByType.B}B`} sub={`${stats!.sessionsByType.rest} rest`} icon={<Flame className="h-3 w-3" />} />
+                  <StatCard label="Total volume" value={`${stats!.totalVolume.toLocaleString("en-US")}`} sub="kg" icon={<Dumbbell className="h-3 w-3" />} />
+                  <StatCard label="Sets done" value={`${stats!.totalSetsDone}`} icon={<TrendingUp className="h-3 w-3" />} />
+                  <StatCard label="Split" value={`${stats!.sessionsByType.upperA + stats!.sessionsByType.upperB} upper`} sub={`${stats!.sessionsByType.lowerA + stats!.sessionsByType.lowerB} lower - ${stats!.sessionsByType.rest} rest`} icon={<Flame className="h-3 w-3" />} />
                 </div>
 
                 {/* ===== Daily volume chart ===== */}
@@ -174,14 +198,13 @@ export function WorkoutRecapModal({ open, onOpenChange }: { open: boolean; onOpe
                               const payload = (p as { payload?: { type?: string; setsDone?: number } }).payload;
                               const type = payload?.type ?? "";
                               const setsDone = payload?.setsDone ?? 0;
-                              const t = type === "A" ? "Upper" : type === "B" ? "Lower" : "Rest";
-                              return [`${Number(v).toLocaleString()} · ${setsDone} sets · ${t}`, "Volume"];
+                              const t = workoutLabel(type as WorkoutType);
+                              return [`${Number(v).toLocaleString()} - ${setsDone} sets - ${t}`, "Volume"];
                             }}
                           />
                           <Bar dataKey="volume" radius={[4, 4, 0, 0]} animationDuration={500}>
                             {stats!.days.map((d, i) => {
-                              const color = d.type === "A" ? "var(--color-workout-a)" : d.type === "B" ? "var(--color-workout-b)" : "var(--color-workout-rest)";
-                              return <Cell key={i} fill={color} />;
+                              return <Cell key={i} fill={workoutColor(d.type)} />;
                             })}
                           </Bar>
                         </BarChart>
@@ -190,11 +213,11 @@ export function WorkoutRecapModal({ open, onOpenChange }: { open: boolean; onOpe
                     <div className="flex items-center gap-3 mt-3 text-[10px] text-muted-foreground flex-wrap">
                       <span className="flex items-center gap-1">
                         <span className="w-2 h-2 rounded-sm" style={{ background: "var(--color-workout-a)" }} />
-                        Upper (A)
+                        Upper
                       </span>
                       <span className="flex items-center gap-1">
                         <span className="w-2 h-2 rounded-sm" style={{ background: "var(--color-workout-b)" }} />
-                        Lower (B)
+                        Lower
                       </span>
                       <span className="flex items-center gap-1">
                         <span className="w-2 h-2 rounded-sm" style={{ background: "var(--color-workout-rest)" }} />
@@ -212,23 +235,31 @@ export function WorkoutRecapModal({ open, onOpenChange }: { open: boolean; onOpe
                         <TrendingUp className="h-3 w-3" />
                         Exercise progression
                       </div>
-                      <Select value={pickedExercise} onValueChange={(v) => setPickedExercise(v ?? "lat-pulldown")}>
+                      <Select value={pickedExercise} onValueChange={(v) => setPickedExercise(v ?? "chest-press-machine")}>
                         <SelectTrigger className="!h-7 w-[220px] text-xs">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="lat-pulldown" disabled className="text-[10px] uppercase tracking-wider font-medium text-muted-foreground">
-                            Upper (A)
+                          <SelectItem value="section-upper-a" disabled className="text-[10px] uppercase tracking-wider font-medium text-muted-foreground">
+                            Upper A
                           </SelectItem>
-                          {WORKOUT_A_EXERCISES.map((e) => (
+                          {UPPER_A_EXERCISES.map((e) => (
                             <SelectItem key={e.id} value={e.id}>
                               {e.name}
                             </SelectItem>
                           ))}
-                          <SelectItem value="leg-press" disabled className="text-[10px] uppercase tracking-wider font-medium text-muted-foreground">
-                            Lower (B)
+                          <SelectItem value="section-upper-b" disabled className="text-[10px] uppercase tracking-wider font-medium text-muted-foreground">
+                            Upper B
                           </SelectItem>
-                          {WORKOUT_B_EXERCISES.map((e) => (
+                          {UPPER_B_EXERCISES.map((e) => (
+                            <SelectItem key={e.id} value={e.id}>
+                              {e.name}
+                            </SelectItem>
+                          ))}
+                          <SelectItem value="section-lower" disabled className="text-[10px] uppercase tracking-wider font-medium text-muted-foreground">
+                            Lower
+                          </SelectItem>
+                          {LOWER_EXERCISES.map((e) => (
                             <SelectItem key={e.id} value={e.id}>
                               {e.name}
                             </SelectItem>
@@ -258,9 +289,8 @@ export function WorkoutRecapModal({ open, onOpenChange }: { open: boolean; onOpe
                                 <span className="text-muted-foreground font-mono tabular-nums">{dayShort(h.date)}</span>
                                 <div className="flex items-center gap-2">
                                   <span className="font-mono tabular-nums">
-                                    <span className="font-semibold text-foreground">{h.weight ?? "—"}</span>
-                                    <span className="text-muted-foreground"> kg × </span>
-                                    <span className="font-semibold text-foreground">{h.reps ?? "—"}</span>
+                                    <span className="font-semibold text-foreground">{h.weight ?? "-"}</span>
+                                    <span className="text-muted-foreground"> kg</span>
                                   </span>
                                   {delta !== null && delta !== 0 && (
                                     <span className="text-[10px] font-mono tabular-nums font-medium" style={{ color: delta > 0 ? "var(--color-income)" : "var(--color-expense)" }}>
@@ -294,9 +324,8 @@ export function WorkoutRecapModal({ open, onOpenChange }: { open: boolean; onOpe
                               <span className="truncate">{ex.name}</span>
                               <div className="font-mono tabular-nums flex items-baseline gap-1.5 flex-shrink-0 ml-2">
                                 <span className="text-sm font-semibold">{best.weight}</span>
-                                <span className="text-xs text-muted-foreground">kg ×</span>
-                                <span className="text-sm font-semibold">{best.reps}</span>
-                                <span className="text-[10px] text-muted-foreground ml-1">· {dayShort(best.date)}</span>
+                                <span className="text-xs text-muted-foreground">kg</span>
+                                <span className="text-[10px] text-muted-foreground ml-1">- {dayShort(best.date)}</span>
                               </div>
                             </div>
                           );
@@ -345,7 +374,6 @@ function ExerciseProgressChart({ history }: { history: ProgressResp["history"] }
   const data = history.map((h) => ({
     date: h.date,
     weight: h.weight ?? 0,
-    reps: h.reps ?? 0,
   }));
 
   return (
@@ -354,8 +382,7 @@ function ExerciseProgressChart({ history }: { history: ProgressResp["history"] }
         <LineChart data={data} margin={{ top: 10, right: 5, left: 0, bottom: 0 }}>
           <CartesianGrid stroke="var(--color-border)" strokeDasharray="3 3" vertical={false} />
           <XAxis dataKey="date" tick={{ fontSize: 10, fill: "var(--color-muted-foreground)" }} tickFormatter={dayShort} stroke="var(--color-border)" />
-          <YAxis yAxisId="left" tick={{ fontSize: 10, fill: "var(--color-muted-foreground)" }} stroke="var(--color-border)" width={36} />
-          <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: "var(--color-muted-foreground)" }} stroke="var(--color-border)" width={28} />
+          <YAxis tick={{ fontSize: 10, fill: "var(--color-muted-foreground)" }} stroke="var(--color-border)" width={36} />
           <Tooltip
             contentStyle={{
               background: "var(--color-card)",
@@ -364,13 +391,9 @@ function ExerciseProgressChart({ history }: { history: ProgressResp["history"] }
               fontSize: "12px",
             }}
             labelFormatter={(label) => dayLong(label as string)}
-            formatter={(v, name) => {
-              if (name === "weight") return [`${Number(v)} kg`, "Weight"];
-              return [`${Number(v)} reps`, "Reps"];
-            }}
+            formatter={(v) => [`${Number(v)} kg`, "Weight"]}
           />
-          <Line yAxisId="left" type="monotone" dataKey="weight" stroke="var(--color-workout-a)" strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} animationDuration={500} />
-          <Line yAxisId="right" type="monotone" dataKey="reps" stroke="var(--color-workout-b)" strokeWidth={2} strokeDasharray="4 3" dot={{ r: 3 }} activeDot={{ r: 5 }} animationDuration={500} />
+          <Line type="monotone" dataKey="weight" stroke="var(--color-workout-a)" strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} animationDuration={500} />
         </LineChart>
       </ResponsiveContainer>
       <div className="flex items-center gap-3 mt-2 text-[10px] text-muted-foreground">
@@ -378,23 +401,21 @@ function ExerciseProgressChart({ history }: { history: ProgressResp["history"] }
           <span className="w-3 h-[2px]" style={{ background: "var(--color-workout-a)" }} />
           Weight (kg)
         </span>
-        <span className="flex items-center gap-1">
-          <span className="w-3 h-[2px] border-t border-dashed" style={{ borderColor: "var(--color-workout-b)" }} />
-          Reps
-        </span>
       </div>
     </div>
   );
 }
 
-function SplitDonut({ counts }: { counts: { A: number; B: number; rest: number } }) {
-  const total = counts.A + counts.B + counts.rest;
+function SplitDonut({ counts }: { counts: { upperA: number; lowerA: number; upperB: number; lowerB: number; rest: number } }) {
+  const total = counts.upperA + counts.lowerA + counts.upperB + counts.lowerB + counts.rest;
   if (total === 0) {
     return <div className="h-40 flex items-center justify-center text-xs text-muted-foreground">No data</div>;
   }
   const data = [
-    { name: "Upper (A)", value: counts.A, color: "var(--color-workout-a)" },
-    { name: "Lower (B)", value: counts.B, color: "var(--color-workout-b)" },
+    { name: "Upper A", value: counts.upperA, color: "var(--color-workout-a)" },
+    { name: "Lower A", value: counts.lowerA, color: "var(--color-workout-b)" },
+    { name: "Upper B", value: counts.upperB, color: "var(--color-workout-a)" },
+    { name: "Lower B", value: counts.lowerB, color: "var(--color-workout-b)" },
     { name: "Rest", value: counts.rest, color: "var(--color-workout-rest)" },
   ];
   return (
@@ -426,11 +447,11 @@ function SplitDonut({ counts }: { counts: { A: number; B: number; rest: number }
       <div className="absolute bottom-1 left-0 right-0 flex justify-center gap-3 text-[10px]">
         <span className="flex items-center gap-1" style={{ color: "var(--color-workout-a)" }}>
           <span className="w-1.5 h-1.5 rounded-sm" style={{ background: "var(--color-workout-a)" }} />
-          {counts.A} upper
+          {counts.upperA + counts.upperB} upper
         </span>
         <span className="flex items-center gap-1" style={{ color: "var(--color-workout-b)" }}>
           <span className="w-1.5 h-1.5 rounded-sm" style={{ background: "var(--color-workout-b)" }} />
-          {counts.B} lower
+          {counts.lowerA + counts.lowerB} lower
         </span>
         <span className="flex items-center gap-1" style={{ color: "var(--color-workout-rest)" }}>
           <span className="w-1.5 h-1.5 rounded-sm" style={{ background: "var(--color-workout-rest)" }} />
@@ -456,7 +477,7 @@ function EmptyState() {
     <div className="py-16 text-center">
       <Dumbbell className="h-8 w-8 mx-auto mb-3 text-muted-foreground/50" />
       <div className="text-base font-medium mb-1">No workout data yet.</div>
-      <div className="text-sm text-muted-foreground">Log a few sessions with weight × reps and come back here.</div>
+      <div className="text-sm text-muted-foreground">Log a few sessions with weight and come back here.</div>
     </div>
   );
 }

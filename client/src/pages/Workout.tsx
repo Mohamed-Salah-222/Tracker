@@ -8,7 +8,7 @@ import { Card, CardContent } from "../components/ui/card";
 import { Checkbox } from "../components/ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "../components/ui/dialog";
 import { toast } from "sonner";
-import { Dumbbell, Footprints, Flame, Check, RotateCcw, Trash2, ChevronLeft, ChevronRight } from "lucide-react";
+import { Dumbbell, Footprints, Check, RotateCcw, Trash2, ChevronLeft, ChevronRight } from "lucide-react";
 import { BarChart3 } from "lucide-react";
 import { WorkoutRecapModal } from "../components/WorkoutRecapModal";
 import { AxiosError } from "axios";
@@ -20,29 +20,106 @@ type Exercise = {
   id: string;
   name: string;
   sets: number;
-  reps: string; // display string like "10-12" or "12"
+  reps: string;
 };
 
-const WORKOUT_A: Exercise[] = [
-  { id: "lat-pulldown", name: "Lat Pulldown", sets: 4, reps: "10-12" },
-  { id: "chest-press-machine", name: "Chest Press Machine", sets: 4, reps: "10-12" },
-  { id: "seated-cable-row", name: "Seated Cable Row", sets: 3, reps: "12" },
-  { id: "pec-deck", name: "Pec Deck (Chest Fly)", sets: 3, reps: "12" },
-  { id: "cable-lateral-raise", name: "Cable Lateral Raise", sets: 3, reps: "15" },
-  { id: "tricep-pushdown", name: "Tricep Pushdown (Cable)", sets: 3, reps: "12" },
-  { id: "bicep-curl-machine", name: "Bicep Curl Machine", sets: 3, reps: "12" },
+type SectionKind = "warmup" | "training" | "abs";
+
+type WorkoutDef = Record<SectionKind, Exercise[]>;
+
+const WARMUP_UPPER_A_AND_LOWER_B_HEAD: Exercise[] = [
+  { id: "treadmill-15", name: "15 min Treadmill", sets: 1, reps: "-" },
 ];
 
-const WORKOUT_B: Exercise[] = [
-  { id: "leg-press", name: "Leg Press", sets: 4, reps: "10-12" },
-  { id: "leg-curl", name: "Leg Curl (Lying or Seated)", sets: 3, reps: "12" },
+const WARMUP_UA: Exercise[] = [
+  ...WARMUP_UPPER_A_AND_LOWER_B_HEAD,
+  { id: "arm-swing-front", name: "Arm Swing Front", sets: 3, reps: "15" },
+  { id: "arm-cycle", name: "Arm Cycle", sets: 3, reps: "15" },
+  { id: "arm-sides", name: "Arm Sides", sets: 3, reps: "15" },
+  { id: "knee-swing", name: "Knee Swing", sets: 3, reps: "15" },
+  { id: "warmup-squats", name: "Squats", sets: 3, reps: "15" },
+];
+
+const WARMUP_LA_AND_UB: Exercise[] = [
+  { id: "treadmill-15", name: "15 min Treadmill", sets: 1, reps: "-" },
+  { id: "arm-swing-front", name: "Arm Swing Front", sets: 3, reps: "15" },
+  { id: "arm-cycle", name: "Arm Cycle", sets: 3, reps: "15" },
+  { id: "waist-twist", name: "Waist Twist", sets: 3, reps: "15" },
+  { id: "knee-swing", name: "Knee Swing", sets: 3, reps: "15" },
+  { id: "leg-swing", name: "Leg Swing", sets: 3, reps: "15" },
+];
+
+const WARMUP_LB: Exercise[] = [
+  { id: "treadmill-15", name: "15 min Treadmill", sets: 1, reps: "-" },
+  { id: "knee-raises-warmup", name: "Knee Raises", sets: 3, reps: "15" },
+  { id: "leg-raises-warmup", name: "Leg Raises", sets: 3, reps: "15" },
+  { id: "warmup-squats", name: "Squats", sets: 3, reps: "15" },
+  { id: "warmup-jumps", name: "Jumps", sets: 3, reps: "15" },
+];
+
+const TRAINING_UPPER_A: Exercise[] = [
+  { id: "chest-press-machine", name: "Chest Press Machine", sets: 3, reps: "12" },
+  { id: "chest-fly-machine", name: "Chest Fly Machine", sets: 3, reps: "12" },
+  { id: "shoulder-press-machine", name: "Shoulder Press Machine", sets: 3, reps: "12" },
+  { id: "lateral-raises", name: "Lateral Raises", sets: 3, reps: "12" },
+  { id: "hammer-strength-close", name: "Hammer Strength Close Grip", sets: 3, reps: "12" },
+  { id: "hammer-strength-wide", name: "Hammer Strength Wide Grip", sets: 3, reps: "12" },
+  { id: "high-pulley-curl", name: "High Pulley Curl", sets: 3, reps: "12" },
+  { id: "skull-crushers", name: "Skull Crushers", sets: 3, reps: "12" },
+];
+
+const TRAINING_LOWER: Exercise[] = [
+  { id: "leg-press", name: "Leg Press", sets: 3, reps: "12" },
+  { id: "hack-squats", name: "Hack Squats", sets: 3, reps: "10" },
   { id: "leg-extension", name: "Leg Extension", sets: 3, reps: "12" },
-  { id: "seated-calf-raise", name: "Seated Calf Raise", sets: 3, reps: "15" },
-  { id: "ab-crunch-machine", name: "Ab Crunch Machine", sets: 3, reps: "15" },
+  { id: "romanian-deadlift", name: "Romanian Deadlift", sets: 3, reps: "12" },
+  { id: "calf-raise-hack", name: "Calf Raise on Hack", sets: 3, reps: "15" },
+];
+
+const TRAINING_UPPER_B: Exercise[] = [
+  { id: "bar-bench-press", name: "Bar Bench Press", sets: 3, reps: "10" },
+  { id: "low-cable-crossover", name: "Low Cable Crossover", sets: 3, reps: "12" },
+  { id: "dumbbell-lateral-raise", name: "Dumbbell Lateral Raise", sets: 3, reps: "12" },
+  { id: "cable-raise", name: "Cable Raise", sets: 3, reps: "12" },
+  { id: "bar-machine", name: "Bar Machine", sets: 3, reps: "12" },
+  { id: "pull-over", name: "Pull Over", sets: 3, reps: "12" },
+  { id: "barbell-bicep-curl", name: "Barbell Bicep Curl", sets: 3, reps: "12" },
+  { id: "rope-overhead", name: "Rope Overhead", sets: 3, reps: "12" },
+];
+
+const ABS_UPPER_A: Exercise[] = [
+  { id: "planks", name: "Planks", sets: 2, reps: "30s" },
+  { id: "crunches", name: "Crunches", sets: 2, reps: "15" },
+  { id: "leg-raises-abs", name: "Leg Raises", sets: 2, reps: "15" },
+];
+
+const ABS_LOWER_A: Exercise[] = [
+  { id: "planks", name: "Planks", sets: 2, reps: "30s" },
+  { id: "russian-twist", name: "Russian Twist", sets: 2, reps: "15" },
+  { id: "leg-raises-abs", name: "Leg Raises", sets: 2, reps: "15" },
+];
+
+const ABS_UPPER_B: Exercise[] = [
+  { id: "high-cable-side-bend", name: "High Cable Side Bend", sets: 2, reps: "15" },
+  { id: "high-rope-crunches", name: "High Rope Crunches", sets: 2, reps: "15" },
+  { id: "rope-crunches", name: "Rope Crunches", sets: 2, reps: "15" },
+];
+
+const ABS_LOWER_B: Exercise[] = [
+  { id: "side-planks", name: "Side Planks", sets: 2, reps: "15" },
+  { id: "crunches", name: "Crunches", sets: 2, reps: "15" },
+  { id: "sit-ups", name: "Sit Ups", sets: 2, reps: "15" },
 ];
 
 // ===== Types =====
-type WorkoutType = "A" | "B" | "rest";
+type WorkoutType = "upperA" | "lowerA" | "upperB" | "lowerB" | "rest";
+
+const PROGRAM: Record<Exclude<WorkoutType, "rest">, WorkoutDef> = {
+  upperA: { warmup: WARMUP_UA, training: TRAINING_UPPER_A, abs: ABS_UPPER_A },
+  lowerA: { warmup: WARMUP_LA_AND_UB, training: TRAINING_LOWER, abs: ABS_LOWER_A },
+  upperB: { warmup: WARMUP_LA_AND_UB, training: TRAINING_UPPER_B, abs: ABS_UPPER_B },
+  lowerB: { warmup: WARMUP_LB, training: TRAINING_LOWER, abs: ABS_LOWER_B },
+};
 
 type Session = {
   _id: string;
@@ -87,15 +164,11 @@ function shiftDay(iso: string, by: number): string {
 }
 
 function workoutLabel(type: WorkoutType) {
-  if (type === "A") return "Workout A · Upper";
-  if (type === "B") return "Workout B · Lower";
+  if (type === "upperA") return "Upper A";
+  if (type === "lowerA") return "Lower A";
+  if (type === "upperB") return "Upper B";
+  if (type === "lowerB") return "Lower B";
   return "Rest day";
-}
-
-function getExercises(type: WorkoutType): Exercise[] {
-  if (type === "A") return WORKOUT_A;
-  if (type === "B") return WORKOUT_B;
-  return [];
 }
 
 // ===== Motion =====
@@ -114,7 +187,7 @@ const stagger = (i: number) => ({
 // =====================================================================
 export default function Workout() {
   const [session, setSession] = useState<Session | null>(null);
-  const [suggested, setSuggested] = useState<WorkoutType>("A");
+  const [suggested, setSuggested] = useState<WorkoutType>("upperA");
   const [sets, setSets] = useState<SetLog[]>([]);
   const [lastWeights, setLastWeights] = useState<LastWeights>({});
   const [selectedDate, setSelectedDate] = useState(todayISO);
@@ -227,6 +300,7 @@ export default function Workout() {
 
   // ----- Render -----
   const isCompleted = !!session?.completedAt;
+  const activeDef = session && session.type !== "rest" ? PROGRAM[session.type] : null;
 
   return (
     <div className="w-full max-w-[1100px] mx-auto space-y-5">
@@ -335,29 +409,52 @@ export default function Workout() {
       {/* ===== Rest day mode ===== */}
       {session && session.type === "rest" && <RestDayCard session={session} onChanged={patchSession} onDelete={deleteSession} />}
 
-      {/* ===== Workout day (A or B) ===== */}
-      {session && session.type !== "rest" && (
+      {/* ===== Workout day ===== */}
+      {session && activeDef && (
         <>
-          {/* Warmup */}
-          <CardioCard label="Warmup" icon={<Flame className="h-3.5 w-3.5" />} minutes={session.warmupMinutes} done={session.warmupDone} onMinutes={(n) => patchSession({ warmupMinutes: n })} onDone={(b) => patchSession({ warmupDone: b })} color="warmup" staggerIndex={2} />
-
-          {/* Exercises */}
-          {getExercises(session.type).map((ex, i) => (
-            <ExerciseCard key={ex.id} exercise={ex} sessionId={session._id} existingSets={sets.filter((s) => s.exerciseId === ex.id)} lastSession={lastWeights[ex.id]} onChanged={() => loadSets(session._id)} index={i + 3} />
+          <SectionHeader title="Warmup" index={2} />
+          {activeDef.warmup.map((ex, i) => (
+            <ChecklistRow
+              key={ex.id}
+              exercise={ex}
+              existingSets={sets.filter((s) => s.exerciseId === ex.id)}
+              sessionId={session._id}
+              onChanged={() => loadSets(session._id)}
+              index={i + 3}
+            />
           ))}
 
-          {/* Finisher */}
-          <CardioCard label="Finisher" icon={<Footprints className="h-3.5 w-3.5" />} minutes={session.finisherMinutes} done={session.finisherDone} onMinutes={(n) => patchSession({ finisherMinutes: n })} onDone={(b) => patchSession({ finisherDone: b })} color="finisher" staggerIndex={getExercises(session.type).length + 3} />
+          <SectionHeader title="Training" index={activeDef.warmup.length + 3} />
+          {activeDef.training.map((ex, i) => (
+            <ExerciseCard
+              key={ex.id}
+              exercise={ex}
+              sessionId={session._id}
+              existingSets={sets.filter((s) => s.exerciseId === ex.id)}
+              lastSession={lastWeights[ex.id]}
+              onChanged={() => loadSets(session._id)}
+              index={i + activeDef.warmup.length + 4}
+            />
+          ))}
 
-          {/* Delete session option (low-key) */}
-          {session && (
-            <div className="flex justify-center pt-2">
-              <Button variant="ghost" size="sm" onClick={deleteSession} className="text-xs text-muted-foreground">
-                <Trash2 className="h-3 w-3 mr-1.5" />
-                Delete this session
-              </Button>
-            </div>
-          )}
+          <SectionHeader title="Abs" index={activeDef.warmup.length + activeDef.training.length + 4} />
+          {activeDef.abs.map((ex, i) => (
+            <ChecklistRow
+              key={ex.id}
+              exercise={ex}
+              existingSets={sets.filter((s) => s.exerciseId === ex.id)}
+              sessionId={session._id}
+              onChanged={() => loadSets(session._id)}
+              index={i + activeDef.warmup.length + activeDef.training.length + 5}
+            />
+          ))}
+
+          <div className="flex justify-center pt-2">
+            <Button variant="ghost" size="sm" onClick={deleteSession} className="text-xs text-muted-foreground">
+              <Trash2 className="h-3 w-3 mr-1.5" />
+              Delete this session
+            </Button>
+          </div>
         </>
       )}
 
@@ -385,9 +482,11 @@ export default function Workout() {
 // WorkoutTypeBadge
 // =====================================================================
 function WorkoutTypeBadge({ type }: { type: WorkoutType }) {
-  const map = {
-    A: { label: "Upper", color: "var(--color-workout-a)", bg: "var(--color-workout-a-bg)" },
-    B: { label: "Lower", color: "var(--color-workout-b)", bg: "var(--color-workout-b-bg)" },
+  const map: Record<WorkoutType, { label: string; color: string; bg: string }> = {
+    upperA: { label: "Upper A", color: "var(--color-workout-a)", bg: "var(--color-workout-a-bg)" },
+    upperB: { label: "Upper B", color: "var(--color-workout-a)", bg: "var(--color-workout-a-bg)" },
+    lowerA: { label: "Lower A", color: "var(--color-workout-b)", bg: "var(--color-workout-b-bg)" },
+    lowerB: { label: "Lower B", color: "var(--color-workout-b)", bg: "var(--color-workout-b-bg)" },
     rest: { label: "Rest", color: "var(--color-workout-rest)", bg: "var(--color-workout-rest-bg)" },
   };
   const v = map[type];
@@ -409,64 +508,73 @@ function WorkoutTypeBadge({ type }: { type: WorkoutType }) {
 // SessionProgress
 // =====================================================================
 function SessionProgress({ session, sets }: { session: Session; sets: SetLog[] }) {
-  const exercises = getExercises(session.type);
-  const totalSets = exercises.reduce((s, e) => s + e.sets, 0);
-  const doneSets = sets.filter((s) => s.done).length;
-  const cardioPlanned = (session.warmupMinutes > 0 ? 1 : 0) + (session.finisherMinutes > 0 ? 1 : 0);
-  const cardioDone = (session.warmupDone ? 1 : 0) + (session.finisherDone ? 1 : 0);
+  if (session.type === "rest") return null;
+  const def = PROGRAM[session.type];
+  const trainingIds = new Set(def.training.map((e) => e.id));
+  const totalTrainingSets = def.training.reduce((s, e) => s + e.sets, 0);
+  const doneTrainingSets = sets.filter((s) => s.done && trainingIds.has(s.exerciseId)).length;
 
   return (
     <div className="text-right">
-      <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Progress</div>
+      <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Training</div>
       <div className="text-2xl md:text-3xl font-semibold font-mono tracking-tight tabular-nums">
-        {doneSets}
-        <span className="text-muted-foreground">/{totalSets}</span>
-      </div>
-      <div className="text-[10px] text-muted-foreground font-mono tabular-nums mt-0.5">
-        cardio {cardioDone}/{cardioPlanned}
+        {doneTrainingSets}
+        <span className="text-muted-foreground">/{totalTrainingSets}</span>
       </div>
     </div>
   );
 }
 
 // =====================================================================
-// CardioCard (warmup / finisher)
+// SectionHeader
 // =====================================================================
-function CardioCard({ label, icon, minutes, done, onMinutes, onDone, staggerIndex }: { label: string; icon: React.ReactNode; minutes: number; done: boolean; onMinutes: (n: number) => void; onDone: (b: boolean) => void; color: "warmup" | "finisher"; staggerIndex: number }) {
-  const [localMin, setLocalMin] = useState(minutes.toString());
+function SectionHeader({ title, index }: { title: string; index: number }) {
+  return (
+    <motion.div {...stagger(index)} className="pt-2">
+      <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium px-1">{title}</div>
+    </motion.div>
+  );
+}
 
-  useEffect(() => {
-    setLocalMin(minutes.toString());
-  }, [minutes]);
-
-  const commit = () => {
-    const n = parseFloat(localMin);
-    if (!isNaN(n) && n >= 0 && n !== minutes) onMinutes(n);
+// =====================================================================
+// ChecklistRow
+// =====================================================================
+function ChecklistRow({ exercise, sessionId, existingSets, onChanged, index }: { exercise: Exercise; sessionId: string; existingSets: SetLog[]; onChanged: () => void; index: number }) {
+  const toggleSet = async (setNumber: number, currentDone: boolean) => {
+    try {
+      await api.put("/workouts/sets", {
+        sessionId,
+        exerciseId: exercise.id,
+        setNumber,
+        done: !currentDone,
+      });
+      onChanged();
+    } catch (e) {
+      toast.error(getApiError(e));
+    }
   };
 
+  const setsArr = Array.from({ length: exercise.sets }, (_, i) => i + 1);
+  const completed = existingSets.filter((s) => s.done).length;
+  const allDone = completed === exercise.sets;
+
   return (
-    <motion.div {...stagger(staggerIndex)}>
+    <motion.div {...stagger(index)}>
       <Card>
-        <CardContent className="p-4">
-          <div className="flex items-center gap-3">
-            <Checkbox checked={done} onCheckedChange={(v) => onDone(!!v)} />
-            <div className="flex items-center gap-2 flex-1 min-w-0">
-              <span className="text-muted-foreground">{icon}</span>
-              <span className={`text-sm font-medium ${done ? "line-through text-muted-foreground" : ""}`}>{label}</span>
+        <CardContent className="p-3 md:p-4">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5 min-w-0 flex-1">
+              <span className={`text-sm font-medium truncate ${allDone ? "line-through text-muted-foreground" : ""}`}>{exercise.name}</span>
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium font-mono tabular-nums flex-shrink-0">
+                {exercise.sets > 1 ? `${exercise.sets} x ${exercise.reps}` : exercise.reps !== "-" ? exercise.reps : ""}
+              </span>
             </div>
             <div className="flex items-center gap-1.5 flex-shrink-0">
-              <Input
-                type="number"
-                min="0"
-                value={localMin}
-                onChange={(e) => setLocalMin(e.target.value)}
-                onBlur={commit}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-                }}
-                className="w-16 h-7 font-mono tabular-nums text-right"
-              />
-              <span className="text-xs text-muted-foreground">min</span>
+              {setsArr.map((setNumber) => {
+                const existing = existingSets.find((s) => s.setNumber === setNumber);
+                const isDone = existing?.done ?? false;
+                return <Checkbox key={setNumber} checked={isDone} onCheckedChange={() => toggleSet(setNumber, isDone)} />;
+              })}
             </div>
           </div>
         </CardContent>
@@ -479,36 +587,28 @@ function CardioCard({ label, icon, minutes, done, onMinutes, onDone, staggerInde
 // ExerciseCard
 // =====================================================================
 function ExerciseCard({ exercise, sessionId, existingSets, lastSession, onChanged, index }: { exercise: Exercise; sessionId: string; existingSets: SetLog[]; lastSession: LastWeights[string] | undefined; onChanged: () => void; index: number }) {
-  // Local state for inputs to avoid lag
-  const [local, setLocal] = useState<Record<number, { weight: string; reps: string }>>(() => {
-    const m: Record<number, { weight: string; reps: string }> = {};
+  const [local, setLocal] = useState<Record<number, string>>(() => {
+    const m: Record<number, string> = {};
     for (let i = 1; i <= exercise.sets; i++) {
       const existing = existingSets.find((s) => s.setNumber === i);
-      m[i] = {
-        weight: existing?.weight != null ? existing.weight.toString() : "",
-        reps: existing?.reps != null ? existing.reps.toString() : "",
-      };
+      m[i] = existing?.weight != null ? existing.weight.toString() : "";
     }
     return m;
   });
 
-  // Sync local with incoming sets (e.g. after refresh)
   useEffect(() => {
     setLocal((prev) => {
       const m = { ...prev };
       for (let i = 1; i <= exercise.sets; i++) {
         const existing = existingSets.find((s) => s.setNumber === i);
-        m[i] = {
-          weight: existing?.weight != null ? existing.weight.toString() : "",
-          reps: existing?.reps != null ? existing.reps.toString() : "",
-        };
+        m[i] = existing?.weight != null ? existing.weight.toString() : "";
       }
       return m;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [existingSets.length]);
 
-  const upsertSet = async (setNumber: number, patch: { weight?: number | null; reps?: number | null; done?: boolean }) => {
+  const upsertSet = async (setNumber: number, patch: { weight?: number | null; done?: boolean }) => {
     try {
       await api.put("/workouts/sets", { sessionId, exerciseId: exercise.id, setNumber, ...patch });
       onChanged();
@@ -518,17 +618,10 @@ function ExerciseCard({ exercise, sessionId, existingSets, lastSession, onChange
   };
 
   const commitWeight = (setNumber: number) => {
-    const v = local[setNumber]?.weight;
+    const v = local[setNumber];
     const n = v === "" ? null : parseFloat(v);
     if (v !== "" && (n === null || isNaN(n) || n < 0)) return;
     void upsertSet(setNumber, { weight: n });
-  };
-
-  const commitReps = (setNumber: number) => {
-    const v = local[setNumber]?.reps;
-    const n = v === "" ? null : parseFloat(v);
-    if (v !== "" && (n === null || isNaN(n) || n < 0)) return;
-    void upsertSet(setNumber, { reps: n });
   };
 
   const toggleDone = (setNumber: number, currentDone: boolean) => {
@@ -542,12 +635,11 @@ function ExerciseCard({ exercise, sessionId, existingSets, lastSession, onChange
     <motion.div {...stagger(index)}>
       <Card>
         <CardContent className="p-4 md:p-5">
-          {/* Exercise header */}
           <div className="flex items-baseline justify-between gap-2 mb-3 flex-wrap">
             <div className="flex items-baseline gap-2 min-w-0 flex-1">
               <span className="text-sm font-semibold truncate">{exercise.name}</span>
               <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium font-mono tabular-nums">
-                {exercise.sets} × {exercise.reps}
+                {exercise.sets} x {exercise.reps}
               </span>
             </div>
             <div className="text-xs font-mono tabular-nums flex-shrink-0" style={{ color: completed === exercise.sets ? "var(--color-income)" : "var(--color-muted-foreground)" }}>
@@ -555,22 +647,18 @@ function ExerciseCard({ exercise, sessionId, existingSets, lastSession, onChange
             </div>
           </div>
 
-          {/* Last session hint */}
           {lastSession && (
             <div className="text-[11px] text-muted-foreground mb-3 font-mono tabular-nums flex items-center gap-1.5">
               <span className="text-muted-foreground/60">Last:</span>
-              <span className="font-medium text-foreground">
-                {lastSession.weight}kg{lastSession.reps != null ? ` × ${lastSession.reps}` : ""}
-              </span>
+              <span className="font-medium text-foreground">{lastSession.weight}kg</span>
             </div>
           )}
 
-          {/* Sets */}
           <div className="space-y-1.5">
             {setsArr.map((setNumber) => {
               const existing = existingSets.find((s) => s.setNumber === setNumber);
               const isDone = existing?.done ?? false;
-              const localVals = local[setNumber] ?? { weight: "", reps: "" };
+              const localVal = local[setNumber] ?? "";
 
               return (
                 <motion.div key={setNumber} layout className={`flex items-center gap-2 py-1.5 px-2 rounded-md transition-colors ${isDone ? "opacity-70" : ""}`} style={isDone ? { background: "var(--color-muted)" } : {}}>
@@ -582,30 +670,17 @@ function ExerciseCard({ exercise, sessionId, existingSets, lastSession, onChange
                       step="0.5"
                       min="0"
                       placeholder="kg"
-                      value={localVals.weight}
-                      onChange={(e) => setLocal((m) => ({ ...m, [setNumber]: { ...m[setNumber], weight: e.target.value } }))}
+                      value={localVal}
+                      onChange={(e) => setLocal((m) => ({ ...m, [setNumber]: e.target.value }))}
                       onBlur={() => commitWeight(setNumber)}
                       onKeyDown={(e) => {
                         if (e.key === "Enter") (e.target as HTMLInputElement).blur();
                       }}
-                      className="h-7 w-20 font-mono tabular-nums text-right"
+                      className="h-7 w-24 font-mono tabular-nums text-right"
                     />
                     <span className="text-xs text-muted-foreground">kg</span>
-                    <span className="text-muted-foreground/40 px-1">×</span>
-                    <Input
-                      type="number"
-                      step="1"
-                      min="0"
-                      placeholder="reps"
-                      value={localVals.reps}
-                      onChange={(e) => setLocal((m) => ({ ...m, [setNumber]: { ...m[setNumber], reps: e.target.value } }))}
-                      onBlur={() => commitReps(setNumber)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-                      }}
-                      className="h-7 w-16 font-mono tabular-nums text-right"
-                    />
-                    <span className="text-xs text-muted-foreground">reps</span>
+                    <span className="text-muted-foreground/40 px-1">-</span>
+                    <span className="text-xs font-mono tabular-nums text-muted-foreground">{exercise.reps} reps</span>
                   </div>
                 </motion.div>
               );
@@ -616,7 +691,6 @@ function ExerciseCard({ exercise, sessionId, existingSets, lastSession, onChange
     </motion.div>
   );
 }
-
 // =====================================================================
 // RestDayCard
 // =====================================================================
@@ -708,8 +782,10 @@ function RestDayCard({ session, onChanged, onDelete }: { session: Session; onCha
 // =====================================================================
 function WorkoutPickerDialog({ open, onOpenChange, suggested, currentType, onPick }: { open: boolean; onOpenChange: (b: boolean) => void; suggested: WorkoutType; currentType: WorkoutType | null; onPick: (type: WorkoutType) => void }) {
   const options: { type: WorkoutType; label: string; desc: string }[] = [
-    { type: "A", label: "Workout A", desc: "Upper body" },
-    { type: "B", label: "Workout B", desc: "Lower body" },
+    { type: "upperA", label: "Upper A", desc: "Chest/Shoulders/Arms - machines" },
+    { type: "lowerA", label: "Lower A", desc: "Legs - press + extensions" },
+    { type: "upperB", label: "Upper B", desc: "Chest/Shoulders/Arms - barbells + cables" },
+    { type: "lowerB", label: "Lower B", desc: "Legs - same lifts, different warmup" },
     { type: "rest", label: "Rest day", desc: "Optional walk" },
   ];
 

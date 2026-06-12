@@ -9,10 +9,11 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
 import { toast } from "sonner";
-import { ChevronLeft, ChevronRight, Plus, Search, Snowflake, Trash2, Droplet, BarChart3, Target, Cake, Scale } from "lucide-react";
+import { ChevronLeft, ChevronRight, Plus, Search, Snowflake, Trash2, Droplet, BarChart3, Target, Cake, Scale, ClipboardCopy } from "lucide-react";
 import { AxiosError } from "axios";
 import { CalorieRecapModal } from "../components/CalorieRecapModal";
 import { WeightModal } from "../components/WeightModal";
+import { CoachReportModal } from "../components/CoachReportModal";
 
 // ===== Types =====
 type Meal = "breakfast" | "lunch" | "dinner" | "snack";
@@ -61,9 +62,9 @@ type WaterRow = { _id: string; date: string; ml: number };
 type CheatDay = { _id: string; date: string; note?: string } | null;
 type Goal = {
   caloriesTarget: number;
-  caloriesBuffer: number;
-  proteinMin: number;
-  proteinMax: number;
+  proteinTarget: number;
+  carbsTarget: number;
+  fatTarget: number;
   waterMin: number;
   waterTarget: number;
   waterMax: number;
@@ -131,6 +132,7 @@ export default function Calories() {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pendingMeal, setPendingMeal] = useState<Meal>("breakfast");
   const [recapOpen, setRecapOpen] = useState(false);
+  const [coachReportOpen, setCoachReportOpen] = useState(false);
   const [goalOpen, setGoalOpen] = useState(false);
   const [weightOpen, setWeightOpen] = useState(false);
 
@@ -259,6 +261,10 @@ export default function Calories() {
             <BarChart3 className="h-3.5 w-3.5 mr-1.5" />
             Weekly recap
           </Button>
+          <Button variant="outline" size="sm" onClick={() => setCoachReportOpen(true)}>
+            <ClipboardCopy className="h-3.5 w-3.5 mr-1.5" />
+            Coach report
+          </Button>
           <Button variant={cheat ? "default" : "outline"} size="sm" onClick={toggleCheat}>
             <Cake className="h-3.5 w-3.5 mr-1.5" />
             {cheat ? "Cheat day on" : "Cheat day"}
@@ -287,18 +293,18 @@ export default function Calories() {
 
       {/* ===== Goal bars ===== */}
       {goal && (
-        <motion.div {...stagger(2)} className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <CalorieBar value={totals.cal} goal={goal} cheat={!!cheat} />
-          <ProteinBar value={totals.p} goal={goal} cheat={!!cheat} />
+        <motion.div {...stagger(2)} className="grid grid-cols-1 md:grid-cols-[1fr_280px] gap-3">
+          <Card>
+            <CardContent className="p-4 space-y-4">
+              <MacroRow label="Calories" value={totals.cal} target={goal.caloriesTarget} unit="cal" colorVar="--color-foreground" cheat={!!cheat} decimals={0} />
+              <MacroRow label="Protein" value={totals.p} target={goal.proteinTarget} unit="g" colorVar="--color-protein" cheat={!!cheat} decimals={1} />
+              <MacroRow label="Carbs" value={totals.c} target={goal.carbsTarget} unit="g" colorVar="--color-carbs" cheat={!!cheat} decimals={1} />
+              <MacroRow label="Fat" value={totals.f} target={goal.fatTarget} unit="g" colorVar="--color-fat" cheat={!!cheat} decimals={1} />
+            </CardContent>
+          </Card>
           <WaterBar value={waterTotal} goal={goal} cheat={!!cheat} date={date} onChanged={loadDayData} waters={waters} />
         </motion.div>
       )}
-
-      {/* ===== Secondary totals (carbs / fat) ===== */}
-      <motion.div {...stagger(3)} className="grid grid-cols-2 gap-3">
-        <SmallMacroCard label="Carbs" value={round1(totals.c)} colorVar="--color-carbs" cheat={!!cheat} />
-        <SmallMacroCard label="Fat" value={round1(totals.f)} colorVar="--color-fat" cheat={!!cheat} />
-      </motion.div>
 
       {/* ===== Meals ===== */}
       <div className="space-y-3">
@@ -314,6 +320,7 @@ export default function Calories() {
       <GoalDialog open={goalOpen} onOpenChange={setGoalOpen} goal={goal} onSaved={loadGoal} />
       <WeightModal open={weightOpen} onOpenChange={setWeightOpen} />
       <CalorieRecapModal open={recapOpen} onOpenChange={setRecapOpen} />
+      <CoachReportModal open={coachReportOpen} onOpenChange={setCoachReportOpen} anchorDate={date} />
     </div>
   );
 }
@@ -340,93 +347,57 @@ function CheatBadge() {
 }
 
 // =====================================================================
-// CalorieBar
+// MacroRow
 // =====================================================================
-function CalorieBar({ value, goal, cheat }: { value: number; goal: Goal; cheat: boolean }) {
-  const target = goal.caloriesTarget;
-  const buffer = goal.caloriesBuffer;
-  const v = Math.round(value);
-
-  // Tier
-  let tier: "under" | "ok" | "warn" | "over" = "under";
-  if (v === 0) tier = "under";
-  else if (v <= target) tier = "ok";
-  else if (v <= target + buffer) tier = "warn";
-  else tier = "over";
-
-  const color = cheat ? "var(--color-muted-foreground)" : tier === "over" ? "var(--color-expense)" : tier === "warn" ? "var(--color-warning)" : tier === "ok" ? "var(--color-income)" : "var(--color-foreground)";
-
-  const widthPct = Math.min((v / (target + buffer)) * 100, 100);
+function MacroRow({
+  label,
+  value,
+  target,
+  unit,
+  colorVar,
+  cheat,
+  decimals,
+}: {
+  label: string;
+  value: number;
+  target: number;
+  unit: string;
+  colorVar: string;
+  cheat: boolean;
+  decimals: 0 | 1;
+}) {
+  const v = decimals === 0 ? Math.round(value) : round1(value);
+  const pct = target > 0 ? Math.min((v / target) * 100, 100) : 0;
+  const over = v > target;
+  const color = cheat ? "var(--color-muted-foreground)" : over ? "var(--color-expense)" : v >= target ? "var(--color-income)" : `var(${colorVar})`;
 
   return (
-    <Card>
-      <CardContent className="p-4">
-        <div className="flex items-baseline justify-between gap-2 mb-2">
-          <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Calories</span>
-          <span className="text-[10px] font-mono tabular-nums text-muted-foreground">/{target}</span>
-        </div>
-        <div className="flex items-baseline gap-1.5">
-          <AnimatePresence mode="wait">
-            <motion.span key={v} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }} transition={{ duration: 0.2 }} className="text-3xl font-semibold font-mono tabular-nums tracking-tight" style={{ color }}>
-              {v}
-            </motion.span>
-          </AnimatePresence>
-          <span className="text-xs text-muted-foreground font-medium">cal</span>
-        </div>
-        <div className="mt-3 h-1.5 rounded-full overflow-hidden" style={{ background: "var(--color-muted)" }}>
-          <motion.div initial={{ width: 0 }} animate={{ width: `${widthPct}%` }} transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }} style={{ background: color, height: "100%" }} />
-        </div>
-        {!cheat && tier === "over" && (
-          <div className="text-[10px] mt-1.5 font-medium" style={{ color: "var(--color-expense)" }}>
-            Over by {v - target} cal
-          </div>
+    <div>
+      <div className="flex items-baseline justify-between gap-2 mb-1.5">
+        <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">{label}</span>
+        <span className="text-[10px] font-mono tabular-nums text-muted-foreground">
+          / {target}
+          {unit}
+        </span>
+      </div>
+      <div className="flex items-baseline gap-1.5">
+        <AnimatePresence mode="wait">
+          <motion.span key={v} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }} transition={{ duration: 0.2 }} className="text-2xl font-semibold font-mono tabular-nums tracking-tight" style={{ color }}>
+            {v}
+          </motion.span>
+        </AnimatePresence>
+        <span className="text-xs text-muted-foreground font-medium">{unit}</span>
+        {!cheat && over && (
+          <span className="ml-auto text-[10px] font-medium" style={{ color: "var(--color-expense)" }}>
+            +{decimals === 0 ? Math.round(v - target) : round1(v - target)}
+            {unit}
+          </span>
         )}
-        {!cheat && tier === "warn" && (
-          <div className="text-[10px] mt-1.5 font-medium" style={{ color: "var(--color-warning)" }}>
-            Above target, within buffer
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-// =====================================================================
-// ProteinBar
-// =====================================================================
-function ProteinBar({ value, goal, cheat }: { value: number; goal: Goal; cheat: boolean }) {
-  const v = round1(value);
-  const aboveMin = v >= goal.proteinMin;
-  const color = cheat ? "var(--color-muted-foreground)" : aboveMin ? "var(--color-income)" : "var(--color-protein)";
-
-  // Bar fills toward proteinMin (the threshold) and caps at 100% — extra is just bonus
-  const widthPct = Math.min((v / goal.proteinMin) * 100, 100);
-
-  return (
-    <Card>
-      <CardContent className="p-4">
-        <div className="flex items-baseline justify-between gap-2 mb-2">
-          <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Protein</span>
-          <span className="text-[10px] font-mono tabular-nums text-muted-foreground">≥ {goal.proteinMin}g</span>
-        </div>
-        <div className="flex items-baseline gap-1.5">
-          <AnimatePresence mode="wait">
-            <motion.span key={v} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }} transition={{ duration: 0.2 }} className="text-3xl font-semibold font-mono tabular-nums tracking-tight" style={{ color }}>
-              {v}
-            </motion.span>
-          </AnimatePresence>
-          <span className="text-xs text-muted-foreground font-medium">g</span>
-        </div>
-        <div className="mt-3 h-1.5 rounded-full overflow-hidden relative" style={{ background: "var(--color-muted)" }}>
-          <motion.div initial={{ width: 0 }} animate={{ width: `${widthPct}%` }} transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }} style={{ background: color, height: "100%" }} />
-        </div>
-        {!cheat && (
-          <div className="text-[10px] mt-1.5 font-medium" style={{ color: aboveMin ? "var(--color-income)" : "var(--color-muted-foreground)" }}>
-            {aboveMin ? "Goal hit" : `${round1(goal.proteinMin - v)}g to goal`}
-          </div>
-        )}
-      </CardContent>
-    </Card>
+      </div>
+      <div className="mt-2 h-1.5 rounded-full overflow-hidden" style={{ background: "var(--color-muted)" }}>
+        <motion.div initial={{ width: 0 }} animate={{ width: `${pct}%` }} transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }} style={{ background: color, height: "100%" }} />
+      </div>
+    </div>
   );
 }
 
@@ -470,7 +441,7 @@ function WaterBar({ value, goal, cheat, date, waters, onChanged }: { value: numb
             Water
           </span>
           <span className="text-[10px] font-mono tabular-nums text-muted-foreground">
-            {(goal.waterTarget / 1000).toFixed(1)}–{(goal.waterMax / 1000).toFixed(1)}L
+            {(goal.waterTarget / 1000).toFixed(1)}-{(goal.waterMax / 1000).toFixed(1)}L
           </span>
         </div>
         <div className="flex items-baseline gap-1.5">
@@ -508,27 +479,6 @@ function WaterBar({ value, goal, cheat, date, waters, onChanged }: { value: numb
           <Button variant="ghost" size="icon" className="h-7 w-7" onClick={removeLast} disabled={waters.length === 0} aria-label="Undo last">
             <Trash2 className="h-3 w-3" />
           </Button>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-// =====================================================================
-// SmallMacroCard
-// =====================================================================
-function SmallMacroCard({ label, value, colorVar, cheat }: { label: string; value: number; colorVar: string; cheat: boolean }) {
-  return (
-    <Card>
-      <CardContent className="p-4">
-        <div className="flex items-baseline justify-between">
-          <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">{label}</span>
-          <div className="flex items-baseline gap-1">
-            <span className="text-xl font-semibold font-mono tabular-nums" style={{ color: cheat ? "var(--color-muted-foreground)" : `var(${colorVar})` }}>
-              {value}
-            </span>
-            <span className="text-xs text-muted-foreground">g</span>
-          </div>
         </div>
       </CardContent>
     </Card>
@@ -652,7 +602,7 @@ function EntryRow({ entry, onChanged }: { entry: Entry; onChanged: () => void })
             <div className="rounded-md p-3 text-sm" style={{ background: "var(--color-muted)" }}>
               <div className="font-semibold font-mono tabular-nums">{round(t.cal)} cal</div>
               <div className="text-xs text-muted-foreground font-mono tabular-nums mt-0.5">
-                P {round1(t.p)}g · C {round1(t.c)}g · F {round1(t.f)}g
+                P {round1(t.p)}g - C {round1(t.c)}g - F {round1(t.f)}g
               </div>
             </div>
           </div>
@@ -819,7 +769,7 @@ function FoodPickerDialog({ open, onOpenChange, foods, recentIds, meal, date, on
         ) : (
           <div className="space-y-4">
             <div className="text-xs text-muted-foreground font-mono tabular-nums">
-              {picked.entryMode === "perUnit" ? `per ${pickedUnitText}: ${round1(picked.caloriesPerUnit)} cal · P ${round1(picked.proteinPerUnit)} · C ${round1(picked.carbsPerUnit)} · F ${round1(picked.fatPerUnit)}` : `per 100g: ${round1(picked.caloriesPerGram * 100)} cal · P ${round1(picked.proteinPerGram * 100)} · C ${round1(picked.carbsPerGram * 100)} · F ${round1(picked.fatPerGram * 100)}`}
+              {picked.entryMode === "perUnit" ? `per ${pickedUnitText}: ${round1(picked.caloriesPerUnit)} cal - P ${round1(picked.proteinPerUnit)} - C ${round1(picked.carbsPerUnit)} - F ${round1(picked.fatPerUnit)}` : `per 100g: ${round1(picked.caloriesPerGram * 100)} cal - P ${round1(picked.proteinPerGram * 100)} - C ${round1(picked.carbsPerGram * 100)} - F ${round1(picked.fatPerGram * 100)}`}
             </div>
             <div className="grid grid-cols-2 gap-3">
               {picked.entryMode === "perUnit" ? (
@@ -857,13 +807,13 @@ function FoodPickerDialog({ open, onOpenChange, foods, recentIds, meal, date, on
                   {previewCal} <span className="text-sm text-muted-foreground font-normal">cal</span>
                 </div>
                 <div className="text-xs text-muted-foreground font-mono tabular-nums mt-0.5">
-                  P {previewP}g · C {previewC}g · F {previewF}g
+                  P {previewP}g - C {previewC}g - F {previewF}g
                 </div>
               </div>
             )}
 
             <Button variant="ghost" size="sm" onClick={() => setPicked(null)}>
-              ← Pick a different food
+              Back to foods
             </Button>
           </div>
         )}
@@ -905,9 +855,9 @@ function FoodTile({ food, onClick }: { food: Food; onClick: () => void }) {
 // =====================================================================
 function GoalDialog({ open, onOpenChange, goal, onSaved }: { open: boolean; onOpenChange: (b: boolean) => void; goal: Goal | null; onSaved: () => void }) {
   const [calT, setCalT] = useState("2000");
-  const [calB, setCalB] = useState("100");
-  const [pMin, setPMin] = useState("160");
-  const [pMax, setPMax] = useState("190");
+  const [pT, setPT] = useState("160");
+  const [cT, setCT] = useState("200");
+  const [fT, setFT] = useState("70");
   const [wMin, setWMin] = useState("2500");
   const [wTarget, setWTarget] = useState("3000");
   const [wMax, setWMax] = useState("3500");
@@ -915,9 +865,9 @@ function GoalDialog({ open, onOpenChange, goal, onSaved }: { open: boolean; onOp
   const handleOpenChange = (next: boolean) => {
     if (next && goal) {
       setCalT(goal.caloriesTarget.toString());
-      setCalB(goal.caloriesBuffer.toString());
-      setPMin(goal.proteinMin.toString());
-      setPMax(goal.proteinMax.toString());
+      setPT(goal.proteinTarget.toString());
+      setCT(goal.carbsTarget.toString());
+      setFT(goal.fatTarget.toString());
       setWMin(goal.waterMin.toString());
       setWTarget(goal.waterTarget.toString());
       setWMax(goal.waterMax.toString());
@@ -929,9 +879,9 @@ function GoalDialog({ open, onOpenChange, goal, onSaved }: { open: boolean; onOp
     try {
       await api.patch("/calories/goal", {
         caloriesTarget: parseFloat(calT) || 0,
-        caloriesBuffer: parseFloat(calB) || 0,
-        proteinMin: parseFloat(pMin) || 0,
-        proteinMax: parseFloat(pMax) || 0,
+        proteinTarget: parseFloat(pT) || 0,
+        carbsTarget: parseFloat(cT) || 0,
+        fatTarget: parseFloat(fT) || 0,
         waterMin: parseFloat(wMin) || 0,
         waterTarget: parseFloat(wTarget) || 0,
         waterMax: parseFloat(wMax) || 0,
@@ -948,66 +898,51 @@ function GoalDialog({ open, onOpenChange, goal, onSaved }: { open: boolean; onOp
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="!max-w-[520px]">
         <DialogHeader>
-          <DialogTitle>Daily goals</DialogTitle>
+          <DialogTitle>Weekly targets</DialogTitle>
         </DialogHeader>
         <div className="space-y-4">
-          {/* Calories */}
-          <div className="space-y-3">
-            <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Calories</div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <Label className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Target</Label>
-                <Input type="number" value={calT} onChange={(e) => setCalT(e.target.value)} className="font-mono tabular-nums" />
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Buffer</Label>
-                <Input type="number" value={calB} onChange={(e) => setCalB(e.target.value)} className="font-mono tabular-nums" />
-              </div>
+          <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Macros (daily max)</div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Calories</Label>
+              <Input type="number" value={calT} onChange={(e) => setCalT(e.target.value)} className="font-mono tabular-nums" />
             </div>
-            <div className="text-[10px] text-muted-foreground">Warning above target, red above target+buffer.</div>
+            <div className="space-y-1.5">
+              <Label className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Protein (g)</Label>
+              <Input type="number" value={pT} onChange={(e) => setPT(e.target.value)} className="font-mono tabular-nums" />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Carbs (g)</Label>
+              <Input type="number" value={cT} onChange={(e) => setCT(e.target.value)} className="font-mono tabular-nums" />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Fat (g)</Label>
+              <Input type="number" value={fT} onChange={(e) => setFT(e.target.value)} className="font-mono tabular-nums" />
+            </div>
           </div>
+          <div className="text-[10px] text-muted-foreground">Each is a daily ceiling. Going over turns the bar red.</div>
 
           <div className="border-t border-border" />
 
-          {/* Protein */}
-          <div className="space-y-3">
-            <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Protein range (g)</div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <Label className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Min</Label>
-                <Input type="number" value={pMin} onChange={(e) => setPMin(e.target.value)} className="font-mono tabular-nums" />
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Max</Label>
-                <Input type="number" value={pMax} onChange={(e) => setPMax(e.target.value)} className="font-mono tabular-nums" />
-              </div>
+          <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Water (ml)</div>
+          <div className="grid grid-cols-3 gap-3">
+            <div className="space-y-1.5">
+              <Label className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Min</Label>
+              <Input type="number" value={wMin} onChange={(e) => setWMin(e.target.value)} className="font-mono tabular-nums" />
             </div>
-          </div>
-
-          <div className="border-t border-border" />
-
-          {/* Water */}
-          <div className="space-y-3">
-            <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Water (ml)</div>
-            <div className="grid grid-cols-3 gap-3">
-              <div className="space-y-1.5">
-                <Label className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Min</Label>
-                <Input type="number" value={wMin} onChange={(e) => setWMin(e.target.value)} className="font-mono tabular-nums" />
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Target</Label>
-                <Input type="number" value={wTarget} onChange={(e) => setWTarget(e.target.value)} className="font-mono tabular-nums" />
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Max</Label>
-                <Input type="number" value={wMax} onChange={(e) => setWMax(e.target.value)} className="font-mono tabular-nums" />
-              </div>
+            <div className="space-y-1.5">
+              <Label className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Target</Label>
+              <Input type="number" value={wTarget} onChange={(e) => setWTarget(e.target.value)} className="font-mono tabular-nums" />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Max</Label>
+              <Input type="number" value={wMax} onChange={(e) => setWMax(e.target.value)} className="font-mono tabular-nums" />
             </div>
           </div>
         </div>
         <DialogFooter>
           <Button variant="default" size="default" onClick={save}>
-            Save goals
+            Save targets
           </Button>
         </DialogFooter>
       </DialogContent>

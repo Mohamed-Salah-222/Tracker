@@ -31,9 +31,10 @@ function last7DaysISO(): string[] {
   return out;
 }
 
-// Hardcoded workout exercise counts (mirror of frontend constants)
-const WORKOUT_A_SET_COUNT = 4 + 4 + 3 + 3 + 3 + 3 + 3; // 23 sets
-const WORKOUT_B_SET_COUNT = 4 + 3 + 3 + 3 + 3; // 16 sets
+const WORKOUT_UPPER_SET_COUNT = 8 * 3; // training sets
+const WORKOUT_LOWER_SET_COUNT = 5 * 3; // training sets
+const WORKOUT_ROTATION = ["upperA", "lowerA", "upperB", "lowerB"] as const;
+type DashboardWorkoutType = (typeof WORKOUT_ROTATION)[number];
 
 // Mirrors client/src/lib/career-curriculum.ts TOTAL_TOPICS.
 const TOTAL_CAREER_TOPICS = 177;
@@ -285,20 +286,22 @@ router.get("/", async (_req, res) => {
   const workoutSession = await WorkoutSession.findOne({ date: today });
   let workoutSetsDone = 0;
   let workoutSetsTotal = 0;
-  let workoutSuggested: "A" | "B" = "A";
+  let workoutSuggested: DashboardWorkoutType = "upperA";
 
   if (workoutSession) {
-    if (workoutSession.type === "A") workoutSetsTotal = WORKOUT_A_SET_COUNT;
-    else if (workoutSession.type === "B") workoutSetsTotal = WORKOUT_B_SET_COUNT;
+    if (workoutSession.type === "upperA" || workoutSession.type === "upperB") workoutSetsTotal = WORKOUT_UPPER_SET_COUNT;
+    else if (workoutSession.type === "lowerA" || workoutSession.type === "lowerB") workoutSetsTotal = WORKOUT_LOWER_SET_COUNT;
 
     if (workoutSession.type !== "rest") {
       const sets = await SetLog.find({ sessionId: workoutSession._id, done: true });
       workoutSetsDone = sets.length;
     }
   } else {
-    // No session yet — compute suggestion
-    const lastAB = await WorkoutSession.findOne({ type: { $in: ["A", "B"] } }).sort({ date: -1 });
-    if (lastAB) workoutSuggested = lastAB.type === "A" ? "B" : "A";
+    const lastWorkout = await WorkoutSession.findOne({ type: { $in: WORKOUT_ROTATION } }).sort({ date: -1 });
+    if (lastWorkout) {
+      const idx = WORKOUT_ROTATION.indexOf(lastWorkout.type as DashboardWorkoutType);
+      if (idx !== -1) workoutSuggested = WORKOUT_ROTATION[(idx + 1) % WORKOUT_ROTATION.length];
+    }
   }
 
   // Workout streak: count consecutive days going back where there's any session
@@ -362,9 +365,9 @@ router.get("/", async (_req, res) => {
     },
     goal: {
       caloriesTarget: goal.caloriesTarget,
-      caloriesBuffer: goal.caloriesBuffer,
-      proteinMin: goal.proteinMin,
-      proteinMax: goal.proteinMax,
+      proteinTarget: goal.proteinTarget,
+      carbsTarget: goal.carbsTarget,
+      fatTarget: goal.fatTarget,
       waterMin: goal.waterMin,
       waterTarget: goal.waterTarget,
       waterMax: goal.waterMax,

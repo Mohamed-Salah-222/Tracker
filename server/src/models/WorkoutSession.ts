@@ -1,13 +1,13 @@
 import { Schema, model } from "mongoose";
 
-export const WORKOUT_TYPES = ["A", "B", "rest"] as const;
+export const WORKOUT_TYPES = ["upperA", "lowerA", "upperB", "lowerB", "rest"] as const;
 
 const workoutSessionSchema = new Schema(
   {
     date: { type: Date, required: true, unique: true, index: true },
     type: { type: String, enum: WORKOUT_TYPES, required: true },
 
-    // Cardio bookends (only for A/B)
+    // Legacy cardio bookend fields kept for existing documents.
     warmupMinutes: { type: Number, default: 0, min: 0 },
     warmupDone: { type: Boolean, default: false },
     finisherMinutes: { type: Number, default: 0, min: 0 },

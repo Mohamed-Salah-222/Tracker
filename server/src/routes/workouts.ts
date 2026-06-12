@@ -12,8 +12,7 @@ function isValidType(t: string): t is WorkoutType {
 
 // =====================================================================
 // GET /workouts/today
-// Returns today's session if it exists, else suggests the next type (A/B/rest)
-// based on the most recent A or B session.
+// Returns today's session if it exists, else suggests the next type.
 // =====================================================================
 router.get("/today", async (_req, res) => {
   const today = new Date();
@@ -24,12 +23,17 @@ router.get("/today", async (_req, res) => {
     return res.json({ session: existing, suggested: null });
   }
 
-  // Find most recent A or B session
-  const lastAB = await WorkoutSession.findOne({ type: { $in: ["A", "B"] } }).sort({ date: -1 });
-  // Suggested: opposite of last AB; if no history, default to A
-  let suggested: WorkoutType = "A";
-  if (lastAB) {
-    suggested = lastAB.type === "A" ? "B" : "A";
+  const rotation: WorkoutType[] = ["upperA", "lowerA", "upperB", "lowerB"];
+  const lastWorkout = await WorkoutSession.findOne({
+    type: { $in: rotation },
+  }).sort({ date: -1 });
+
+  let suggested: WorkoutType = "upperA";
+  if (lastWorkout) {
+    const idx = rotation.indexOf(lastWorkout.type as WorkoutType);
+    if (idx !== -1) {
+      suggested = rotation[(idx + 1) % rotation.length];
+    }
   }
 
   res.json({ session: null, suggested });
@@ -124,18 +128,18 @@ router.delete("/session/:id", async (req, res) => {
 // =====================================================================
 // PUT /workouts/sets
 // Upsert a set log (sessionId + exerciseId + setNumber is the key)
-// Body: { sessionId, exerciseId, setNumber, weight?, reps?, done? }
+// Body: { sessionId, exerciseId, setNumber, weight?, done? }
 // =====================================================================
 router.put("/sets", async (req, res) => {
-  const { sessionId, exerciseId, setNumber, weight, reps, done } = req.body;
+  const { sessionId, exerciseId, setNumber, weight, done } = req.body;
   if (!sessionId || !exerciseId || typeof setNumber !== "number") {
     return res.status(400).json({ error: "sessionId, exerciseId, setNumber required" });
   }
 
   const update: Record<string, unknown> = {};
   if (weight !== undefined) update.weight = weight;
-  if (reps !== undefined) update.reps = reps;
   if (typeof done === "boolean") update.done = done;
+  // reps is intentionally ignored - reps targets are display-only in the new program
 
   const set = await SetLog.findOneAndUpdate({ sessionId, exerciseId, setNumber }, { $set: update, $setOnInsert: { sessionId, exerciseId, setNumber } }, { upsert: true, new: true });
   res.json(set);
@@ -253,33 +257,32 @@ router.get("/stats", async (req, res) => {
   let totalSetsDone = 0;
   let totalReps = 0;
   const completedSessions = sessions.filter((s) => s.completedAt).length;
-  const sessionsByType = { A: 0, B: 0, rest: 0 };
+  const sessionsByType = { upperA: 0, lowerA: 0, upperB: 0, lowerB: 0, rest: 0 };
 
   for (const s of sessions) {
-    sessionsByType[s.type as "A" | "B" | "rest"]++;
+    sessionsByType[s.type as keyof typeof sessionsByType]++;
     const sets = setsBySession[s._id.toString()] ?? [];
     for (const set of sets) {
       if (set.done) totalSetsDone++;
-      if (set.weight != null && set.reps != null && set.weight > 0 && set.reps > 0) {
-        totalVolume += set.weight * set.reps;
-        totalReps += set.reps;
+      if (set.weight != null && set.weight > 0) {
+        totalVolume += set.weight;
       }
     }
   }
 
   // Per-day frequency map
-  const dayMap: Record<string, { date: string; type: "A" | "B" | "rest"; volume: number; setsDone: number; completed: boolean }> = {};
+  const dayMap: Record<string, { date: string; type: WorkoutType; volume: number; setsDone: number; completed: boolean }> = {};
   for (const s of sessions) {
     const iso = s.date.toISOString().slice(0, 10);
     const sets = setsBySession[s._id.toString()] ?? [];
     const volume = sets.reduce((acc, set) => {
-      if (set.weight != null && set.reps != null) return acc + set.weight * set.reps;
+      if (set.weight != null) return acc + set.weight;
       return acc;
     }, 0);
     const setsDone = sets.filter((set) => set.done).length;
     dayMap[iso] = {
       date: iso,
-      type: s.type as "A" | "B" | "rest",
+      type: s.type as WorkoutType,
       volume,
       setsDone,
       completed: !!s.completedAt,

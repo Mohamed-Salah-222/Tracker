@@ -53,7 +53,7 @@ type FridgeItem = { _id: string; foodNameSnapshot: string; count: number };
 
 type WorkoutSession = {
   _id: string;
-  type: "A" | "B" | "rest";
+  type: "upperA" | "lowerA" | "upperB" | "lowerB" | "rest";
   completedAt: string | null;
   warmupDone: boolean;
   finisherDone: boolean;
@@ -118,9 +118,9 @@ type Dash = {
   };
   goal: {
     caloriesTarget: number;
-    caloriesBuffer: number;
-    proteinMin: number;
-    proteinMax: number;
+    proteinTarget: number;
+    carbsTarget: number;
+    fatTarget: number;
     waterMin: number;
     waterTarget: number;
     waterMax: number;
@@ -128,7 +128,7 @@ type Dash = {
   fridge: { items: FridgeItem[]; total: number; emptyCount: number };
   workout: {
     session: WorkoutSession | null;
-    suggested: "A" | "B" | null;
+    suggested: "upperA" | "lowerA" | "upperB" | "lowerB" | null;
     setsDone: number;
     setsTotal: number;
     streak: number;
@@ -150,9 +150,11 @@ const maskedOrEGP = (n: number, hidden: boolean) => (hidden ? maskEGP() : fmtEGP
 const round = (n: number) => Math.round(n);
 const round1 = (n: number) => Math.round(n * 10) / 10;
 
-function workoutLabel(type: "A" | "B" | "rest") {
-  if (type === "A") return "Workout A · Upper";
-  if (type === "B") return "Workout B · Lower";
+function workoutLabel(type: WorkoutSession["type"]) {
+  if (type === "upperA") return "Upper A";
+  if (type === "lowerA") return "Lower A";
+  if (type === "upperB") return "Upper B";
+  if (type === "lowerB") return "Lower B";
   return "Rest day";
 }
 
@@ -409,13 +411,11 @@ function TargetsCard({ data, onClick }: { data: Dash; onClick: () => void }) {
   const calPct = goal.caloriesTarget > 0 ? (calories.todayCal / goal.caloriesTarget) * 100 : 0;
   let calColor = "var(--color-income)";
   if (cheat) calColor = "var(--color-muted-foreground)";
-  else if (calories.todayCal > goal.caloriesTarget + goal.caloriesBuffer) calColor = "var(--color-expense)";
-  else if (calories.todayCal > goal.caloriesTarget) calColor = "var(--color-warning)";
+  else if (calories.todayCal > goal.caloriesTarget) calColor = "var(--color-expense)";
 
-  // Protein: 100% at proteinMax
-  const proteinPct = goal.proteinMax > 0 ? (calories.todayProtein / goal.proteinMax) * 100 : 0;
-  const proteinInRange = calories.todayProtein >= goal.proteinMin && calories.todayProtein <= goal.proteinMax;
-  const proteinColor = cheat ? "var(--color-muted-foreground)" : proteinInRange ? "var(--color-income)" : "var(--color-protein)";
+  const proteinPct = goal.proteinTarget > 0 ? (calories.todayProtein / goal.proteinTarget) * 100 : 0;
+  const proteinOver = calories.todayProtein > goal.proteinTarget;
+  const proteinColor = cheat ? "var(--color-muted-foreground)" : proteinOver ? "var(--color-expense)" : calories.todayProtein > 0 ? "var(--color-income)" : "var(--color-protein)";
 
   // Water: 100% at waterTarget
   const waterPct = goal.waterTarget > 0 ? (calories.waterTodayMl / goal.waterTarget) * 100 : 0;
@@ -461,7 +461,7 @@ function TargetsCard({ data, onClick }: { data: Dash; onClick: () => void }) {
             <div className="text-base font-semibold font-mono tabular-nums tracking-tight leading-tight" style={{ color: proteinColor }}>
               {round1(calories.todayProtein)}
             </div>
-            <div className="text-[9px] text-muted-foreground font-mono tabular-nums leading-tight">/{goal.proteinMax}g</div>
+            <div className="text-[9px] text-muted-foreground font-mono tabular-nums leading-tight">/{goal.proteinTarget}g</div>
           </Ring>
         </div>
 
@@ -524,13 +524,13 @@ function TasksCard({ data, onClick }: { data: Dash; onClick: () => void }) {
 function WorkoutCard({ data, onClick }: { data: Dash; onClick: () => void }) {
   const { workout } = data;
   const session = workout.session;
-  const type = session?.type ?? workout.suggested ?? "A";
+  const type = session?.type ?? workout.suggested ?? "upperA";
   const isRest = session?.type === "rest";
   const notStarted = !session;
   const completed = !!session?.completedAt;
 
   const pct = workout.setsTotal > 0 ? (workout.setsDone / workout.setsTotal) * 100 : 0;
-  const color = type === "A" ? "var(--color-workout-a)" : type === "B" ? "var(--color-workout-b)" : "var(--color-workout-rest)";
+  const color = type === "upperA" || type === "upperB" ? "var(--color-workout-a)" : type === "lowerA" || type === "lowerB" ? "var(--color-workout-b)" : "var(--color-workout-rest)";
 
   return (
     <CardShell onClick={onClick}>
@@ -549,7 +549,7 @@ function WorkoutCard({ data, onClick }: { data: Dash; onClick: () => void }) {
       <div className="flex-1 flex flex-col justify-between">
         <div>
           <div className="text-sm font-semibold tracking-tight" style={{ color }}>
-            {notStarted ? `Suggested: ${workoutLabel(workout.suggested ?? "A")}` : workoutLabel(type)}
+            {notStarted ? `Suggested: ${workoutLabel(workout.suggested ?? "upperA")}` : workoutLabel(type)}
           </div>
           {!notStarted && !isRest && (
             <div className="text-xs text-muted-foreground font-mono tabular-nums mt-0.5">
@@ -888,8 +888,8 @@ function TargetsModal({ open, onClose, data }: { open: boolean; onClose: () => v
             Cheat day — goals are not enforced today.
           </div>
         )}
-        <TargetBar label="Calories" value={round(calories.todayCal)} target={goal.caloriesTarget} buffer={goal.caloriesBuffer} unit="cal" variant="cap" muted={calories.isCheat} />
-        <TargetBar label="Protein" value={round1(calories.todayProtein)} min={goal.proteinMin} target={goal.proteinMax} unit="g" variant="range" muted={calories.isCheat} />
+        <TargetBar label="Calories" value={round(calories.todayCal)} target={goal.caloriesTarget} unit="cal" variant="cap" muted={calories.isCheat} />
+        <TargetBar label="Protein" value={round1(calories.todayProtein)} target={goal.proteinTarget} unit="g" variant="cap" muted={calories.isCheat} />
         <TargetBar label="Water" value={calories.waterTodayMl / 1000} target={goal.waterTarget / 1000} min={goal.waterMin / 1000} unit="L" variant="hydration" muted={calories.isCheat} decimals={1} />
 
         <div className="border-t border-border pt-4">
@@ -1035,11 +1035,11 @@ function TasksModal({ open, onClose, data }: { open: boolean; onClose: () => voi
 function WorkoutModal({ open, onClose, data }: { open: boolean; onClose: () => void; data: Dash }) {
   const { workout } = data;
   const session = workout.session;
-  const type = session?.type ?? workout.suggested ?? "A";
+  const type = session?.type ?? workout.suggested ?? "upperA";
   const completed = !!session?.completedAt;
 
-  const color = type === "A" ? "var(--color-workout-a)" : type === "B" ? "var(--color-workout-b)" : "var(--color-workout-rest)";
-  const bg = type === "A" ? "var(--color-workout-a-bg)" : type === "B" ? "var(--color-workout-b-bg)" : "var(--color-workout-rest-bg)";
+  const color = type === "upperA" || type === "upperB" ? "var(--color-workout-a)" : type === "lowerA" || type === "lowerB" ? "var(--color-workout-b)" : "var(--color-workout-rest)";
+  const bg = type === "upperA" || type === "upperB" ? "var(--color-workout-a-bg)" : type === "lowerA" || type === "lowerB" ? "var(--color-workout-b-bg)" : "var(--color-workout-rest-bg)";
 
   return (
     <BaseModal open={open} onClose={onClose} title="Workout" page="/workout" width="[560px]">
@@ -1049,7 +1049,7 @@ function WorkoutModal({ open, onClose, data }: { open: boolean; onClose: () => v
             Today
           </div>
           <div className="text-xl font-semibold tracking-tight mt-1" style={{ color }}>
-            {!session ? `Suggested: ${workoutLabel(workout.suggested ?? "A")}` : workoutLabel(type)}
+            {!session ? `Suggested: ${workoutLabel(workout.suggested ?? "upperA")}` : workoutLabel(type)}
           </div>
           {completed && (
             <div className="text-xs mt-1 font-medium" style={{ color: "var(--color-income)" }}>

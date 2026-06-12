@@ -16,6 +16,14 @@ function isValidMeal(m: string): m is Meal {
   return (MEAL_SLOTS as readonly string[]).includes(m);
 }
 
+function fridayOnOrBefore(iso: string): Date {
+  const d = toDayUTC(iso);
+  const dow = d.getUTCDay();
+  const back = (dow - 5 + 7) % 7;
+  d.setUTCDate(d.getUTCDate() - back);
+  return d;
+}
+
 // ===========================================================
 // EXISTING ROUTES (preserved)
 // ===========================================================
@@ -106,6 +114,20 @@ router.patch("/weight-goal", async (req, res) => {
   let goal = await WeightGoal.findOne();
   if (!goal) goal = await WeightGoal.create({});
   goal.targetKg = targetKg;
+  await goal.save();
+  res.json(goal);
+});
+
+router.patch("/goal", async (req, res) => {
+  let goal = await Goal.findOne();
+  if (!goal) goal = await Goal.create({});
+
+  const fields = ["caloriesTarget", "proteinTarget", "carbsTarget", "fatTarget", "waterMin", "waterTarget", "waterMax"] as const;
+  for (const f of fields) {
+    if (typeof req.body[f] === "number" && req.body[f] >= 0) {
+      goal.set(f, req.body[f]);
+    }
+  }
   await goal.save();
   res.json(goal);
 });
@@ -241,20 +263,6 @@ router.get("/goal", async (_req, res) => {
   res.json(goal);
 });
 
-router.patch("/goal", async (req, res) => {
-  let goal = await Goal.findOne();
-  if (!goal) goal = await Goal.create({});
-
-  const fields = ["caloriesTarget", "caloriesBuffer", "proteinMin", "proteinMax", "waterMin", "waterTarget", "waterMax"] as const;
-  for (const f of fields) {
-    if (typeof req.body[f] === "number" && req.body[f] >= 0) {
-      goal.set(f, req.body[f]);
-    }
-  }
-  await goal.save();
-  res.json(goal);
-});
-
 // ===========================================================
 // WEEK SUMMARY
 // ===========================================================
@@ -263,7 +271,7 @@ router.get("/week-summary", async (req, res) => {
   const startStr = req.query.startDate as string;
   if (!startStr) return res.status(400).json({ error: "startDate required" });
 
-  const start = toDayUTC(startStr);
+  const start = fridayOnOrBefore(startStr);
   const end = new Date(start);
   end.setUTCDate(end.getUTCDate() + 7); // exclusive
 
@@ -393,11 +401,15 @@ router.get("/week-summary", async (req, res) => {
   // Goal attainment counts (tracked days only)
   let calorieGoalDays = 0;
   let proteinGoalDays = 0;
+  let carbsGoalDays = 0;
+  let fatGoalDays = 0;
   let waterGoalDays = 0;
   if (goal) {
     for (const d of tracked) {
-      if (d.cal > 0 && d.cal <= goal.caloriesTarget + goal.caloriesBuffer) calorieGoalDays++;
-      if (d.p >= goal.proteinMin) proteinGoalDays++;
+      if (d.cal > 0 && d.cal <= goal.caloriesTarget) calorieGoalDays++;
+      if (d.p > 0 && d.p <= goal.proteinTarget) proteinGoalDays++;
+      if (d.c > 0 && d.c <= goal.carbsTarget) carbsGoalDays++;
+      if (d.f > 0 && d.f <= goal.fatTarget) fatGoalDays++;
       if (d.water >= goal.waterMin) waterGoalDays++;
     }
   }
@@ -415,9 +427,138 @@ router.get("/week-summary", async (req, res) => {
     goalAttainment: {
       calorieGoalDays,
       proteinGoalDays,
+      carbsGoalDays,
+      fatGoalDays,
       waterGoalDays,
       totalTrackedDays: trackedCount,
     },
+    goal,
+  });
+});
+
+router.get("/coach-report", async (req, res) => {
+  const startStr = req.query.startDate as string;
+  if (!startStr) return res.status(400).json({ error: "startDate required" });
+
+  const start = fridayOnOrBefore(startStr);
+  const end = new Date(start);
+  end.setUTCDate(end.getUTCDate() + 7);
+
+  const [entries, cheatDays, waterEntries, goal] = await Promise.all([
+    CalorieEntry.find({ date: { $gte: start, $lt: end }, deletedAt: null }).sort({ date: 1, createdAt: 1 }),
+    CheatDay.find({ date: { $gte: start, $lt: end } }),
+    WaterEntry.find({ date: { $gte: start, $lt: end }, deletedAt: null }).sort({ date: 1 }),
+    Goal.findOne(),
+  ]);
+
+  const cheatSet = new Set(cheatDays.map((c) => c.date.toISOString().slice(0, 10)));
+
+  function entryTotals(e: (typeof entries)[number]) {
+    if (e.entryMode === "perUnit") {
+      const n = e.units ?? 0;
+      return {
+        cal: n * (e.caloriesPerUnitSnapshot ?? 0),
+        p: n * (e.proteinPerUnitSnapshot ?? 0),
+        c: n * (e.carbsPerUnitSnapshot ?? 0),
+        f: n * (e.fatPerUnitSnapshot ?? 0),
+      };
+    }
+    const g = e.grams ?? 0;
+    return {
+      cal: g * (e.caloriesPerGramSnapshot ?? 0),
+      p: g * (e.proteinPerGramSnapshot ?? 0),
+      c: g * (e.carbsPerGramSnapshot ?? 0),
+      f: g * (e.fatPerGramSnapshot ?? 0),
+    };
+  }
+
+  type ItemLog = { name: string; amount: string; cal: number; p: number; c: number; f: number };
+  type DayBucket = {
+    date: string;
+    isCheat: boolean;
+    cal: number;
+    p: number;
+    c: number;
+    f: number;
+    water: number;
+    byMeal: Record<Meal, ItemLog[]>;
+  };
+
+  const days: DayBucket[] = [];
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(start);
+    d.setUTCDate(d.getUTCDate() + i);
+    const iso = d.toISOString().slice(0, 10);
+    days.push({
+      date: iso,
+      isCheat: cheatSet.has(iso),
+      cal: 0,
+      p: 0,
+      c: 0,
+      f: 0,
+      water: 0,
+      byMeal: { breakfast: [], lunch: [], dinner: [], snack: [] },
+    });
+  }
+  const dayIndex: Record<string, number> = {};
+  days.forEach((d, i) => (dayIndex[d.date] = i));
+
+  for (const e of entries) {
+    const iso = e.date.toISOString().slice(0, 10);
+    const idx = dayIndex[iso];
+    if (idx === undefined) continue;
+    const t = entryTotals(e);
+    days[idx].cal += t.cal;
+    days[idx].p += t.p;
+    days[idx].c += t.c;
+    days[idx].f += t.f;
+    const unitText = e.unitLabelSnapshot || "unit";
+    const amount = e.entryMode === "perUnit" ? `${e.units} ${unitText}${(e.units ?? 0) > 1 ? "s" : ""}` : `${e.grams}g`;
+    days[idx].byMeal[e.meal as Meal].push({
+      name: e.foodNameSnapshot,
+      amount,
+      cal: t.cal,
+      p: t.p,
+      c: t.c,
+      f: t.f,
+    });
+  }
+  for (const w of waterEntries) {
+    const iso = w.date.toISOString().slice(0, 10);
+    const idx = dayIndex[iso];
+    if (idx === undefined) continue;
+    days[idx].water += w.ml;
+  }
+
+  const totals = days.reduce(
+    (acc, d) => {
+      acc.cal += d.cal;
+      acc.p += d.p;
+      acc.c += d.c;
+      acc.f += d.f;
+      acc.water += d.water;
+      return acc;
+    },
+    { cal: 0, p: 0, c: 0, f: 0, water: 0 },
+  );
+
+  const daysWithLogs = days.filter((d) => d.cal > 0 || d.water > 0).length || 1;
+  const avg = {
+    cal: totals.cal / daysWithLogs,
+    p: totals.p / daysWithLogs,
+    c: totals.c / daysWithLogs,
+    f: totals.f / daysWithLogs,
+    water: totals.water / daysWithLogs,
+  };
+
+  res.json({
+    startDate: start.toISOString().slice(0, 10),
+    endDate: days[6].date,
+    days,
+    totals,
+    avg,
+    daysWithLogs,
+    cheatDayCount: days.filter((d) => d.isCheat).length,
     goal,
   });
 });

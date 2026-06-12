@@ -1,5 +1,8 @@
 import { Schema, model } from "mongoose";
 
+// NOTE: `reps` is no longer user-input. Reps targets are defined in the
+// frontend exercise catalog. The field is kept for historical data and
+// possible future use but should not be set by current flows.
 const setLogSchema = new Schema(
   {
     sessionId: { type: Schema.Types.ObjectId, ref: "WorkoutSession", required: true, index: true },
