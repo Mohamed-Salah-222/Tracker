@@ -9,7 +9,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
 import { toast } from "sonner";
-import { ChevronLeft, ChevronRight, Plus, Search, Snowflake, Trash2, Droplet, BarChart3, Target, Cake, Scale, ClipboardCopy } from "lucide-react";
+import { ChevronLeft, ChevronRight, Plus, Search, Snowflake, Trash2, Droplet, BarChart3, Target, Cake, Scale, ClipboardCopy, Flame, Beef, Wheat, Nut } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { AxiosError } from "axios";
 import { CalorieRecapModal } from "../components/CalorieRecapModal";
 import { WeightModal } from "../components/WeightModal";
@@ -291,17 +292,15 @@ export default function Calories() {
         </Button>
       </motion.div>
 
-      {/* ===== Goal bars ===== */}
+      {/* ===== Goal cards ===== */}
       {goal && (
-        <motion.div {...stagger(2)} className="grid grid-cols-1 md:grid-cols-[1fr_280px] gap-3">
-          <Card>
-            <CardContent className="p-4 space-y-4">
-              <MacroRow label="Calories" value={totals.cal} target={goal.caloriesTarget} unit="cal" colorVar="--color-foreground" cheat={!!cheat} decimals={0} />
-              <MacroRow label="Protein" value={totals.p} target={goal.proteinTarget} unit="g" colorVar="--color-protein" cheat={!!cheat} decimals={1} />
-              <MacroRow label="Carbs" value={totals.c} target={goal.carbsTarget} unit="g" colorVar="--color-carbs" cheat={!!cheat} decimals={1} />
-              <MacroRow label="Fat" value={totals.f} target={goal.fatTarget} unit="g" colorVar="--color-fat" cheat={!!cheat} decimals={1} />
-            </CardContent>
-          </Card>
+        <motion.div {...stagger(2)} className="space-y-3">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <MacroCard icon={Flame} label="Calories" value={totals.cal} target={goal.caloriesTarget} unit="cal" system="cap" cheat={!!cheat} decimals={0} />
+            <MacroCard icon={Beef} label="Protein" value={totals.p} target={goal.proteinTarget} unit="g" system="buildup" fromVar="--color-expense" cheat={!!cheat} decimals={1} />
+            <MacroCard icon={Wheat} label="Carbs" value={totals.c} target={goal.carbsTarget} unit="g" system="cap" cheat={!!cheat} decimals={1} />
+            <MacroCard icon={Nut} label="Fat" value={totals.f} target={goal.fatTarget} unit="g" system="cap" cheat={!!cheat} decimals={1} />
+          </div>
           <WaterBar value={waterTotal} goal={goal} cheat={!!cheat} date={date} onChanged={loadDayData} waters={waters} />
         </motion.div>
       )}
@@ -347,57 +346,79 @@ function CheatBadge() {
 }
 
 // =====================================================================
-// MacroRow
+// Macro color systems
 // =====================================================================
-function MacroRow({
+// "cap": the target is a ceiling you can't exceed — green the whole way, red once over.
+function capColor(cheat: boolean, over: boolean) {
+  return cheat ? "var(--color-muted-foreground)" : over ? "var(--color-expense)" : "var(--color-income)";
+}
+// "buildup": no ceiling — color eases from `fromVar` toward green as you approach the target, then stays green.
+function buildupColor(cheat: boolean, pct: number, fromVar: string) {
+  if (cheat) return "var(--color-muted-foreground)";
+  return `color-mix(in oklch, var(--color-income) ${pct}%, var(${fromVar}) ${100 - pct}%)`;
+}
+
+// =====================================================================
+// MacroCard
+// =====================================================================
+function MacroCard({
+  icon: Icon,
   label,
   value,
   target,
   unit,
-  colorVar,
   cheat,
   decimals,
+  system,
+  fromVar = "--color-expense",
 }: {
+  icon: LucideIcon;
   label: string;
   value: number;
   target: number;
   unit: string;
-  colorVar: string;
   cheat: boolean;
   decimals: 0 | 1;
+  system: "cap" | "buildup";
+  fromVar?: string;
 }) {
   const v = decimals === 0 ? Math.round(value) : round1(value);
   const pct = target > 0 ? Math.min((v / target) * 100, 100) : 0;
   const over = v > target;
-  const color = cheat ? "var(--color-muted-foreground)" : over ? "var(--color-expense)" : v >= target ? "var(--color-income)" : `var(${colorVar})`;
+  const color = system === "cap" ? capColor(cheat, over) : buildupColor(cheat, pct, fromVar);
 
   return (
-    <div>
-      <div className="flex items-baseline justify-between gap-2 mb-1.5">
-        <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">{label}</span>
-        <span className="text-[10px] font-mono tabular-nums text-muted-foreground">
-          / {target}
-          {unit}
-        </span>
-      </div>
-      <div className="flex items-baseline gap-1.5">
-        <AnimatePresence mode="wait">
-          <motion.span key={v} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }} transition={{ duration: 0.2 }} className="text-2xl font-semibold font-mono tabular-nums tracking-tight" style={{ color }}>
-            {v}
-          </motion.span>
-        </AnimatePresence>
-        <span className="text-xs text-muted-foreground font-medium">{unit}</span>
-        {!cheat && over && (
-          <span className="ml-auto text-[10px] font-medium" style={{ color: "var(--color-expense)" }}>
-            +{decimals === 0 ? Math.round(v - target) : round1(v - target)}
+    <Card>
+      <CardContent className="p-4">
+        <div className="flex items-baseline justify-between gap-2 mb-1.5">
+          <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium flex items-center gap-1">
+            <Icon className="h-2.5 w-2.5" style={{ color }} />
+            {label}
+          </span>
+          <span className="text-[10px] font-mono tabular-nums text-muted-foreground">
+            / {target}
             {unit}
           </span>
+        </div>
+        <div className="flex items-baseline gap-1.5">
+          <AnimatePresence mode="wait">
+            <motion.span key={v} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }} transition={{ duration: 0.2 }} className="text-2xl font-semibold font-mono tabular-nums tracking-tight" style={{ color }}>
+              {v}
+            </motion.span>
+          </AnimatePresence>
+          <span className="text-xs text-muted-foreground font-medium">{unit}</span>
+        </div>
+        {system === "cap" && !cheat && over && (
+          <div className="text-[10px] font-medium mt-0.5" style={{ color: "var(--color-expense)" }}>
+            +{decimals === 0 ? Math.round(v - target) : round1(v - target)}
+            {unit} over
+          </div>
         )}
-      </div>
-      <div className="mt-2 h-1.5 rounded-full overflow-hidden" style={{ background: "var(--color-muted)" }}>
-        <motion.div initial={{ width: 0 }} animate={{ width: `${pct}%` }} transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }} style={{ background: color, height: "100%" }} />
-      </div>
-    </div>
+        <div className="mt-2 h-1.5 rounded-full overflow-hidden" style={{ background: "var(--color-muted)" }}>
+          <motion.div initial={{ width: 0 }} animate={{ width: `${pct}%` }} transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }} style={{ background: color, height: "100%" }} />
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -406,11 +427,10 @@ function MacroRow({
 // =====================================================================
 function WaterBar({ value, goal, cheat, date, waters, onChanged }: { value: number; goal: Goal; cheat: boolean; date: string; waters: WaterRow[]; onChanged: () => void }) {
   const v = value;
-  const inRange = v >= goal.waterTarget && v <= goal.waterMax;
-  const aboveMin = v >= goal.waterMin;
-  const color = cheat ? "var(--color-muted-foreground)" : inRange ? "var(--color-income)" : aboveMin ? "var(--color-water)" : "var(--color-foreground)";
-
-  const widthPct = Math.min((v / goal.waterMax) * 100, 100);
+  // No cap on water — the bar just eases from blue toward green as you approach the target, then stays green.
+  const pct = goal.waterTarget > 0 ? Math.min((v / goal.waterTarget) * 100, 100) : 0;
+  const color = buildupColor(cheat, pct, "--color-water");
+  const widthPct = pct;
 
   const add = async (ml: number) => {
     try {
@@ -440,9 +460,7 @@ function WaterBar({ value, goal, cheat, date, waters, onChanged }: { value: numb
             <Droplet className="h-2.5 w-2.5" style={{ color: "var(--color-water)" }} />
             Water
           </span>
-          <span className="text-[10px] font-mono tabular-nums text-muted-foreground">
-            {(goal.waterTarget / 1000).toFixed(1)}-{(goal.waterMax / 1000).toFixed(1)}L
-          </span>
+          <span className="text-[10px] font-mono tabular-nums text-muted-foreground">Target {(goal.waterTarget / 1000).toFixed(1)}L</span>
         </div>
         <div className="flex items-baseline gap-1.5">
           <AnimatePresence mode="wait">
@@ -452,18 +470,8 @@ function WaterBar({ value, goal, cheat, date, waters, onChanged }: { value: numb
           </AnimatePresence>
           <span className="text-xs text-muted-foreground font-medium">L</span>
         </div>
-        {/* Bar with min and target markers */}
-        <div className="mt-3 h-1.5 rounded-full overflow-hidden relative" style={{ background: "var(--color-muted)" }}>
-          {/* target zone */}
-          <div
-            className="absolute top-0 bottom-0 opacity-30"
-            style={{
-              left: `${(goal.waterTarget / goal.waterMax) * 100}%`,
-              width: `${((goal.waterMax - goal.waterTarget) / goal.waterMax) * 100}%`,
-              background: "var(--color-income)",
-            }}
-          />
-          <motion.div initial={{ width: 0 }} animate={{ width: `${widthPct}%` }} transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }} style={{ background: color, height: "100%", position: "relative" }} />
+        <div className="mt-3 h-1.5 rounded-full overflow-hidden" style={{ background: "var(--color-muted)" }}>
+          <motion.div initial={{ width: 0 }} animate={{ width: `${widthPct}%` }} transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }} style={{ background: color, height: "100%" }} />
         </div>
         {/* Quick add */}
         <div className="flex items-center gap-1 mt-3">

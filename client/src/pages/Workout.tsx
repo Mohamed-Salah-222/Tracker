@@ -3,7 +3,6 @@ import { motion } from "motion/react";
 import { api } from "../lib/api";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
-import { Label } from "../components/ui/label";
 import { Card, CardContent } from "../components/ui/card";
 import { Checkbox } from "../components/ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "../components/ui/dialog";
@@ -27,35 +26,7 @@ type SectionKind = "warmup" | "training" | "abs";
 
 type WorkoutDef = Record<SectionKind, Exercise[]>;
 
-const WARMUP_UPPER_A_AND_LOWER_B_HEAD: Exercise[] = [
-  { id: "treadmill-15", name: "15 min Treadmill", sets: 1, reps: "-" },
-];
-
-const WARMUP_UA: Exercise[] = [
-  ...WARMUP_UPPER_A_AND_LOWER_B_HEAD,
-  { id: "arm-swing-front", name: "Arm Swing Front", sets: 3, reps: "15" },
-  { id: "arm-cycle", name: "Arm Cycle", sets: 3, reps: "15" },
-  { id: "arm-sides", name: "Arm Sides", sets: 3, reps: "15" },
-  { id: "knee-swing", name: "Knee Swing", sets: 3, reps: "15" },
-  { id: "warmup-squats", name: "Squats", sets: 3, reps: "15" },
-];
-
-const WARMUP_LA_AND_UB: Exercise[] = [
-  { id: "treadmill-15", name: "15 min Treadmill", sets: 1, reps: "-" },
-  { id: "arm-swing-front", name: "Arm Swing Front", sets: 3, reps: "15" },
-  { id: "arm-cycle", name: "Arm Cycle", sets: 3, reps: "15" },
-  { id: "waist-twist", name: "Waist Twist", sets: 3, reps: "15" },
-  { id: "knee-swing", name: "Knee Swing", sets: 3, reps: "15" },
-  { id: "leg-swing", name: "Leg Swing", sets: 3, reps: "15" },
-];
-
-const WARMUP_LB: Exercise[] = [
-  { id: "treadmill-15", name: "15 min Treadmill", sets: 1, reps: "-" },
-  { id: "knee-raises-warmup", name: "Knee Raises", sets: 3, reps: "15" },
-  { id: "leg-raises-warmup", name: "Leg Raises", sets: 3, reps: "15" },
-  { id: "warmup-squats", name: "Squats", sets: 3, reps: "15" },
-  { id: "warmup-jumps", name: "Jumps", sets: 3, reps: "15" },
-];
+const WARMUP_TREADMILL: Exercise[] = [{ id: "treadmill-30", name: "30 min Treadmill", sets: 1, reps: "-" }];
 
 const TRAINING_UPPER_A: Exercise[] = [
   { id: "chest-press-machine", name: "Chest Press Machine", sets: 3, reps: "12" },
@@ -115,10 +86,10 @@ const ABS_LOWER_B: Exercise[] = [
 type WorkoutType = "upperA" | "lowerA" | "upperB" | "lowerB" | "rest";
 
 const PROGRAM: Record<Exclude<WorkoutType, "rest">, WorkoutDef> = {
-  upperA: { warmup: WARMUP_UA, training: TRAINING_UPPER_A, abs: ABS_UPPER_A },
-  lowerA: { warmup: WARMUP_LA_AND_UB, training: TRAINING_LOWER, abs: ABS_LOWER_A },
-  upperB: { warmup: WARMUP_LA_AND_UB, training: TRAINING_UPPER_B, abs: ABS_UPPER_B },
-  lowerB: { warmup: WARMUP_LB, training: TRAINING_LOWER, abs: ABS_LOWER_B },
+  upperA: { warmup: WARMUP_TREADMILL, training: TRAINING_UPPER_A, abs: ABS_UPPER_A },
+  lowerA: { warmup: WARMUP_TREADMILL, training: TRAINING_LOWER, abs: ABS_LOWER_A },
+  upperB: { warmup: WARMUP_TREADMILL, training: TRAINING_UPPER_B, abs: ABS_UPPER_B },
+  lowerB: { warmup: WARMUP_TREADMILL, training: TRAINING_LOWER, abs: ABS_LOWER_B },
 };
 
 type Session = {
@@ -694,22 +665,13 @@ function ExerciseCard({ exercise, sessionId, existingSets, lastSession, onChange
 // =====================================================================
 // RestDayCard
 // =====================================================================
+const MANDATORY_WALK_MINUTES = 60;
+
 function RestDayCard({ session, onChanged, onDelete }: { session: Session; onChanged: (patch: Partial<Session>) => void; onDelete: () => void }) {
-  const [walkMin, setWalkMin] = useState(session.walkMinutes.toString());
-  const [walkKm, setWalkKm] = useState(session.walkDistanceKm.toString());
+  const walked = session.walkMinutes >= MANDATORY_WALK_MINUTES;
 
-  useEffect(() => {
-    setWalkMin(session.walkMinutes.toString());
-    setWalkKm(session.walkDistanceKm.toString());
-  }, [session.walkMinutes, session.walkDistanceKm]);
-
-  const commitMin = () => {
-    const n = parseFloat(walkMin);
-    if (!isNaN(n) && n >= 0) onChanged({ walkMinutes: n });
-  };
-  const commitKm = () => {
-    const n = parseFloat(walkKm);
-    if (!isNaN(n) && n >= 0) onChanged({ walkDistanceKm: n });
+  const toggleWalked = () => {
+    onChanged({ walkMinutes: walked ? 0 : MANDATORY_WALK_MINUTES });
   };
 
   return (
@@ -724,44 +686,16 @@ function RestDayCard({ session, onChanged, onDelete }: { session: Session; onCha
             <div className="text-3xl md:text-4xl font-semibold tracking-tight" style={{ color: "var(--color-workout-rest)" }}>
               Take it easy
             </div>
-            <div className="text-sm text-muted-foreground mt-2">A 30-minute walk is optional but encouraged.</div>
 
-            <div className="border-t border-border mt-5 pt-5 grid grid-cols-2 gap-4">
-              <div className="space-y-1.5">
-                <Label className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Walk duration</Label>
-                <div className="flex items-center gap-1.5">
-                  <Input
-                    type="number"
-                    min="0"
-                    value={walkMin}
-                    onChange={(e) => setWalkMin(e.target.value)}
-                    onBlur={commitMin}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-                    }}
-                    className="font-mono tabular-nums"
-                  />
-                  <span className="text-xs text-muted-foreground">min</span>
-                </div>
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Distance</Label>
-                <div className="flex items-center gap-1.5">
-                  <Input
-                    type="number"
-                    step="0.1"
-                    min="0"
-                    value={walkKm}
-                    onChange={(e) => setWalkKm(e.target.value)}
-                    onBlur={commitKm}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-                    }}
-                    className="font-mono tabular-nums"
-                  />
-                  <span className="text-xs text-muted-foreground">km</span>
-                </div>
-              </div>
+            <div className="border-t border-border mt-5 pt-5">
+              <button
+                type="button"
+                onClick={toggleWalked}
+                className={`w-full flex items-center gap-3 rounded-md border border-border p-3 hover:bg-muted/40 transition-colors text-left ${walked ? "opacity-70" : ""}`}
+              >
+                <Checkbox checked={walked} onCheckedChange={toggleWalked} />
+                <span className={`text-sm font-medium ${walked ? "line-through text-muted-foreground" : ""}`}>60 min walk</span>
+              </button>
             </div>
           </CardContent>
         </Card>
@@ -781,12 +715,12 @@ function RestDayCard({ session, onChanged, onDelete }: { session: Session; onCha
 // WorkoutPickerDialog
 // =====================================================================
 function WorkoutPickerDialog({ open, onOpenChange, suggested, currentType, onPick }: { open: boolean; onOpenChange: (b: boolean) => void; suggested: WorkoutType; currentType: WorkoutType | null; onPick: (type: WorkoutType) => void }) {
-  const options: { type: WorkoutType; label: string; desc: string }[] = [
-    { type: "upperA", label: "Upper A", desc: "Chest/Shoulders/Arms - machines" },
-    { type: "lowerA", label: "Lower A", desc: "Legs - press + extensions" },
-    { type: "upperB", label: "Upper B", desc: "Chest/Shoulders/Arms - barbells + cables" },
-    { type: "lowerB", label: "Lower B", desc: "Legs - same lifts, different warmup" },
-    { type: "rest", label: "Rest day", desc: "Optional walk" },
+  const options: { type: WorkoutType; label: string }[] = [
+    { type: "upperA", label: "Upper A" },
+    { type: "lowerA", label: "Lower A" },
+    { type: "upperB", label: "Upper B" },
+    { type: "lowerB", label: "Lower B" },
+    { type: "rest", label: "Rest day" },
   ];
 
   return (
@@ -803,10 +737,7 @@ function WorkoutPickerDialog({ open, onOpenChange, suggested, currentType, onPic
               <button key={opt.type} type="button" onClick={() => onPick(opt.type)} disabled={isCurrent} className="w-full text-left rounded-md border border-border p-3 hover:border-border-strong hover:bg-muted/40 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-between gap-3">
                 <div className="flex items-center gap-3 min-w-0">
                   <WorkoutTypeBadge type={opt.type} />
-                  <div className="min-w-0">
-                    <div className="text-sm font-medium">{opt.label}</div>
-                    <div className="text-xs text-muted-foreground">{opt.desc}</div>
-                  </div>
+                  <div className="text-sm font-medium min-w-0">{opt.label}</div>
                 </div>
                 {isSuggested && (
                   <span className="text-[10px] uppercase tracking-wider font-medium" style={{ color: "var(--color-income)" }}>
