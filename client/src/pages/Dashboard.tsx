@@ -1,1537 +1,739 @@
-import { useCallback, useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "motion/react";
 import { api } from "../lib/api";
 import { Card, CardContent } from "../components/ui/card";
 import { Button } from "../components/ui/button";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "../components/ui/dialog";
-import { ResponsiveContainer, AreaChart, Area, BarChart, Bar, Tooltip, XAxis, YAxis, CartesianGrid } from "recharts";
-import { Wallet as WalletIcon, CreditCard, CheckSquare, Dumbbell, Droplet, ArrowRight, Flame, Snowflake, AlertCircle, Cake, Eye, EyeOff, Repeat, Scale, ShoppingBag, GraduationCap, ExternalLink } from "lucide-react";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../components/ui/dialog";
+import { Input } from "../components/ui/input";
+import { Checkbox } from "../components/ui/checkbox";
+import {
+  AlarmClock,
+  BarChart3,
+  Beef,
+  BookOpen,
+  Brain,
+  BriefcaseBusiness,
+  CalendarCheck,
+  Check,
+  CheckSquare,
+  ChevronLeft,
+  ChevronRight,
+  Droplets,
+  Dumbbell,
+  Flame,
+  FolderKanban,
+  Footprints,
+  Languages,
+  ListChecks,
+  Moon,
+  Pill,
+  SlidersHorizontal,
+  Target,
+  X,
+} from "lucide-react";
 
-// ====================================================================
-// TYPES
-// ====================================================================
-type SparkPoint = { date: string; value: number };
+type Day = {
+  iso: string;
+  label: string;
+  day: number;
+  weekend: boolean;
+  week: number;
+  active: boolean;
+};
 
-type Task = {
-  _id: string;
-  title: string;
+type DailyCell = {
   date: string;
-  done: boolean;
+  checked: boolean;
+  completed: boolean;
+  editable: boolean;
+  state?: "done" | "excused" | null;
+  detail?: string | null;
+  value?: number;
+  target?: number;
 };
 
-type Wallet = { _id: string; name: string; balance: number };
-type Bank = { _id: string; name: string; balance: number; currency: "EGP" | "USD" };
-
-export type Subscription = {
-  _id: string;
-  name: string;
-  price: number;
-  sourceNameSnapshot: string;
-  billingDay: number;
-};
-
-type WishlistItem = {
-  _id: string;
-  name: string;
-  price: number;
-  priority: "high" | "medium" | "low";
-  link: string;
-  bought: boolean;
-};
-
-type Expense = {
-  _id: string;
-  name: string;
+type AmountCell = {
+  date: string;
   amount: number;
-  category: string;
-  sourceNameSnapshot: string;
-  date: string;
+  checked: boolean;
+  completed: boolean;
+  editable: boolean;
+  target: number;
+  weekend: boolean;
+  state?: "done" | "excused" | null;
+  detail?: string | null;
 };
 
-type FridgeItem = { _id: string; foodNameSnapshot: string; count: number };
+type TrackerCellState = "done" | "excused" | null;
 
-type WorkoutSession = {
-  _id: string;
-  type: "upperA" | "lowerA" | "upperB" | "lowerB" | "rest";
-  completedAt: string | null;
-  warmupDone: boolean;
-  finisherDone: boolean;
-  walkMinutes: number;
+type TrackerRow = {
+  id: string;
+  label: string;
+  description: string;
+  icon: string;
+  kind: "daily-check" | "target-count" | "steps-count" | "work-money";
+  percent: number;
+  goal: number;
+  actual: number;
+  left: number;
+  doneCount?: number;
+  cells: DailyCell[] | AmountCell[];
 };
 
-type Dash = {
+type DashboardResponse = {
   today: string;
-  income: { monthTotal: number; todayAmount: number; sparkline: SparkPoint[] };
-  payments: {
-    walletTotal: number;
-    totalEgp: number;
-    totalUsd: number;
-    spentToday: number;
-    spentMonth: number;
-    externalFundedToday: number;
-    wallets: Wallet[];
-    banks: Bank[];
-    recentExpenses: Expense[];
-    sparkline: SparkPoint[];
+  month: {
+    key: string;
+    label: string;
+    start: string;
+    end: string;
+    days: Day[];
   };
-  subscriptions: {
-    monthlyTotal: number;
-    count: number;
-    next: {
-      name: string;
-      price: number;
-      billingDay: number;
-      daysUntil: number;
-      sourceNameSnapshot: string;
-    } | null;
+  metrics: {
+    overallPercent: number;
+    completedRows: number;
+    totalRows: number;
+    totalGoal: number;
+    totalActual: number;
+    goalsLeft: number;
+    gymCount: number;
+    workHours: number;
+    misses: { id: string; label: string; left: number; percent: number }[];
+    topHabits: { id: string; label: string; percent: number; actual: number; goal: number }[];
+    dayProgress: { date: string; day: number; label: string; percent: number }[];
   };
-  weight: {
-    current: number | null;
-    target: number;
-    earliest: { date: string; weightKg: number } | null;
-    lostSinceStart: number;
-    remainingToTarget: number;
-    sparkline: { date: string; value: number }[];
-  };
-  wishlist: {
-    totalToBuy: number;
-    countLeft: number;
-    topPriority: WishlistItem[];
-  };
-  career: {
-    doneCount: number;
-    totalTopics: number;
-    percent: number;
-    recentlyCompleted: number;
-  };
-  tasksToday: { list: Task[]; done: number; total: number };
-  tasksUpcoming: { list: Task[] };
-  calories: {
-    todayCal: number;
-    todayProtein: number;
-    todayCarbs: number;
-    todayFat: number;
-    waterTodayMl: number;
-    isCheat: boolean;
-    sparkline: SparkPoint[];
-  };
-  goal: {
-    caloriesTarget: number;
-    proteinTarget: number;
-    carbsTarget: number;
-    fatTarget: number;
-    waterMin: number;
-    waterTarget: number;
-    waterMax: number;
-  };
-  fridge: { items: FridgeItem[]; total: number; emptyCount: number };
-  workout: {
-    session: WorkoutSession | null;
-    suggested: "upperA" | "lowerA" | "upperB" | "lowerB" | null;
-    setsDone: number;
-    setsTotal: number;
-    streak: number;
-  };
+  rows: TrackerRow[];
 };
 
-// ====================================================================
-// HELPERS
-// ====================================================================
-const fmtUSD = (n: number) => `$${n.toFixed(2)}`;
-const fmtEGP = (n: number) => `${Math.round(n).toLocaleString("en-US")} L.E`;
+type AmountEdit = {
+  row: TrackerRow;
+  cell: DailyCell | AmountCell;
+  title: string;
+  label: string;
+  placeholder: string;
+  target: number;
+};
 
-// Mask money values when hidden. Length roughly matches what the real
-// number would look like so the layout doesn't jump.
-const maskUSD = () => "$•••••";
-const maskEGP = () => "•••••• L.E";
-const maskedOrUSD = (n: number, hidden: boolean) => (hidden ? maskUSD() : fmtUSD(n));
-const maskedOrEGP = (n: number, hidden: boolean) => (hidden ? maskEGP() : fmtEGP(n));
-const round = (n: number) => Math.round(n);
-const round1 = (n: number) => Math.round(n * 10) / 10;
+const TRACKER_VISIBILITY_KEY = "lifetracker.dashboard.visibleRows.v4";
+const DEFAULT_VISIBLE_IDS = ["wake", "sleep", "gym", "reading", "english", "planning", "tasks", "projects", "projectGym", "projectMedical", "focus", "vitamins", "steps", "work", "calories", "protein", "water"];
+const MIN_MONTH_KEY = "2026-07";
 
-function workoutLabel(type: WorkoutSession["type"]) {
-  if (type === "upperA") return "Upper A";
-  if (type === "lowerA") return "Lower A";
-  if (type === "upperB") return "Upper B";
-  if (type === "lowerB") return "Lower B";
-  return "Rest day";
-}
-
-// Motion presets
 const fadeUp = {
   initial: { opacity: 0, y: 8 },
   animate: { opacity: 1, y: 0 },
   transition: { duration: 0.25, ease: [0.16, 1, 0.3, 1] as const },
 };
-const stagger = (i: number) => ({
-  ...fadeUp,
-  transition: { ...fadeUp.transition, delay: i * 0.04 },
-});
 
-// ====================================================================
-// MAIN
-// ====================================================================
-type OpenCard = "targets" | "tasks" | "workout" | "fridge" | "income" | "payments" | "subscriptions" | null;
-type YearCard = "weight" | "wishlist" | "career" | null;
-type MoneyHidden = { income: boolean; payments: boolean; subscriptions: boolean };
+const iconMap = {
+  "alarm-clock": AlarmClock,
+  moon: Moon,
+  dumbbell: Dumbbell,
+  "book-open": BookOpen,
+  languages: Languages,
+  "calendar-check": CalendarCheck,
+  "list-checks": ListChecks,
+  "folder-kanban": FolderKanban,
+  brain: Brain,
+  pill: Pill,
+  footprints: Footprints,
+  "briefcase-business": BriefcaseBusiness,
+  beef: Beef,
+  droplet: Droplets,
+  flame: Flame,
+  "check-square": CheckSquare,
+};
 
-const MONEY_HIDDEN_KEY = "dashboard:money-hidden-v2";
-const DEFAULT_MONEY_HIDDEN: MoneyHidden = { income: false, payments: false, subscriptions: false };
+const ACCENT_TONE = { base: "#18181b", dark: "#000000", soft: "#d4d4d4", faint: "#f5f5f5", ring: "#a3a3a3" };
+const ROW_CHROME = { base: "#262626", dark: "#171717" };
+
+function trackerTone(_id: string) {
+  return ACCENT_TONE;
+}
+
+function readVisibleRows() {
+  if (typeof window === "undefined") return DEFAULT_VISIBLE_IDS;
+  try {
+    const raw = window.localStorage.getItem(TRACKER_VISIBILITY_KEY);
+    if (!raw) return DEFAULT_VISIBLE_IDS;
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) && parsed.every((item) => typeof item === "string") ? parsed : DEFAULT_VISIBLE_IDS;
+  } catch {
+    return DEFAULT_VISIBLE_IDS;
+  }
+}
+
+function shiftMonth(monthKey: string, amount: number) {
+  const [year, month] = monthKey.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1 + amount, 1));
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+function monthKeyToNumber(monthKey: string) {
+  const [year, month] = monthKey.split("-").map(Number);
+  return year * 12 + month;
+}
+
+function displayNumber(value: number) {
+  return Number.isInteger(value) ? value.toLocaleString("en-US") : value.toLocaleString("en-US", { maximumFractionDigits: 1 });
+}
+
+function getCell(row: TrackerRow, date: string) {
+  return row.cells.find((cell) => cell.date === date);
+}
+
+function isJulyWarmupDay(day: Day) {
+  return day.iso >= "2026-07-01" && day.iso <= "2026-07-12";
+}
+
+function isAmountCell(cell: DailyCell | AmountCell): cell is AmountCell {
+  return "amount" in cell;
+}
+
+function formatAnalysisValue(row: TrackerRow, value: number) {
+  if (row.id === "work") return `$${displayNumber(value)}`;
+  return displayNumber(value);
+}
+
+function monthGridTemplate(dayCount: number) {
+  return `170px repeat(${dayCount}, minmax(32px, 1fr))`;
+}
+
+function monthGridMinWidth(dayCount: number) {
+  return 170 + dayCount * 32;
+}
+
+function weekGroups(days: Day[]) {
+  const groups: { week: number; days: Day[] }[] = [];
+  for (const day of days) {
+    const current = groups[groups.length - 1];
+    if (!current || current.week !== day.week) groups.push({ week: day.week, days: [day] });
+    else current.days.push(day);
+  }
+  return groups;
+}
 
 export default function Dashboard() {
-  const [data, setData] = useState<Dash | null>(null);
-  const [openCard, setOpenCard] = useState<OpenCard>(null);
-  const [openYearCard, setOpenYearCard] = useState<YearCard>(null);
-  const [moneyHidden, setMoneyHidden] = useState<MoneyHidden>(() => {
-    try {
-      const raw = localStorage.getItem(MONEY_HIDDEN_KEY);
-      if (!raw) return DEFAULT_MONEY_HIDDEN;
-      const parsed = JSON.parse(raw) as Partial<MoneyHidden>;
-      return { ...DEFAULT_MONEY_HIDDEN, ...parsed };
-    } catch {
-      return DEFAULT_MONEY_HIDDEN;
-    }
-  });
-
-  const toggleMoneyHidden = useCallback((key: keyof MoneyHidden) => {
-    setMoneyHidden((prev) => {
-      const next = { ...prev, [key]: !prev[key] };
-      try {
-        localStorage.setItem(MONEY_HIDDEN_KEY, JSON.stringify(next));
-      } catch {
-        // ignore quota errors
-      }
-      return next;
-    });
-  }, []);
+  const [data, setData] = useState<DashboardResponse | null>(null);
+  const [monthKey, setMonthKey] = useState<string | null>(null);
+  const [amountEdit, setAmountEdit] = useState<AmountEdit | null>(null);
+  const [amountValue, setAmountValue] = useState("");
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [visibleIds, setVisibleIds] = useState<string[]>(readVisibleRows);
 
   const load = useCallback(async () => {
-    try {
-      const r = await api.get<Dash>("/dashboard");
-      setData(r.data);
-    } catch {
-      // toast handled at axios level if you have it
-    }
-  }, []);
+    const query = monthKey ? `?month=${monthKey}` : "";
+    const res = await api.get<DashboardResponse>(`/dashboard${query}`);
+    setData(res.data);
+  }, [monthKey]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
+  useEffect(() => {
+    window.localStorage.setItem(TRACKER_VISIBILITY_KEY, JSON.stringify(visibleIds));
+  }, [visibleIds]);
+
+  const rows = data?.rows ?? [];
+  const visibleRows = useMemo(() => {
+    const selected = rows.filter((row) => visibleIds.includes(row.id));
+    return selected.length ? selected : rows;
+  }, [rows, visibleIds]);
+
+  const visibleStats = useMemo(() => {
+    const totalGoal = visibleRows.reduce((sum, row) => sum + row.goal, 0);
+    const totalActual = visibleRows.reduce((sum, row) => sum + Math.min(row.actual, row.goal), 0);
+    const overallPercent = visibleRows.length ? Math.round(visibleRows.reduce((sum, row) => sum + Math.min(row.percent, 100), 0) / visibleRows.length) : 0;
+    const completedRows = visibleRows.filter((row) => row.percent >= 100).length;
+    const misses = visibleRows
+      .filter((row) => row.left > 0)
+      .map((row) => ({ id: row.id, label: row.label, left: row.left, percent: row.percent }))
+      .sort((a, b) => a.percent - b.percent)
+      .slice(0, 5);
+    const topHabits = [...visibleRows].sort((a, b) => b.percent - a.percent).slice(0, 10);
+    return { totalGoal, totalActual, overallPercent, completedRows, misses, topHabits };
+  }, [visibleRows]);
+
+  const dayProgress = useMemo(() => {
+    if (!data) return [];
+    const checkRows = visibleRows;
+    return data.month.days.map((day) => {
+      if (isJulyWarmupDay(day)) {
+        return {
+          date: day.iso,
+          day: day.day,
+          label: day.label,
+          percent: 100,
+        };
+      }
+      const done = checkRows.reduce((sum, row) => {
+        const cell = getCell(row, day.iso);
+        return sum + (cell?.checked ? 1 : 0);
+      }, 0);
+      return {
+        date: day.iso,
+        day: day.day,
+        label: day.label,
+        percent: checkRows.length ? Math.round((done / checkRows.length) * 100) : 0,
+      };
+    });
+  }, [data, visibleRows]);
+
+  const dailyStats = useMemo(() => {
+    if (!data) return { completed: 0, total: visibleRows.length };
+    const todayInMonth = data.month.days.some((day) => day.iso === data.today);
+    const date = todayInMonth ? data.today : null;
+    if (!date) return { completed: 0, total: visibleRows.length };
+    const completed = visibleRows.reduce((sum, row) => {
+      const cell = getCell(row, date);
+      return sum + (cell?.checked ? 1 : 0);
+    }, 0);
+    return { completed, total: visibleRows.length };
+  }, [data, visibleRows]);
+
+  const monthGroups = useMemo(() => (data ? weekGroups(data.month.days) : []), [data]);
+  const monthWeekStartDates = useMemo(() => new Set(monthGroups.map((group) => group.days[0]?.iso).filter(Boolean)), [monthGroups]);
+
+  const setCellState = async (row: TrackerRow, cell: DailyCell | AmountCell, state: TrackerCellState) => {
+    if (!cell.editable) return;
+    const nextChecked = state === "done" || state === "excused";
+    setData((current) => {
+      if (!current) return current;
+      return {
+        ...current,
+        rows: current.rows.map((candidate) =>
+          candidate.id === row.id
+            ? {
+                ...candidate,
+                cells: candidate.cells.map((candidateCell) =>
+                  candidateCell.date === cell.date
+                    ? {
+                        ...candidateCell,
+                        checked: nextChecked,
+                        completed: state === "done",
+                        state,
+                        ...(isAmountCell(candidateCell) ? { amount: state === "excused" ? 0 : candidateCell.amount } : {}),
+                      }
+                    : candidateCell,
+                ),
+              }
+            : candidate,
+        ),
+      };
+    });
+    await api.put(`/dashboard/tracker/${row.id}/${cell.date}`, { checked: nextChecked, state, ...(isAmountCell(cell) ? { amount: state === "excused" ? 0 : cell.amount } : {}) });
+    await load();
+  };
+
+  const openAmount = (row: TrackerRow, cell: DailyCell | AmountCell) => {
+    const current = isAmountCell(cell) ? cell.amount : cell.value;
+    setAmountValue(current ? String(current) : "");
+    setAmountEdit({
+      row,
+      cell,
+      title: row.kind === "work-money" ? "Log work" : "Log steps",
+      label: row.kind === "work-money" ? "Money made" : "Steps walked",
+      placeholder: row.kind === "work-money" ? "40" : "7000",
+      target: isAmountCell(cell) ? cell.target : cell.target ?? 1,
+    });
+  };
+
+  const saveAmount = async () => {
+    if (!amountEdit) return;
+    const amount = Number(amountValue || 0);
+    await api.put(`/dashboard/tracker/${amountEdit.row.id}/${amountEdit.cell.date}`, { checked: amount > 0, amount, state: amount > 0 ? "done" : null });
+    setAmountEdit(null);
+    await load();
+  };
+
+  const toggleVisible = (rowId: string) => {
+    setVisibleIds((current) => (current.includes(rowId) ? current.filter((id) => id !== rowId) : [...current, rowId]));
+  };
+
   if (!data) {
     return (
-      <div className="w-full max-w-[1100px] mx-auto py-8">
-        <motion.div animate={{ opacity: [0.4, 1, 0.4] }} transition={{ duration: 1.5, repeat: Infinity }} className="text-sm text-muted-foreground">
-          Loading dashboard…
+      <div className="min-h-[70vh] flex items-center justify-center text-sm text-muted-foreground">
+        <motion.div animate={{ opacity: [0.45, 1, 0.45] }} transition={{ duration: 1.5, repeat: Infinity }}>
+          Loading monthly tracker...
         </motion.div>
       </div>
     );
   }
 
-  const dateLabel = new Date(data.today).toLocaleDateString("en-US", {
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-    timeZone: "UTC",
-  });
-
-  // Greeting based on hour
-  const hour = new Date().getHours();
-  const greeting = hour < 5 ? "Late night" : hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
+  const isAtMinMonth = monthKeyToNumber(data.month.key) <= monthKeyToNumber(MIN_MONTH_KEY);
 
   return (
-    <div className="w-full max-w-[1100px] mx-auto space-y-5">
-      {/* ===== Header ===== */}
-      <motion.div {...fadeUp} className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+    <div className="w-full max-w-[1680px] md:max-h-[calc(100svh-3rem)] mx-auto flex flex-col gap-3 overflow-visible md:overflow-hidden rounded-[18px] md:rounded-[24px] border border-neutral-200 bg-white p-2.5 pb-24 md:p-4 text-neutral-900 shadow-[0_18px_50px_rgba(15,23,42,0.06)]">
+      <motion.div {...fadeUp} className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
         <div>
-          <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">{greeting}</div>
-          <h1 className="text-2xl md:text-3xl font-semibold tracking-tight mt-1">{dateLabel}</h1>
+          <div className="text-[10px] uppercase tracking-[0.22em] font-semibold text-neutral-500">Habit Tracker</div>
+          <h1 className="text-2xl md:text-3xl font-semibold tracking-tight mt-1 text-neutral-900">{data.month.label}</h1>
         </div>
-        <div className="flex items-end gap-4">
-          {data.workout.streak > 1 && (
-            <div className="text-right">
-              <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Workout streak</div>
-              <div className="text-xl font-semibold font-mono tabular-nums tracking-tight flex items-baseline gap-1 justify-end mt-0.5">
-                <Flame className="h-4 w-4 self-center" style={{ color: "var(--color-warning)" }} />
-                {data.workout.streak}
-                <span className="text-xs text-muted-foreground font-normal">days</span>
-              </div>
-            </div>
-          )}
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant="outline" size="icon" className="h-8 w-8 rounded-md border-neutral-200 bg-white text-neutral-700 shadow-sm hover:bg-neutral-50" disabled={isAtMinMonth} onClick={() => setMonthKey(shiftMonth(data.month.key, -1))} aria-label="Previous month">
+            <ChevronLeft className="h-4 w-4" />
+          </Button>
+          <div className="h-8 rounded-md border border-neutral-200 bg-white px-3.5 flex items-center text-xs font-semibold shadow-sm min-w-36 justify-center text-neutral-800">{data.month.label}</div>
+          <Button variant="outline" size="icon" className="h-8 w-8 rounded-md border-neutral-200 bg-white text-neutral-700 shadow-sm hover:bg-neutral-50" onClick={() => setMonthKey(shiftMonth(data.month.key, 1))} aria-label="Next month">
+            <ChevronRight className="h-4 w-4" />
+          </Button>
+          <Button variant="outline" className="h-8 rounded-md border-neutral-200 bg-white px-3 text-xs text-neutral-700 shadow-sm hover:bg-neutral-50" onClick={() => setPickerOpen(true)}>
+            <SlidersHorizontal className="h-3.5 w-3.5" />
+            Trackers
+          </Button>
         </div>
       </motion.div>
 
-      {/* ===== Bento grid =====
-        Desktop layout (3 cols):
-          [ TARGETS (2-col) ] [ TASKS (1-col, 2-row) ]
-          [ WORKOUT ] [ FRIDGE ] [    "    ]
-          [ INCOME ]  [ PAYMENTS ] [ SUBSCRIPTIONS ]
-      */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 md:auto-rows-min">
-        {/* Targets — big, spans 2 cols */}
-        <motion.div {...stagger(1)} className="md:col-span-2">
-          <TargetsCard data={data} onClick={() => setOpenCard("targets")} />
-        </motion.div>
-
-        {/* Tasks — tall, 1 col, spans 2 rows */}
-        <motion.div {...stagger(2)} className="md:row-span-2">
-          <TasksCard data={data} onClick={() => setOpenCard("tasks")} />
-        </motion.div>
-
-        {/* Workout — 1 col */}
-        <motion.div {...stagger(3)}>
-          <WorkoutCard data={data} onClick={() => setOpenCard("workout")} />
-        </motion.div>
-
-        {/* Fridge — 1 col */}
-        <motion.div {...stagger(4)}>
-          <FridgeCard data={data} onClick={() => setOpenCard("fridge")} />
-        </motion.div>
-
-        {/* Income */}
-        <motion.div {...stagger(5)}>
-          <IncomeCard data={data} onClick={() => setOpenCard("income")} hidden={moneyHidden.income} onToggleHidden={() => toggleMoneyHidden("income")} />
-        </motion.div>
-
-        {/* Payments */}
-        <motion.div {...stagger(6)}>
-          <PaymentsCard data={data} onClick={() => setOpenCard("payments")} hidden={moneyHidden.payments} onToggleHidden={() => toggleMoneyHidden("payments")} />
-        </motion.div>
-
-        {/* Subscriptions */}
-        <motion.div {...stagger(7)}>
-          <SubscriptionsCard data={data} onClick={() => setOpenCard("subscriptions")} hidden={moneyHidden.subscriptions} onToggleHidden={() => toggleMoneyHidden("subscriptions")} />
-        </motion.div>
-      </div>
-
-      {/* ===== Year so far ===== */}
-      <motion.div {...stagger(8)} className="pt-3">
-        <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-3">Year so far</div>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <motion.div {...stagger(9)}>
-            <WeightCard data={data} onClick={() => setOpenYearCard("weight")} />
-          </motion.div>
-          <motion.div {...stagger(10)}>
-            <WishlistCard data={data} onClick={() => setOpenYearCard("wishlist")} />
-          </motion.div>
-          <motion.div {...stagger(11)}>
-            <CareerCard data={data} onClick={() => setOpenYearCard("career")} />
-          </motion.div>
-        </div>
+      <motion.div {...fadeUp} className="grid grid-cols-1 xl:grid-cols-[1.25fr_0.85fr_260px] gap-3 items-stretch">
+        <ChartPanel title="Daily Progress" icon={BarChart3}>
+          <DailyProgressChart items={dayProgress} />
+        </ChartPanel>
+        <ChartPanel title="Weekly Blocks" icon={CalendarCheck}>
+          <WeekStrip days={data.month.days} progress={dayProgress} />
+        </ChartPanel>
+        <ProgressDonut percent={visibleStats.overallPercent} completed={dailyStats.completed} total={dailyStats.total} />
       </motion.div>
 
-      {/* ===== Modals ===== */}
-      <TargetsModal open={openCard === "targets"} onClose={() => setOpenCard(null)} data={data} />
-      <TasksModal open={openCard === "tasks"} onClose={() => setOpenCard(null)} data={data} />
-      <WorkoutModal open={openCard === "workout"} onClose={() => setOpenCard(null)} data={data} />
-      <FridgeModal open={openCard === "fridge"} onClose={() => setOpenCard(null)} data={data} />
-      <IncomeModal open={openCard === "income"} onClose={() => setOpenCard(null)} data={data} hidden={moneyHidden.income} />
-      <PaymentsModal open={openCard === "payments"} onClose={() => setOpenCard(null)} data={data} hidden={moneyHidden.payments} />
-      <SubscriptionsCardModal open={openCard === "subscriptions"} onClose={() => setOpenCard(null)} data={data} hidden={moneyHidden.subscriptions} />
-      <WeightCardModal open={openYearCard === "weight"} onClose={() => setOpenYearCard(null)} data={data} />
-      <WishlistCardModal open={openYearCard === "wishlist"} onClose={() => setOpenYearCard(null)} data={data} />
-      <CareerCardModal open={openYearCard === "career"} onClose={() => setOpenYearCard(null)} data={data} />
-    </div>
-  );
-}
-
-// ====================================================================
-// RING — Apple Watch style
-// ====================================================================
-function Ring({ pct, color, size = 96, strokeWidth = 10, trackColor = "var(--color-muted)", children }: { pct: number; color: string; size?: number; strokeWidth?: number; trackColor?: string; children?: React.ReactNode }) {
-  const r = (size - strokeWidth) / 2;
-  const C = 2 * Math.PI * r;
-  // Clamp to 0-100 for the visible arc; if overflow, show a second darker overlay
-  const clamped = Math.max(0, Math.min(100, pct));
-  const offset = C * (1 - clamped / 100);
-
-  return (
-    <div className="relative inline-flex items-center justify-center" style={{ width: size, height: size }}>
-      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="-rotate-90">
-        {/* Track */}
-        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={trackColor} strokeWidth={strokeWidth} />
-        {/* Progress */}
-        <motion.circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeDasharray={C} initial={{ strokeDashoffset: C }} animate={{ strokeDashoffset: offset }} transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }} />
-      </svg>
-      <div className="absolute inset-0 flex flex-col items-center justify-center text-center">{children}</div>
-    </div>
-  );
-}
-
-// ====================================================================
-// CARDS
-// ====================================================================
-function CardShell({ children, onClick, className }: { children: React.ReactNode; onClick: () => void; className?: string }) {
-  return (
-    <motion.button type="button" whileHover={{ y: -2 }} whileTap={{ scale: 0.99 }} transition={{ type: "spring", stiffness: 400, damping: 30 }} onClick={onClick} className={`w-full text-left h-full ${className ?? ""}`}>
-      <Card className="h-full hover:border-border-strong transition-colors">
-        <CardContent className="p-4 md:p-5 h-full flex flex-col">{children}</CardContent>
-      </Card>
-    </motion.button>
-  );
-}
-
-function MoneyEyeButton({ hidden, onToggle }: { hidden: boolean; onToggle: () => void }) {
-  return (
-    <Button
-      variant="ghost"
-      size="icon"
-      className="h-6 w-6 flex-shrink-0"
-      onClick={(e) => {
-        e.stopPropagation();
-        onToggle();
-      }}
-      aria-label={hidden ? "Show money" : "Hide money"}
-      title={hidden ? "Show money" : "Hide money"}
-    >
-      {hidden ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-    </Button>
-  );
-}
-
-function nextRenewalText(daysUntil: number) {
-  if (daysUntil === 0) return "today";
-  if (daysUntil === 1) return "tomorrow";
-  return `in ${daysUntil}d`;
-}
-
-function priorityColor(priority: WishlistItem["priority"]) {
-  if (priority === "high") return "var(--color-expense)";
-  if (priority === "medium") return "var(--color-warning)";
-  return "var(--color-muted-foreground)";
-}
-
-// ----- TargetsCard -----
-function TargetsCard({ data, onClick }: { data: Dash; onClick: () => void }) {
-  const { calories, goal } = data;
-  const cheat = calories.isCheat;
-
-  // Calorie percentage: 100% at target
-  const calPct = goal.caloriesTarget > 0 ? (calories.todayCal / goal.caloriesTarget) * 100 : 0;
-  let calColor = "var(--color-income)";
-  if (cheat) calColor = "var(--color-muted-foreground)";
-  else if (calories.todayCal > goal.caloriesTarget) calColor = "var(--color-expense)";
-
-  const proteinPct = goal.proteinTarget > 0 ? (calories.todayProtein / goal.proteinTarget) * 100 : 0;
-  const proteinOver = calories.todayProtein > goal.proteinTarget;
-  const proteinColor = cheat ? "var(--color-muted-foreground)" : proteinOver ? "var(--color-expense)" : calories.todayProtein > 0 ? "var(--color-income)" : "var(--color-protein)";
-
-  // Water: 100% at waterTarget
-  const waterPct = goal.waterTarget > 0 ? (calories.waterTodayMl / goal.waterTarget) * 100 : 0;
-  const waterAtMin = calories.waterTodayMl >= goal.waterMin;
-  const waterInTarget = calories.waterTodayMl >= goal.waterTarget;
-  const waterColor = cheat ? "var(--color-muted-foreground)" : waterInTarget ? "var(--color-income)" : waterAtMin ? "var(--color-water)" : "var(--color-water)";
-
-  return (
-    <CardShell onClick={onClick}>
-      <div className="flex items-center gap-2 mb-3">
-        <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Today's targets</span>
-        {cheat && (
-          <span
-            className="text-[10px] px-1.5 py-0.5 rounded border font-medium uppercase tracking-wider flex items-center gap-1"
-            style={{
-              color: "var(--color-meal-snack)",
-              background: "var(--color-meal-snack-bg)",
-              borderColor: "color-mix(in oklch, var(--color-meal-snack), transparent 70%)",
-            }}
-          >
-            <Cake className="h-2.5 w-2.5" />
-            Cheat
-          </span>
-        )}
-      </div>
-
-      <div className="flex-1 grid grid-cols-3 gap-2 items-center">
-        {/* Calories */}
-        <div className="flex flex-col items-center">
-          <Ring pct={calPct} color={calColor}>
-            <div className="text-[9px] uppercase tracking-wider text-muted-foreground font-medium">Cal</div>
-            <div className="text-base font-semibold font-mono tabular-nums tracking-tight leading-tight" style={{ color: calColor }}>
-              {round(calories.todayCal)}
-            </div>
-            <div className="text-[9px] text-muted-foreground font-mono tabular-nums leading-tight">/{goal.caloriesTarget}</div>
-          </Ring>
-        </div>
-
-        {/* Protein */}
-        <div className="flex flex-col items-center">
-          <Ring pct={proteinPct} color={proteinColor}>
-            <div className="text-[9px] uppercase tracking-wider text-muted-foreground font-medium">Protein</div>
-            <div className="text-base font-semibold font-mono tabular-nums tracking-tight leading-tight" style={{ color: proteinColor }}>
-              {round1(calories.todayProtein)}
-            </div>
-            <div className="text-[9px] text-muted-foreground font-mono tabular-nums leading-tight">/{goal.proteinTarget}g</div>
-          </Ring>
-        </div>
-
-        {/* Water */}
-        <div className="flex flex-col items-center">
-          <Ring pct={waterPct} color={waterColor}>
-            <div className="text-[9px] uppercase tracking-wider text-muted-foreground font-medium flex items-center gap-0.5">
-              <Droplet className="h-2 w-2" />
-              Water
-            </div>
-            <div className="text-base font-semibold font-mono tabular-nums tracking-tight leading-tight" style={{ color: waterColor }}>
-              {(calories.waterTodayMl / 1000).toFixed(1)}
-            </div>
-            <div className="text-[9px] text-muted-foreground font-mono tabular-nums leading-tight">/{(goal.waterTarget / 1000).toFixed(1)}L</div>
-          </Ring>
-        </div>
-      </div>
-    </CardShell>
-  );
-}
-
-// ----- TasksCard -----
-function TasksCard({ data, onClick }: { data: Dash; onClick: () => void }) {
-  const { tasksToday } = data;
-  const allDone = tasksToday.total > 0 && tasksToday.done === tasksToday.total;
-  const empty = tasksToday.total === 0;
-
-  return (
-    <CardShell onClick={onClick}>
-      <div className="flex items-baseline justify-between mb-2">
-        <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium flex items-center gap-1.5">
-          <CheckSquare className="h-3 w-3" />
-          Today's tasks
-        </span>
-      </div>
-
-      <div className="flex items-baseline gap-1.5 mb-3">
-        <span className="text-3xl font-semibold font-mono tabular-nums tracking-tight" style={{ color: allDone ? "var(--color-income)" : "var(--color-foreground)" }}>
-          {tasksToday.done}
-        </span>
-        <span className="text-lg text-muted-foreground font-mono tabular-nums">/ {tasksToday.total}</span>
-      </div>
-
-      <div className="flex-1 space-y-1.5 min-h-0">
-        {empty && <div className="text-xs text-muted-foreground italic">No tasks for today.</div>}
-        {!empty &&
-          tasksToday.list.slice(0, 7).map((t) => (
-            <div key={t._id} className="text-xs flex items-center gap-1.5 truncate">
-              <span className={`h-1.5 w-1.5 rounded-full flex-shrink-0 ${t.done ? "" : "border border-foreground/40"}`} style={t.done ? { background: "var(--color-income)" } : {}} />
-              <span className={`truncate ${t.done ? "line-through text-muted-foreground" : ""}`}>{t.title}</span>
-            </div>
-          ))}
-        {tasksToday.list.length > 7 && <div className="text-[10px] text-muted-foreground font-mono tabular-nums pt-1">+{tasksToday.list.length - 7} more</div>}
-      </div>
-    </CardShell>
-  );
-}
-
-// ----- WorkoutCard -----
-function WorkoutCard({ data, onClick }: { data: Dash; onClick: () => void }) {
-  const { workout } = data;
-  const session = workout.session;
-  const type = session?.type ?? workout.suggested ?? "upperA";
-  const isRest = session?.type === "rest";
-  const notStarted = !session;
-  const completed = !!session?.completedAt;
-
-  const pct = workout.setsTotal > 0 ? (workout.setsDone / workout.setsTotal) * 100 : 0;
-  const color = type === "upperA" || type === "upperB" ? "var(--color-workout-a)" : type === "lowerA" || type === "lowerB" ? "var(--color-workout-b)" : "var(--color-workout-rest)";
-
-  return (
-    <CardShell onClick={onClick}>
-      <div className="flex items-baseline justify-between mb-2">
-        <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium flex items-center gap-1.5">
-          <Dumbbell className="h-3 w-3" />
-          Workout
-        </span>
-        {completed && (
-          <span className="text-[10px] uppercase tracking-wider font-medium" style={{ color: "var(--color-income)" }}>
-            Done
-          </span>
-        )}
-      </div>
-
-      <div className="flex-1 flex flex-col justify-between">
-        <div>
-          <div className="text-sm font-semibold tracking-tight" style={{ color }}>
-            {notStarted ? `Suggested: ${workoutLabel(workout.suggested ?? "upperA")}` : workoutLabel(type)}
-          </div>
-          {!notStarted && !isRest && (
-            <div className="text-xs text-muted-foreground font-mono tabular-nums mt-0.5">
-              {workout.setsDone}/{workout.setsTotal} sets
-            </div>
-          )}
-          {!notStarted && isRest && session.walkMinutes > 0 && <div className="text-xs text-muted-foreground font-mono tabular-nums mt-0.5">{session.walkMinutes} min walk</div>}
-        </div>
-
-        {!notStarted && !isRest && (
-          <div className="h-1.5 rounded-full overflow-hidden mt-3" style={{ background: "var(--color-muted)" }}>
-            <motion.div initial={{ width: 0 }} animate={{ width: `${pct}%` }} transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }} style={{ background: color, height: "100%" }} />
-          </div>
-        )}
-
-        {notStarted && <div className="text-[10px] text-muted-foreground mt-2">Click to start</div>}
-      </div>
-    </CardShell>
-  );
-}
-
-// ----- FridgeCard -----
-function FridgeCard({ data, onClick }: { data: Dash; onClick: () => void }) {
-  const { fridge } = data;
-  const hasEmpty = fridge.emptyCount > 0;
-
-  return (
-    <CardShell onClick={onClick}>
-      <div className="flex items-baseline justify-between mb-2">
-        <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium flex items-center gap-1.5">
-          <Snowflake className="h-3 w-3" />
-          Fridge
-        </span>
-        {hasEmpty && (
-          <span
-            className="text-[10px] px-1.5 py-0.5 rounded border font-medium uppercase tracking-wider flex items-center gap-1"
-            style={{
-              color: "var(--color-expense)",
-              background: "var(--color-card)",
-              borderColor: "color-mix(in oklch, var(--color-expense), transparent 60%)",
-            }}
-          >
-            <AlertCircle className="h-2.5 w-2.5" />
-            {fridge.emptyCount} empty
-          </span>
-        )}
-      </div>
-
-      <div className="flex-1 flex flex-col justify-between">
-        <div className="flex items-baseline gap-1.5">
-          <span className="text-3xl font-semibold font-mono tabular-nums tracking-tight" style={{ color: fridge.total > 0 ? "var(--color-foreground)" : "var(--color-muted-foreground)" }}>
-            {fridge.total}
-          </span>
-          <span className="text-xs text-muted-foreground font-medium">portions</span>
-        </div>
-        <div className="text-[10px] text-muted-foreground font-mono tabular-nums">
-          {fridge.items.length} {fridge.items.length === 1 ? "item" : "items"}
-        </div>
-      </div>
-    </CardShell>
-  );
-}
-
-// ----- IncomeCard -----
-function IncomeCard({ data, onClick, hidden, onToggleHidden }: { data: Dash; onClick: () => void; hidden: boolean; onToggleHidden: () => void }) {
-  const { income } = data;
-
-  return (
-    <CardShell onClick={onClick}>
-      <div className="flex items-baseline justify-between mb-2">
-        <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium flex items-center gap-1.5">
-          <WalletIcon className="h-3 w-3" />
-          Income · month
-        </span>
-        <MoneyEyeButton hidden={hidden} onToggle={onToggleHidden} />
-      </div>
-
-      <div className="flex items-end justify-between gap-3 flex-1">
-        <div>
-          <div className="text-2xl font-semibold font-mono tabular-nums tracking-tight" style={{ color: "var(--color-income)" }}>
-            {maskedOrUSD(income.monthTotal, hidden)}
-          </div>
-          <div className="text-[10px] text-muted-foreground font-mono tabular-nums mt-0.5">Today: {maskedOrUSD(income.todayAmount, hidden)}</div>
-        </div>
-        <div className="h-12 w-24 flex-shrink-0">
-          {hidden ? (
-            <div className="h-full w-full rounded-md" style={{ background: "var(--color-muted)" }} />
-          ) : (
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={income.sparkline}>
-                <defs>
-                  <linearGradient id="dashIncomeFill" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="var(--color-income)" stopOpacity={0.4} />
-                    <stop offset="100%" stopColor="var(--color-income)" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <Area type="monotone" dataKey="value" stroke="var(--color-income)" strokeWidth={1.5} fill="url(#dashIncomeFill)" />
-              </AreaChart>
-            </ResponsiveContainer>
-          )}
-        </div>
-      </div>
-    </CardShell>
-  );
-}
-
-// ----- PaymentsCard -----
-function PaymentsCard({ data, onClick, hidden, onToggleHidden }: { data: Dash; onClick: () => void; hidden: boolean; onToggleHidden: () => void }) {
-  const { payments } = data;
-
-  return (
-    <CardShell onClick={onClick}>
-      <div className="flex items-baseline justify-between mb-2">
-        <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium flex items-center gap-1.5">
-          <CreditCard className="h-3 w-3" />
-          Payments · month
-        </span>
-        <MoneyEyeButton hidden={hidden} onToggle={onToggleHidden} />
-      </div>
-
-      <div className="flex items-end justify-between gap-3 flex-1">
-        <div>
-          <div className="text-2xl font-semibold font-mono tabular-nums tracking-tight" style={{ color: "var(--color-expense)" }}>
-            {maskedOrEGP(payments.spentMonth, hidden)}
-          </div>
-          <div className="text-[10px] text-muted-foreground font-mono tabular-nums mt-0.5">Balance: {maskedOrEGP(payments.totalEgp, hidden)}</div>
-          {payments.totalUsd > 0 && <div className="text-[10px] text-muted-foreground font-mono tabular-nums mt-0.5">{maskedOrUSD(payments.totalUsd, hidden)} USD</div>}
-        </div>
-        <div className="h-12 w-24 flex-shrink-0">
-          {hidden ? (
-            <div className="h-full w-full rounded-md" style={{ background: "var(--color-muted)" }} />
-          ) : (
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={payments.sparkline}>
-                <Bar dataKey="value" fill="var(--color-expense)" radius={[2, 2, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          )}
-        </div>
-      </div>
-    </CardShell>
-  );
-}
-
-// ----- SubscriptionsCard -----
-function SubscriptionsCard({ data, onClick, hidden, onToggleHidden }: { data: Dash; onClick: () => void; hidden: boolean; onToggleHidden: () => void }) {
-  const { subscriptions } = data;
-  const empty = subscriptions.count === 0;
-
-  return (
-    <CardShell onClick={onClick}>
-      <div className="flex items-baseline justify-between mb-2">
-        <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium flex items-center gap-1.5">
-          <Repeat className="h-3 w-3" />
-          Subscriptions
-        </span>
-        <MoneyEyeButton hidden={hidden} onToggle={onToggleHidden} />
-      </div>
-
-      <div className="flex-1 flex flex-col justify-between">
-        <div>
-          {empty ? (
-            <div className="text-sm text-muted-foreground italic">No subscriptions</div>
-          ) : (
-            <>
-              <div className="text-2xl font-semibold font-mono tabular-nums tracking-tight" style={{ color: "var(--color-expense)" }}>
-                {maskedOrEGP(subscriptions.monthlyTotal, hidden)}
+      <motion.div {...fadeUp} className="grid grid-cols-1 2xl:grid-cols-[minmax(0,1fr)_256px] gap-3 items-start">
+        <Card className="overflow-hidden py-0 gap-0 rounded-xl min-w-0 border-neutral-200 bg-white shadow-[0_14px_36px_rgba(15,23,42,0.06)]">
+          <CardContent className="p-0">
+            <div className="overflow-x-auto overscroll-x-contain">
+              <div className="w-full" style={{ minWidth: monthGridMinWidth(data.month.days.length) }}>
+                <div className="grid items-stretch border-b border-neutral-200 bg-neutral-50 text-[10px] font-semibold uppercase tracking-wide text-neutral-500" style={{ gridTemplateColumns: monthGridTemplate(data.month.days.length) }}>
+                  <div className="px-3 md:px-4 py-2 border-r border-white/10 bg-neutral-900 text-white row-span-3 flex items-center justify-center text-center text-sm md:text-base font-bold tracking-tight">My Habits</div>
+                  {monthGroups.map((group) => (
+                    <div key={group.week} className="h-7 flex items-center justify-center text-center border-r border-white/15 bg-neutral-800 text-white" style={{ gridColumn: `span ${group.days.length}` }}>
+                      Week {group.week}
+                    </div>
+                  ))}
+                  {data.month.days.map((day, index) => (
+                    <div key={`${day.iso}-label`} className={`h-7 flex items-center justify-center border-r border-t border-white/15 text-[11px] font-semibold normal-case bg-neutral-700 text-neutral-50 ${index === 0 || monthWeekStartDates.has(day.iso) ? "border-l border-l-white/25" : ""} ${!day.active ? "opacity-70" : ""}`}>
+                      {day.label.slice(0, 2)}
+                    </div>
+                  ))}
+                  {data.month.days.map((day, index) => (
+                    <div key={`${day.iso}-number`} className={`h-7 flex items-center justify-center border-r border-t border-white/15 text-[11px] font-semibold tabular-nums bg-neutral-600 text-neutral-50 ${index === 0 || monthWeekStartDates.has(day.iso) ? "border-l border-l-white/25" : ""} ${!day.active ? "opacity-70" : ""}`}>
+                      {day.day}
+                    </div>
+                  ))}
+                </div>
+                {visibleRows.map((row) => (
+                  <TrackerRowView key={row.id} row={row} days={data.month.days} weekGroups={monthGroups} onSetState={setCellState} onAmountClick={openAmount} />
+                ))}
               </div>
-              <div className="text-[10px] text-muted-foreground font-mono tabular-nums mt-0.5">{subscriptions.count} active</div>
-            </>
-          )}
-        </div>
-        {subscriptions.next && (
-          <div className="text-xs text-muted-foreground truncate mt-3">
-            {subscriptions.next.name} {nextRenewalText(subscriptions.next.daysUntil)}
-          </div>
-        )}
-      </div>
-    </CardShell>
-  );
-}
-
-// ----- WeightCard -----
-function WeightCard({ data, onClick }: { data: Dash; onClick: () => void }) {
-  const { weight } = data;
-  const hasWeight = weight.current !== null;
-
-  return (
-    <CardShell onClick={onClick}>
-      <div className="flex items-baseline justify-between mb-2">
-        <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium flex items-center gap-1.5">
-          <Scale className="h-3 w-3" />
-          Weight
-        </span>
-        {hasWeight && <span className="text-[10px] text-muted-foreground font-mono tabular-nums">→ {Math.round(weight.target)} kg</span>}
-      </div>
-
-      {!hasWeight ? (
-        <div className="text-sm text-muted-foreground italic">No weigh-ins yet</div>
-      ) : (
-        <div className="flex-1 flex flex-col justify-between">
-          <div>
-            <div className="text-3xl font-semibold font-mono tabular-nums tracking-tight">{Math.round(weight.current ?? 0)} kg</div>
-            {weight.lostSinceStart > 0 && <div className="text-[10px] text-muted-foreground font-mono tabular-nums mt-0.5">-{weight.lostSinceStart.toFixed(1)} kg since start</div>}
-          </div>
-          {weight.sparkline.length > 1 && (
-            <div className="h-9 mt-3">
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={weight.sparkline}>
-                  <defs>
-                    <linearGradient id="dashWeightFill" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="var(--color-foreground)" stopOpacity={0.22} />
-                      <stop offset="100%" stopColor="var(--color-foreground)" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <Area type="monotone" dataKey="value" stroke="var(--color-foreground)" strokeOpacity={0.75} strokeWidth={1.5} fill="url(#dashWeightFill)" />
-                </AreaChart>
-              </ResponsiveContainer>
             </div>
-          )}
-        </div>
-      )}
-    </CardShell>
-  );
-}
+          </CardContent>
+        </Card>
+        <AnalysisBlock rows={visibleRows} />
+      </motion.div>
 
-// ----- WishlistCard -----
-function WishlistCard({ data, onClick }: { data: Dash; onClick: () => void }) {
-  const { wishlist } = data;
-
-  return (
-    <CardShell onClick={onClick}>
-      <div className="flex items-baseline justify-between mb-2">
-        <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium flex items-center gap-1.5">
-          <ShoppingBag className="h-3 w-3" />
-          Wishlist
-        </span>
-      </div>
-
-      {wishlist.countLeft === 0 ? (
-        <div className="text-sm text-muted-foreground italic">Nothing on the list</div>
-      ) : (
-        <div className="flex-1 flex flex-col">
-          <div className="flex items-baseline gap-1.5 mb-2">
-            <span className="text-3xl font-semibold font-mono tabular-nums tracking-tight">{wishlist.countLeft}</span>
-            <span className="text-xs text-muted-foreground">to buy</span>
+      <Dialog open={!!amountEdit} onOpenChange={(open) => !open && setAmountEdit(null)}>
+        <DialogContent className="sm:max-w-[420px]">
+          <DialogHeader>
+            <DialogTitle>{amountEdit?.title}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-2">
+            <label className="text-xs uppercase tracking-wider font-semibold text-muted-foreground">{amountEdit?.label}</label>
+            <Input inputMode="decimal" type="number" min="0" step={amountEdit?.row.kind === "work-money" ? "0.01" : "1"} value={amountValue} onChange={(event) => setAmountValue(event.target.value)} placeholder={amountEdit?.placeholder} />
           </div>
-          <div className="text-[10px] text-muted-foreground font-mono tabular-nums mb-3">{fmtEGP(wishlist.totalToBuy)} pending</div>
-          <div className="space-y-1 min-h-0">
-            {wishlist.topPriority.map((item) => (
-              <div key={item._id} className="text-xs flex items-center gap-2">
-                <span className="h-2 w-2 rounded-full flex-shrink-0" style={{ background: priorityColor(item.priority) }} />
-                <span className="truncate flex-1">{item.name}</span>
-                <span className="font-mono tabular-nums font-semibold flex-shrink-0">{fmtEGP(item.price)}</span>
-              </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setAmountEdit(null)}>
+              Cancel
+            </Button>
+            <Button onClick={saveAmount}>Save</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={pickerOpen} onOpenChange={setPickerOpen}>
+        <DialogContent className="sm:max-w-[520px]">
+          <DialogHeader>
+            <DialogTitle>Pick Trackers</DialogTitle>
+          </DialogHeader>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {rows.map((row) => (
+              <button key={row.id} type="button" onClick={() => toggleVisible(row.id)} className="flex items-center gap-3 rounded-md border border-border px-3 py-2 text-left hover:bg-muted/50 transition-colors">
+                <Checkbox checked={visibleIds.includes(row.id)} onCheckedChange={() => toggleVisible(row.id)} />
+                <span className="text-sm font-medium">{row.label}</span>
+              </button>
             ))}
           </div>
-        </div>
-      )}
-    </CardShell>
-  );
-}
-
-// ----- CareerCard -----
-function CareerCard({ data, onClick }: { data: Dash; onClick: () => void }) {
-  const { career } = data;
-
-  return (
-    <CardShell onClick={onClick}>
-      <div className="flex items-baseline justify-between mb-2">
-        <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium flex items-center gap-1.5">
-          <GraduationCap className="h-3 w-3" />
-          AI Roadmap
-        </span>
-        <span className="text-sm font-semibold font-mono tabular-nums">{career.percent}%</span>
-      </div>
-
-      <div className="flex-1 flex flex-col justify-between">
-        <div>
-          <div className="text-3xl font-semibold font-mono tabular-nums tracking-tight">
-            {career.doneCount}
-            <span className="text-muted-foreground text-lg"> / {career.totalTopics}</span>
-          </div>
-          <div className="h-2 rounded-full overflow-hidden mt-3" style={{ background: "var(--color-muted)" }}>
-            <motion.div initial={{ width: 0 }} animate={{ width: `${career.percent}%` }} transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }} style={{ background: "var(--color-foreground)", height: "100%" }} />
-          </div>
-        </div>
-        {career.recentlyCompleted > 0 && <div className="text-xs text-muted-foreground mt-3">+{career.recentlyCompleted} this week</div>}
-      </div>
-    </CardShell>
-  );
-}
-
-// ====================================================================
-// MODALS
-// ====================================================================
-function BaseModal({ open, onClose, title, page, children, width = "[680px]" }: { open: boolean; onClose: () => void; title: string; page: string; children: React.ReactNode; width?: string }) {
-  return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className={`!max-w-${width} max-h-[92vh] overflow-y-auto`}>
-        <DialogHeader>
-          <DialogTitle>{title}</DialogTitle>
-        </DialogHeader>
-        <div className="max-h-[64vh] overflow-y-auto">{children}</div>
-        <DialogFooter className="flex justify-between sm:justify-between">
-          <Button variant="ghost" size="default" onClick={onClose}>
-            Close
-          </Button>
-          <Link to={page}>
-            <Button variant="default" size="default">
-              Open page <ArrowRight className="h-3.5 w-3.5 ml-1.5" />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setVisibleIds(DEFAULT_VISIBLE_IDS)}>
+              Reset
             </Button>
-          </Link>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+            <Button onClick={() => setPickerOpen(false)}>Done</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
   );
 }
 
-// ----- Targets modal -----
-function TargetsModal({ open, onClose, data }: { open: boolean; onClose: () => void; data: Dash }) {
-  const { calories, goal } = data;
+function ChartPanel({ title, icon: Icon, children }: { title: string; icon: React.ElementType; children: React.ReactNode }) {
   return (
-    <BaseModal open={open} onClose={onClose} title="Today's targets" page="/calories" width="[640px]">
-      <div className="space-y-4">
-        {calories.isCheat && (
-          <div
-            className="text-xs rounded-md p-3 flex items-center gap-2 border"
-            style={{
-              background: "var(--color-meal-snack-bg)",
-              borderColor: "color-mix(in oklch, var(--color-meal-snack), transparent 70%)",
-              color: "var(--color-meal-snack)",
-            }}
-          >
-            <Cake className="h-3 w-3" />
-            Cheat day — goals are not enforced today.
-          </div>
-        )}
-        <TargetBar label="Calories" value={round(calories.todayCal)} target={goal.caloriesTarget} unit="cal" variant="cap" muted={calories.isCheat} />
-        <TargetBar label="Protein" value={round1(calories.todayProtein)} target={goal.proteinTarget} unit="g" variant="cap" muted={calories.isCheat} />
-        <TargetBar label="Water" value={calories.waterTodayMl / 1000} target={goal.waterTarget / 1000} min={goal.waterMin / 1000} unit="L" variant="hydration" muted={calories.isCheat} decimals={1} />
+    <Card className="py-0 rounded-xl h-full border-neutral-200 bg-white shadow-[0_14px_36px_rgba(15,23,42,0.06)]">
+      <CardContent className="p-2.5 h-full">
+        <div className="flex items-center gap-1.5 text-xs font-semibold mb-2 text-neutral-800">
+          <span className="flex h-5 w-5 items-center justify-center rounded-md bg-neutral-100 text-neutral-700">
+            <Icon className="h-3.5 w-3.5" />
+          </span>
+          <span>{title}</span>
+        </div>
+        {children}
+      </CardContent>
+    </Card>
+  );
+}
 
-        <div className="border-t border-border pt-4">
-          <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-2">Macros</div>
-          <div className="grid grid-cols-3 gap-3">
-            <MacroStat label="Protein" value={`${round1(calories.todayProtein)}g`} color="var(--color-protein)" />
-            <MacroStat label="Carbs" value={`${round1(calories.todayCarbs)}g`} color="var(--color-carbs)" />
-            <MacroStat label="Fat" value={`${round1(calories.todayFat)}g`} color="var(--color-fat)" />
-          </div>
+function DailyProgressChart({ items }: { items: { date: string; day: number; percent: number }[] }) {
+  return <PercentBarChart items={items.map((item) => ({ key: item.date, label: String(item.day), percent: item.percent, title: `${item.day}: ${item.percent}%` }))} barWidth={8} plotHeight={68} palette={["#d4d4d4", "#18181b"]} />;
+}
+
+function PercentBarChart({ items, barWidth, plotHeight }: { items: { key: string; label: string; percent: number; title: string }[]; barWidth: number; plotHeight: number; palette: string[] }) {
+  const ticks = [100, 75, 50, 25, 0];
+  const plotWidth = 620;
+  const step = items.length > 0 ? plotWidth / items.length : plotWidth;
+  const svgBarWidth = Math.min(barWidth * 2, step * 0.55);
+  return (
+    <div className="grid grid-cols-[34px_1fr] gap-2">
+      <div className="flex flex-col justify-between text-[9px] text-neutral-500 tabular-nums pt-0.5" style={{ height: plotHeight }}>
+        {ticks.map((tick) => (
+          <span key={tick}>{tick}%</span>
+        ))}
+      </div>
+      <div className="relative" style={{ height: plotHeight + 20 }}>
+        <svg className="absolute left-0 right-0 top-0 w-full overflow-visible" style={{ height: plotHeight }} viewBox={`0 0 ${plotWidth} ${plotHeight}`} preserveAspectRatio="none" role="img">
+          {[0, 25, 50, 75, 100].map((tick) => (
+            <line key={tick} x1="0" x2={plotWidth} y1={plotHeight - (tick / 100) * plotHeight} y2={plotHeight - (tick / 100) * plotHeight} stroke="#e5e5e5" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+          ))}
+          {items.map((item, index) => {
+            const clamped = Math.max(0, Math.min(100, item.percent));
+            const heightPx = Math.round((clamped / 100) * plotHeight);
+            const x = step * index + step / 2 - svgBarWidth / 2;
+            const y = plotHeight - heightPx;
+            const fill = item.percent > 0 ? "#18181b" : "#e5e5e5";
+            return (
+              <rect key={item.key} x={x} y={y} width={svgBarWidth} height={heightPx} rx="3" ry="3" fill={fill}>
+                <title>{item.title}</title>
+              </rect>
+            );
+          })}
+        </svg>
+        <div className="absolute left-0 right-0 bottom-0 flex gap-1.5">
+          {items.map((item) => (
+            <span key={item.key} className="flex-1 min-w-2 text-center text-[9px] tabular-nums text-neutral-500">
+              {item.label}
+            </span>
+          ))}
         </div>
       </div>
-    </BaseModal>
+    </div>
   );
 }
 
-function TargetBar({ label, value, target, min, buffer, unit, variant, muted, decimals = 0 }: { label: string; value: number; target: number; min?: number; buffer?: number; unit: string; variant: "cap" | "range" | "hydration"; muted: boolean; decimals?: number }) {
-  let color = "var(--color-foreground)";
-  let pct = (value / target) * 100;
+function WeekStrip({ days, progress }: { days: Day[]; progress: { date: string; percent: number }[] }) {
+  const byWeek = days.reduce<Record<number, { total: number; count: number }>>((acc, day) => {
+    const found = progress.find((item) => item.date === day.iso);
+    acc[day.week] = acc[day.week] ?? { total: 0, count: 0 };
+    acc[day.week].total += found?.percent ?? 0;
+    acc[day.week].count += 1;
+    return acc;
+  }, {});
+  const items = Object.entries(byWeek).map(([week, value]) => {
+    const pct = value.count ? Math.round(value.total / value.count) : 0;
+    return { key: week, label: `W${week}`, percent: pct, title: `Week ${week}: ${pct}%` };
+  });
+  return <PercentBarChart items={items} barWidth={16} plotHeight={82} palette={["#d4d4d4", "#18181b"]} />;
+}
 
-  if (muted) {
-    color = "var(--color-muted-foreground)";
-  } else if (variant === "cap") {
-    const over = target + (buffer ?? 0);
-    pct = Math.min((value / over) * 100, 100);
-    if (value > over) color = "var(--color-expense)";
-    else if (value > target) color = "var(--color-warning)";
-    else if (value > 0) color = "var(--color-income)";
-  } else if (variant === "range") {
-    pct = Math.min((value / target) * 100, 100);
-    const inRange = min !== undefined && value >= min && value <= target;
-    color = inRange ? "var(--color-income)" : "var(--color-protein)";
-  } else if (variant === "hydration") {
-    pct = Math.min((value / target) * 100, 100);
-    const aboveMin = min !== undefined && value >= min;
-    const inTarget = value >= target;
-    color = inTarget ? "var(--color-income)" : aboveMin ? "var(--color-water)" : "var(--color-water)";
+function ProgressDonut({ percent, completed, total }: { percent: number; completed: number; total: number }) {
+  const size = 88;
+  const stroke = 10;
+  const radius = (size - stroke) / 2;
+  const circumference = 2 * Math.PI * radius;
+  const dash = circumference * (Math.min(percent, 100) / 100);
+  return (
+    <Card className="py-0 rounded-xl h-full border-neutral-200 bg-white shadow-[0_14px_36px_rgba(15,23,42,0.06)]">
+      <CardContent className="p-2.5 h-full">
+        <h3 className="text-xs font-semibold text-neutral-800">Overall Stats</h3>
+        <div className="mt-1.5 flex items-center gap-3">
+          <div className="relative shrink-0" style={{ width: size, height: size }}>
+            <svg width={size} height={size} className="-rotate-90">
+              <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke="#e5e5e5" strokeWidth={stroke} />
+              <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke="#18181b" strokeWidth={stroke} strokeDasharray={`${dash} ${circumference}`} strokeLinecap="round" />
+            </svg>
+            <div className="absolute inset-0 flex items-center justify-center text-lg font-semibold tracking-tight tabular-nums text-neutral-900">{percent}%</div>
+          </div>
+          <div className="space-y-2 text-xs min-w-0 flex-1 text-neutral-700">
+            <SummaryLine label="Completed" value={`${completed}/${total}`} />
+            <SummaryLine label="Left" value={`${Math.max(total - completed, 0)}`} />
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function TrackerRowView({
+  row,
+  days,
+  weekGroups,
+  onSetState,
+  onAmountClick,
+}: {
+  row: TrackerRow;
+  days: Day[];
+  weekGroups: { week: number; days: Day[] }[];
+  onSetState: (row: TrackerRow, cell: DailyCell | AmountCell, state: TrackerCellState) => void;
+  onAmountClick: (row: TrackerRow, cell: DailyCell | AmountCell) => void;
+}) {
+  const Icon = iconMap[row.icon as keyof typeof iconMap] ?? Target;
+  const weekStartDates = new Set(weekGroups.map((group) => group.days[0]?.iso).filter(Boolean));
+  const tone = trackerTone(row.id);
+  return (
+    <div className="grid items-center border-b border-neutral-200/70 last:border-b-0 transition-colors hover:brightness-[0.99]" style={{ gridTemplateColumns: monthGridTemplate(days.length) }} title={row.description}>
+      <div className="h-full min-h-9 px-3 py-1.5 border-r border-white/10 text-white flex items-center gap-2 min-w-0" style={{ backgroundColor: ROW_CHROME.base }}>
+        <div className="h-6 w-6 rounded-[4px] border border-white/45 bg-white/15 flex items-center justify-center shrink-0 text-white shadow-inner">
+          <Icon className="h-3.5 w-3.5" strokeWidth={2.2} />
+        </div>
+        <span className="font-semibold text-[12px] truncate">{row.label}</span>
+      </div>
+      {days.map((day, index) => {
+        const cell = getCell(row, day.iso);
+        return (
+          <div
+            key={day.iso}
+            className={`h-full min-h-9 flex items-center justify-center border-r border-neutral-200/70 ${index === 0 || weekStartDates.has(day.iso) ? "border-l border-l-neutral-300" : ""}`}
+            style={{ backgroundColor: day.weekend ? tone.faint : "rgba(255,255,255,0.72)" }}
+          >
+            {cell ? <TrackerCell row={row} cell={cell} onSetState={onSetState} onAmountClick={onAmountClick} /> : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function TrackerCell({
+  row,
+  cell,
+  onSetState,
+  onAmountClick,
+}: {
+  row: TrackerRow;
+  cell: DailyCell | AmountCell;
+  onSetState: (row: TrackerRow, cell: DailyCell | AmountCell, state: TrackerCellState) => void;
+  onAmountClick: (row: TrackerRow, cell: DailyCell | AmountCell) => void;
+}) {
+  const tone = trackerTone(row.id);
+  const clickTimer = useRef<number | null>(null);
+
+  const handleCellClick = (singleClick: () => void, doubleClick: () => void) => (event: React.MouseEvent<HTMLButtonElement>) => {
+    if (event.detail === 1) {
+      clickTimer.current = window.setTimeout(() => {
+        singleClick();
+        clickTimer.current = null;
+      }, 220);
+      return;
+    }
+    if (event.detail === 2) {
+      if (clickTimer.current) window.clearTimeout(clickTimer.current);
+      clickTimer.current = null;
+      doubleClick();
+    }
+  };
+
+  const cellStyle = (targetCell: DailyCell | AmountCell) => {
+    if (targetCell.state === "excused") return { backgroundColor: "#a3a3a3", borderColor: "#737373", color: "#ffffff" };
+    if (targetCell.checked) return { backgroundColor: tone.base, borderColor: tone.dark, color: "#ffffff" };
+    return { backgroundColor: targetCell.editable ? "#ffffff" : "#f5f5f5", borderColor: targetCell.editable ? tone.ring : "#d4d4d4", color: tone.dark };
+  };
+
+  if (row.kind === "steps-count" || row.kind === "work-money") {
+    const raw = isAmountCell(cell) ? cell.amount : cell.value ?? 0;
+    return (
+      <button
+        type="button"
+        onClick={handleCellClick(() => cell.editable && onAmountClick(row, cell), () => cell.editable && onSetState(row, cell, cell.state === "excused" ? null : "excused"))}
+        disabled={!cell.editable}
+        title={`${cell.detail ?? "Log value"} · double-click for intentional skip`}
+        className="h-5 w-5 rounded-[4px] border flex items-center justify-center transition-colors shadow-sm"
+        style={cellStyle(cell)}
+      >
+        {cell.checked && <Check className="h-3 w-3" strokeWidth={3} />}
+        {!cell.checked && raw > 0 && <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: tone.base }} />}
+      </button>
+    );
   }
 
+  const dailyCell = cell as DailyCell;
   return (
-    <div>
-      <div className="flex items-baseline justify-between mb-1.5">
-        <span className="text-xs text-muted-foreground font-medium">{label}</span>
-        <div className="flex items-baseline gap-1.5">
-          <span className="text-sm font-semibold font-mono tabular-nums" style={{ color }}>
-            {decimals > 0 ? value.toFixed(decimals) : Math.round(value)}
-          </span>
-          <span className="text-xs text-muted-foreground font-mono tabular-nums">
-            / {decimals > 0 ? target.toFixed(decimals) : target} {unit}
-          </span>
-        </div>
-      </div>
-      <div className="h-2 rounded-full overflow-hidden relative" style={{ background: "var(--color-muted)" }}>
-        {variant === "range" && min !== undefined && (
-          <div
-            className="absolute top-0 bottom-0 opacity-30"
-            style={{
-              left: `${(min / target) * 100}%`,
-              width: `${((target - min) / target) * 100}%`,
-              background: "var(--color-income)",
-            }}
-          />
-        )}
-        {variant === "hydration" && min !== undefined && (
-          <div
-            className="absolute top-0 bottom-0 opacity-20"
-            style={{
-              left: `${(min / target) * 100}%`,
-              width: `${((target - min) / target) * 100}%`,
-              background: "var(--color-income)",
-            }}
-          />
-        )}
-        <motion.div initial={{ width: 0 }} animate={{ width: `${pct}%` }} transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }} style={{ background: color, height: "100%", position: "relative" }} />
-      </div>
-    </div>
-  );
-}
-
-function MacroStat({ label, value, color }: { label: string; value: string; color: string }) {
-  return (
-    <div className="rounded-md p-3" style={{ background: "var(--color-muted)" }}>
-      <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">{label}</div>
-      <div className="text-lg font-semibold font-mono tabular-nums" style={{ color }}>
-        {value}
-      </div>
-    </div>
-  );
-}
-
-// ----- Tasks modal -----
-function TasksModal({ open, onClose, data }: { open: boolean; onClose: () => void; data: Dash }) {
-  const { tasksToday, tasksUpcoming } = data;
-  return (
-    <BaseModal open={open} onClose={onClose} title="Tasks" page="/today">
-      <div className="space-y-4">
-        <div>
-          <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-2 flex items-baseline justify-between">
-            <span>Today</span>
-            <span className="font-mono tabular-nums normal-case tracking-normal">
-              {tasksToday.done}/{tasksToday.total}
-            </span>
-          </div>
-          {tasksToday.list.length === 0 && <div className="text-sm text-muted-foreground italic">No tasks today.</div>}
-          <div className="space-y-1">
-            {tasksToday.list.map((t) => (
-              <div key={t._id} className="text-sm py-1.5 border-b border-border flex items-center gap-2">
-                <span className={`h-2 w-2 rounded-full flex-shrink-0 ${t.done ? "" : "border border-foreground/40"}`} style={t.done ? { background: "var(--color-income)" } : {}} />
-                <span className={t.done ? "line-through text-muted-foreground" : ""}>{t.title}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {tasksUpcoming.list.length > 0 && (
-          <div>
-            <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-2 flex items-baseline justify-between">
-              <span>Next 7 days</span>
-              <span className="font-mono tabular-nums normal-case tracking-normal">{tasksUpcoming.list.length}</span>
-            </div>
-            <div className="space-y-1">
-              {tasksUpcoming.list.map((t) => (
-                <div key={t._id} className="text-sm py-1.5 border-b border-border flex items-center justify-between gap-2">
-                  <span className="truncate">{t.title}</span>
-                  <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium font-mono tabular-nums flex-shrink-0">
-                    {new Date(t.date).toLocaleDateString("en-US", {
-                      weekday: "short",
-                      month: "short",
-                      day: "numeric",
-                      timeZone: "UTC",
-                    })}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
-    </BaseModal>
-  );
-}
-
-// ----- Workout modal -----
-function WorkoutModal({ open, onClose, data }: { open: boolean; onClose: () => void; data: Dash }) {
-  const { workout } = data;
-  const session = workout.session;
-  const type = session?.type ?? workout.suggested ?? "upperA";
-  const completed = !!session?.completedAt;
-
-  const color = type === "upperA" || type === "upperB" ? "var(--color-workout-a)" : type === "lowerA" || type === "lowerB" ? "var(--color-workout-b)" : "var(--color-workout-rest)";
-  const bg = type === "upperA" || type === "upperB" ? "var(--color-workout-a-bg)" : type === "lowerA" || type === "lowerB" ? "var(--color-workout-b-bg)" : "var(--color-workout-rest-bg)";
-
-  return (
-    <BaseModal open={open} onClose={onClose} title="Workout" page="/workout" width="[560px]">
-      <div className="space-y-4">
-        <div className="rounded-md p-4 border" style={{ background: bg, borderColor: `color-mix(in oklch, ${color}, transparent 70%)` }}>
-          <div className="text-[10px] uppercase tracking-wider font-medium" style={{ color }}>
-            Today
-          </div>
-          <div className="text-xl font-semibold tracking-tight mt-1" style={{ color }}>
-            {!session ? `Suggested: ${workoutLabel(workout.suggested ?? "upperA")}` : workoutLabel(type)}
-          </div>
-          {completed && (
-            <div className="text-xs mt-1 font-medium" style={{ color: "var(--color-income)" }}>
-              Completed
-            </div>
-          )}
-        </div>
-
-        {session && session.type !== "rest" && (
-          <div>
-            <div className="flex items-baseline justify-between mb-1.5">
-              <span className="text-xs text-muted-foreground font-medium">Sets done</span>
-              <span className="text-sm font-semibold font-mono tabular-nums">
-                {workout.setsDone}/{workout.setsTotal}
-              </span>
-            </div>
-            <div className="h-2 rounded-full overflow-hidden" style={{ background: "var(--color-muted)" }}>
-              <motion.div initial={{ width: 0 }} animate={{ width: `${(workout.setsDone / workout.setsTotal) * 100}%` }} transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }} style={{ background: color, height: "100%" }} />
-            </div>
-            {session && (
-              <div className="grid grid-cols-2 gap-2 mt-3">
-                <CheckPill label="Warmup" done={session.warmupDone} />
-                <CheckPill label="Finisher" done={session.finisherDone} />
-              </div>
-            )}
-          </div>
-        )}
-
-        {session && session.type === "rest" && (
-          <div className="rounded-md p-3" style={{ background: "var(--color-muted)" }}>
-            <div className="text-xs text-muted-foreground">Rest day walk</div>
-            <div className="text-lg font-semibold font-mono tabular-nums mt-0.5">{session.walkMinutes > 0 ? `${session.walkMinutes} min` : "Not logged"}</div>
-          </div>
-        )}
-
-        {workout.streak > 1 && (
-          <div className="rounded-md p-3 flex items-center gap-2" style={{ background: "var(--color-muted)" }}>
-            <Flame className="h-4 w-4" style={{ color: "var(--color-warning)" }} />
-            <div>
-              <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Streak</div>
-              <div className="text-sm font-semibold font-mono tabular-nums">{workout.streak} consecutive days</div>
-            </div>
-          </div>
-        )}
-      </div>
-    </BaseModal>
-  );
-}
-
-function CheckPill({ label, done }: { label: string; done: boolean }) {
-  return (
-    <div
-      className="text-xs px-3 py-2 rounded-md border flex items-center justify-between"
-      style={{
-        background: done ? "var(--color-muted)" : "var(--color-card)",
-        borderColor: "var(--color-border)",
-      }}
+    <button
+      type="button"
+      onClick={handleCellClick(() => onSetState(row, dailyCell, dailyCell.checked ? null : "done"), () => onSetState(row, dailyCell, dailyCell.state === "excused" ? null : "excused"))}
+      disabled={!dailyCell.editable}
+      title={`${dailyCell.detail ?? dailyCell.date} · double-click for intentional skip`}
+      className="h-5 w-5 rounded-[4px] border flex items-center justify-center transition-colors shadow-sm"
+      style={cellStyle(dailyCell)}
     >
-      <span className={done ? "line-through text-muted-foreground" : ""}>{label}</span>
-      {done && (
-        <span className="text-[10px] font-medium" style={{ color: "var(--color-income)" }}>
-          Done
-        </span>
-      )}
-    </div>
+      {dailyCell.checked && <Check className="h-3 w-3" strokeWidth={3} />}
+      {!dailyCell.checked && !dailyCell.editable && <X className="h-2.5 w-2.5 text-muted-foreground/60" />}
+    </button>
   );
 }
 
-// ----- Fridge modal -----
-function FridgeModal({ open, onClose, data }: { open: boolean; onClose: () => void; data: Dash }) {
-  const { fridge } = data;
+function AnalysisBlock({ rows }: { rows: TrackerRow[] }) {
   return (
-    <BaseModal open={open} onClose={onClose} title="Fridge" page="/fridge" width="[560px]">
-      <div className="space-y-4">
-        <div className="flex items-baseline gap-3">
-          <div>
-            <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Total</div>
-            <div className="text-3xl font-semibold font-mono tabular-nums tracking-tight">{fridge.total}</div>
+    <Card className="overflow-hidden py-0 gap-0 rounded-xl border-neutral-200 bg-white shadow-[0_14px_36px_rgba(15,23,42,0.06)]">
+      <CardContent className="p-0">
+        <div className="grid border-b border-white/10 bg-neutral-900 text-white text-[10px] font-semibold uppercase tracking-wide" style={{ gridTemplateColumns: "58px 58px 140px" }}>
+          <div className="h-7 flex items-center justify-center border-r border-white/20" style={{ gridColumn: "span 3" }}>
+            Analysis
           </div>
-          {fridge.emptyCount > 0 && (
-            <div>
-              <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Empty</div>
-              <div className="text-3xl font-semibold font-mono tabular-nums tracking-tight" style={{ color: "var(--color-expense)" }}>
-                {fridge.emptyCount}
-              </div>
+          {["Done", "Left", "Progress"].map((label) => (
+            <div key={label} className="h-14 flex items-center justify-center border-r border-t border-white/20 text-[9px]">
+              {label}
             </div>
-          )}
+          ))}
         </div>
-
-        <div>
-          <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-2">Items</div>
-          {fridge.items.length === 0 && <div className="text-sm text-muted-foreground italic">Fridge is empty.</div>}
-          <div className="space-y-0">
-            {fridge.items.map((i) => (
-              <div key={i._id} className="text-sm py-1.5 border-b border-border flex items-center justify-between">
-                <span className="truncate">{i.foodNameSnapshot}</span>
-                <span className="font-mono tabular-nums font-semibold" style={{ color: i.count === 0 ? "var(--color-expense)" : "var(--color-foreground)" }}>
-                  {i.count}
+        {rows.map((row) => {
+          const tone = trackerTone(row.id);
+          return (
+            <div key={row.id} className="grid border-b border-neutral-200/70 last:border-b-0" style={{ gridTemplateColumns: "58px 58px 140px" }}>
+              <div className="min-h-9 px-2 py-1.5 border-r border-neutral-200/70 flex items-center justify-end text-[11px] tabular-nums font-semibold text-neutral-900" style={{ backgroundColor: tone.faint }}>
+                {formatAnalysisValue(row, row.actual)}
+              </div>
+              <div className="min-h-9 px-2 py-1.5 border-r border-neutral-200/70 bg-white/80 flex items-center justify-end text-[11px] tabular-nums text-neutral-500">
+                {formatAnalysisValue(row, row.left)}
+              </div>
+              <div className="min-h-9 px-2 py-1.5 border-r border-neutral-200/70 bg-white/80 flex items-center gap-2">
+                <ProgressBar percent={row.percent} color={tone.base} />
+                <span className="w-8 text-right text-[11px] tabular-nums font-semibold" style={{ color: tone.dark }}>
+                  {row.percent}%
                 </span>
               </div>
-            ))}
-          </div>
-        </div>
-      </div>
-    </BaseModal>
+            </div>
+          );
+        })}
+      </CardContent>
+    </Card>
   );
 }
 
-// ----- Income modal -----
-function IncomeModal({ open, onClose, data, hidden }: { open: boolean; onClose: () => void; data: Dash; hidden: boolean }) {
-  const { income } = data;
+function ProgressBar({ percent, color }: { percent: number; color: string }) {
   return (
-    <BaseModal open={open} onClose={onClose} title="Income · this month" page="/income">
-      <div className="space-y-4">
-        <div className="flex items-baseline gap-4">
-          <div>
-            <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Month</div>
-            <div className="text-3xl font-semibold font-mono tabular-nums tracking-tight" style={{ color: "var(--color-income)" }}>
-              {maskedOrUSD(income.monthTotal, hidden)}
-            </div>
-          </div>
-          <div>
-            <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Today</div>
-            <div className="text-xl font-semibold font-mono tabular-nums tracking-tight mt-1">{maskedOrUSD(income.todayAmount, hidden)}</div>
-          </div>
-        </div>
-
-        <div>
-          <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-2">Last 7 days</div>
-          <div className="h-44">
-            {hidden ? (
-              <div className="h-full w-full rounded-md flex items-center justify-center text-xs text-muted-foreground" style={{ background: "var(--color-muted)" }}>
-                Chart hidden
-              </div>
-            ) : (
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={income.sparkline} margin={{ top: 5, right: 5, left: 0, bottom: 0 }}>
-                  <defs>
-                    <linearGradient id="dashIncomeFillBig" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="var(--color-income)" stopOpacity={0.4} />
-                      <stop offset="100%" stopColor="var(--color-income)" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid stroke="var(--color-border)" strokeDasharray="3 3" vertical={false} />
-                  <XAxis dataKey="date" tick={{ fontSize: 10, fill: "var(--color-muted-foreground)" }} tickFormatter={(iso) => new Date(iso).toLocaleDateString("en-US", { weekday: "short", timeZone: "UTC" })} stroke="var(--color-border)" />
-                  <YAxis tick={{ fontSize: 10, fill: "var(--color-muted-foreground)" }} stroke="var(--color-border)" width={40} />
-                  <Tooltip
-                    cursor={{ stroke: "var(--color-border)" }}
-                    contentStyle={{
-                      background: "var(--color-card)",
-                      border: "1px solid var(--color-border)",
-                      borderRadius: "8px",
-                      fontSize: "12px",
-                    }}
-                    formatter={(v) => [fmtUSD(Number(v)), "Income"]}
-                    labelFormatter={(iso) => new Date(iso).toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric", timeZone: "UTC" })}
-                  />
-                  <Area type="monotone" dataKey="value" stroke="var(--color-income)" strokeWidth={2} fill="url(#dashIncomeFillBig)" />
-                </AreaChart>
-              </ResponsiveContainer>
-            )}
-          </div>
-        </div>
-      </div>
-    </BaseModal>
+    <div className="h-1.5 min-w-0 flex-1 rounded-full overflow-hidden bg-neutral-100">
+      <div className="h-full rounded-full" style={{ width: `${Math.min(percent, 100)}%`, backgroundColor: color }} />
+    </div>
   );
 }
 
-// ----- Payments modal -----
-function PaymentsModal({ open, onClose, data, hidden }: { open: boolean; onClose: () => void; data: Dash; hidden: boolean }) {
-  const { payments } = data;
+function SummaryLine({ label, value }: { label: string; value: string }) {
   return (
-    <BaseModal open={open} onClose={onClose} title="Payments" page="/payments">
-      <div className="space-y-4">
-        <div className="flex items-baseline gap-4 flex-wrap">
-          <div>
-            <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Spent this month</div>
-            <div className="text-3xl font-semibold font-mono tabular-nums tracking-tight" style={{ color: "var(--color-expense)" }}>
-              {maskedOrEGP(payments.spentMonth, hidden)}
-            </div>
-          </div>
-          <div>
-            <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Today</div>
-            <div className="text-xl font-semibold font-mono tabular-nums tracking-tight mt-1">{maskedOrEGP(payments.spentToday, hidden)}</div>
-          </div>
-          <div>
-            <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Total balance</div>
-            <div className="text-xl font-semibold font-mono tabular-nums tracking-tight mt-1">{maskedOrEGP(payments.totalEgp, hidden)}</div>
-          </div>
-          {payments.totalUsd > 0 && (
-            <div>
-              <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Total USD</div>
-              <div className="text-xl font-semibold font-mono tabular-nums tracking-tight mt-1">{maskedOrUSD(payments.totalUsd, hidden)}</div>
-            </div>
-          )}
-          {payments.externalFundedToday > 0 && (
-            <div>
-              <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Family-funded today</div>
-              <div className="text-xl font-semibold font-mono tabular-nums tracking-tight mt-1">{maskedOrEGP(payments.externalFundedToday, hidden)}</div>
-            </div>
-          )}
-        </div>
-
-        {(payments.wallets.length > 0 || payments.banks.length > 0) && (
-          <div>
-            <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-2">Accounts</div>
-            <div className="grid grid-cols-2 gap-2 text-xs">
-              <div className="rounded-md p-3" style={{ background: "var(--color-muted)" }}>
-                <div className="text-muted-foreground">EGP total</div>
-                <div className="font-semibold font-mono tabular-nums mt-0.5">{maskedOrEGP(payments.totalEgp, hidden)}</div>
-              </div>
-              {payments.totalUsd > 0 && (
-                <div className="rounded-md p-3" style={{ background: "var(--color-muted)" }}>
-                  <div className="text-muted-foreground">USD total</div>
-                  <div className="font-semibold font-mono tabular-nums mt-0.5">{maskedOrUSD(payments.totalUsd, hidden)}</div>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        <div>
-          <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-2">Last 7 days · spending</div>
-          <div className="h-36">
-            {hidden ? (
-              <div className="h-full w-full rounded-md flex items-center justify-center text-xs text-muted-foreground" style={{ background: "var(--color-muted)" }}>
-                Chart hidden
-              </div>
-            ) : (
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={payments.sparkline} margin={{ top: 5, right: 5, left: 0, bottom: 0 }}>
-                  <CartesianGrid stroke="var(--color-border)" strokeDasharray="3 3" vertical={false} />
-                  <XAxis dataKey="date" tick={{ fontSize: 10, fill: "var(--color-muted-foreground)" }} tickFormatter={(iso) => new Date(iso).toLocaleDateString("en-US", { weekday: "short", timeZone: "UTC" })} stroke="var(--color-border)" />
-                  <YAxis tick={{ fontSize: 10, fill: "var(--color-muted-foreground)" }} stroke="var(--color-border)" width={40} />
-                  <Tooltip
-                    cursor={{ fill: "color-mix(in oklch, var(--color-muted-foreground), transparent 90%)" }}
-                    contentStyle={{
-                      background: "var(--color-card)",
-                      border: "1px solid var(--color-border)",
-                      borderRadius: "8px",
-                      fontSize: "12px",
-                    }}
-                    formatter={(v) => [fmtEGP(Number(v)), "Spent"]}
-                    labelFormatter={(iso) => new Date(iso).toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric", timeZone: "UTC" })}
-                  />
-                  <Bar dataKey="value" fill="var(--color-expense)" radius={[3, 3, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            )}
-          </div>
-        </div>
-
-        {payments.wallets.length > 0 && (
-          <div>
-            <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-2">Wallets</div>
-            <div className="space-y-0">
-              {payments.wallets.map((w) => (
-                <div key={w._id} className="text-sm py-1.5 border-b border-border flex items-center justify-between">
-                  <span className="truncate">{w.name}</span>
-                  <span className="font-mono tabular-nums font-semibold">{maskedOrEGP(w.balance, hidden)}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-        {payments.banks.length > 0 && (
-          <div>
-            <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-2">Banks</div>
-            <div className="space-y-0">
-              {payments.banks.map((b) => (
-                <div key={b._id} className="text-sm py-1.5 border-b border-border flex items-center justify-between gap-3">
-                  <span className="truncate flex items-center gap-2">
-                    {b.name}
-                    <span className="text-[9px] font-bold px-1.5 py-0.5 rounded border border-border text-muted-foreground">{b.currency}</span>
-                  </span>
-                  <span className="font-mono tabular-nums font-semibold">{b.currency === "USD" ? maskedOrUSD(b.balance, hidden) : maskedOrEGP(b.balance, hidden)}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-        {payments.recentExpenses.length > 0 && (
-          <div>
-            <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-2">Recent expenses</div>
-            <div className="space-y-0">
-              {payments.recentExpenses.map((e) => (
-                <div key={e._id} className="text-sm py-1.5 border-b border-border flex items-center justify-between gap-3">
-                  <span className="truncate">
-                    {e.name}
-                    <span className="text-muted-foreground text-xs ml-1">· {e.sourceNameSnapshot}</span>
-                  </span>
-                  <span className="font-mono tabular-nums font-semibold flex-shrink-0">{maskedOrEGP(e.amount, hidden)}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
-    </BaseModal>
-  );
-}
-
-// ----- Subscriptions modal -----
-function SubscriptionsCardModal({ open, onClose, data, hidden }: { open: boolean; onClose: () => void; data: Dash; hidden: boolean }) {
-  const { subscriptions } = data;
-  const next = subscriptions.next;
-  const daysText = next ? (next.daysUntil === 0 ? "today" : next.daysUntil === 1 ? "tomorrow" : `in ${next.daysUntil} days`) : "";
-
-  return (
-    <BaseModal open={open} onClose={onClose} title="Subscriptions" page="/payments">
-      <div className="space-y-4">
-        <div className="flex items-baseline gap-4">
-          <div>
-            <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Monthly total</div>
-            <div className="text-3xl font-semibold font-mono tabular-nums tracking-tight" style={{ color: subscriptions.count > 0 ? "var(--color-expense)" : "var(--color-muted-foreground)" }}>
-              {maskedOrEGP(subscriptions.monthlyTotal, hidden)}
-            </div>
-          </div>
-          <div>
-            <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Active</div>
-            <div className="text-xl font-semibold font-mono tabular-nums tracking-tight mt-1">{subscriptions.count}</div>
-          </div>
-        </div>
-
-        {next ? (
-          <div className="rounded-md p-4 border border-border" style={{ background: "var(--color-muted)" }}>
-            <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Next renewal</div>
-            <div className="text-base font-semibold mt-1">{next.name}</div>
-            <div className="text-sm text-muted-foreground mt-1">
-              Renews on day {next.billingDay} - {daysText}
-            </div>
-            <div className="text-sm font-mono tabular-nums mt-2">
-              {maskedOrEGP(next.price, hidden)}
-              <span className="text-muted-foreground font-sans ml-1">from {next.sourceNameSnapshot}</span>
-            </div>
-          </div>
-        ) : (
-          <div className="text-sm text-muted-foreground italic">No active subscriptions.</div>
-        )}
-      </div>
-    </BaseModal>
-  );
-}
-
-// ----- Weight modal -----
-function WeightCardModal({ open, onClose, data }: { open: boolean; onClose: () => void; data: Dash }) {
-  const { weight } = data;
-
-  return (
-    <BaseModal open={open} onClose={onClose} title="Weight" page="/calories">
-      <div className="space-y-4">
-        {weight.current === null ? (
-          <div className="text-sm text-muted-foreground italic">No weigh-ins yet.</div>
-        ) : (
-          <>
-            <div className="flex items-baseline gap-3 flex-wrap">
-              <div>
-                <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Current</div>
-                <div className="text-3xl font-semibold font-mono tabular-nums tracking-tight">{Math.round(weight.current)} kg</div>
-              </div>
-              <div className="text-2xl text-muted-foreground">→</div>
-              <div>
-                <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Target</div>
-                <div className="text-2xl font-semibold font-mono tabular-nums tracking-tight">{Math.round(weight.target)} kg</div>
-              </div>
-            </div>
-            {weight.lostSinceStart > 0 && (
-              <div className="text-sm text-muted-foreground font-mono tabular-nums">-{weight.lostSinceStart.toFixed(1)} kg since start</div>
-            )}
-            <div className="h-44">
-              {weight.sparkline.length > 1 ? (
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={weight.sparkline} margin={{ top: 5, right: 5, left: 0, bottom: 0 }}>
-                    <defs>
-                      <linearGradient id="dashWeightFillBig" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor="var(--color-foreground)" stopOpacity={0.22} />
-                        <stop offset="100%" stopColor="var(--color-foreground)" stopOpacity={0} />
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid stroke="var(--color-border)" strokeDasharray="3 3" vertical={false} />
-                    <XAxis dataKey="date" tick={{ fontSize: 10, fill: "var(--color-muted-foreground)" }} tickFormatter={(iso) => new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" })} stroke="var(--color-border)" />
-                    <YAxis tick={{ fontSize: 10, fill: "var(--color-muted-foreground)" }} stroke="var(--color-border)" width={40} />
-                    <Tooltip
-                      cursor={{ stroke: "var(--color-border)" }}
-                      contentStyle={{
-                        background: "var(--color-card)",
-                        border: "1px solid var(--color-border)",
-                        borderRadius: "8px",
-                        fontSize: "12px",
-                      }}
-                      formatter={(v) => [`${Number(v).toFixed(1)} kg`, "Weight"]}
-                      labelFormatter={(iso) => new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" })}
-                    />
-                    <Area type="monotone" dataKey="value" stroke="var(--color-foreground)" strokeOpacity={0.75} strokeWidth={2} fill="url(#dashWeightFillBig)" />
-                  </AreaChart>
-                </ResponsiveContainer>
-              ) : (
-                <div className="h-full w-full rounded-md flex items-center justify-center text-xs text-muted-foreground" style={{ background: "var(--color-muted)" }}>
-                  Add another weigh-in to see the trend.
-                </div>
-              )}
-            </div>
-          </>
-        )}
-      </div>
-    </BaseModal>
-  );
-}
-
-// ----- Wishlist modal -----
-function WishlistCardModal({ open, onClose, data }: { open: boolean; onClose: () => void; data: Dash }) {
-  const { wishlist } = data;
-
-  return (
-    <BaseModal open={open} onClose={onClose} title="Wishlist" page="/payments">
-      <div className="space-y-4">
-        <div className="flex items-baseline gap-4">
-          <div>
-            <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Total to buy</div>
-            <div className="text-3xl font-semibold font-mono tabular-nums tracking-tight">{fmtEGP(wishlist.totalToBuy)}</div>
-          </div>
-          <div>
-            <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Items</div>
-            <div className="text-xl font-semibold font-mono tabular-nums tracking-tight mt-1">{wishlist.countLeft}</div>
-          </div>
-        </div>
-
-        {wishlist.topPriority.length === 0 ? (
-          <div className="text-sm text-muted-foreground italic">Nothing on the list.</div>
-        ) : (
-          <div>
-            <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-2">Top priority</div>
-            <div className="space-y-0">
-              {wishlist.topPriority.map((item) => (
-                <div key={item._id} className="text-sm py-1.5 border-b border-border flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span className="h-2 w-2 rounded-full flex-shrink-0" style={{ background: priorityColor(item.priority) }} />
-                    {item.link ? (
-                      <a href={item.link} target="_blank" rel="noopener noreferrer" className="truncate hover:underline flex items-center gap-1">
-                        {item.name}
-                        <ExternalLink className="h-3 w-3 flex-shrink-0 text-muted-foreground" />
-                      </a>
-                    ) : (
-                      <span className="truncate">{item.name}</span>
-                    )}
-                  </div>
-                  <span className="font-mono tabular-nums font-semibold flex-shrink-0">{fmtEGP(item.price)}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
-    </BaseModal>
-  );
-}
-
-// ----- Career modal -----
-function CareerCardModal({ open, onClose, data }: { open: boolean; onClose: () => void; data: Dash }) {
-  const { career } = data;
-
-  return (
-    <BaseModal open={open} onClose={onClose} title="AI Roadmap" page="/career">
-      <div className="space-y-4">
-        <div className="flex items-end justify-between gap-4">
-          <div>
-            <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Completed</div>
-            <div className="text-3xl font-semibold font-mono tabular-nums tracking-tight">
-              {career.doneCount}
-              <span className="text-muted-foreground text-2xl">/{career.totalTopics}</span>
-            </div>
-          </div>
-          <div className="text-right">
-            <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Complete</div>
-            <div className="text-3xl font-semibold font-mono tabular-nums tracking-tight">{career.percent}%</div>
-          </div>
-        </div>
-        <div className="h-3 rounded-full overflow-hidden" style={{ background: "var(--color-muted)" }}>
-          <motion.div initial={{ width: 0 }} animate={{ width: `${career.percent}%` }} transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }} style={{ background: "var(--color-foreground)", height: "100%" }} />
-        </div>
-        {career.recentlyCompleted > 0 && <div className="text-sm text-muted-foreground">+{career.recentlyCompleted} completed this week</div>}
-      </div>
-    </BaseModal>
+    <div className="flex items-center justify-between gap-3">
+      <span className="text-muted-foreground">{label}</span>
+      <span className="font-semibold tabular-nums">{value}</span>
+    </div>
   );
 }

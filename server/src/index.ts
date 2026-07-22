@@ -11,6 +11,7 @@ import fridgeRouter from "./routes/fridge";
 import dashboardRouter from "./routes/dashboard";
 import workoutsRouter from "./routes/workouts";
 import careerRouter from "./routes/career";
+import medicalEnglishRouter from "./routes/medicalEnglish";
 
 dotenv.config();
 
@@ -39,6 +40,8 @@ app.use("/api/dashboard", dashboardRouter);
 app.use("/api/workouts", workoutsRouter);
 
 app.use("/api/career", careerRouter);
+
+app.use("/api/medical-english", medicalEnglishRouter);
 
 const PORT = process.env.PORT || 5000;
 const MONGO_URI = process.env.MONGO_URI as string;

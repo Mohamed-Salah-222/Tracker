@@ -1,390 +1,430 @@
 import { Router } from "express";
-import { IncomeEntry } from "../models/IncomeEntry";
-import { Expense } from "../models/Expense";
-import { Wallet } from "../models/Wallet";
-import { Bank } from "../models/Bank";
-import { Task } from "../models/Task";
-import { CalorieEntry } from "../models/CalorieEntry";
-import { FridgeItem } from "../models/FridgeItem";
-import { WaterEntry } from "../models/WaterEntry";
-import { CheatDay } from "../models/CheatDay";
-import { Goal } from "../models/Goal";
-import { WorkoutSession } from "../models/WorkoutSession";
-import { SetLog } from "../models/SetLog";
-import { Subscription } from "../models/Subscription";
-import { WeightEntry } from "../models/WeightEntry";
-import { WeightGoal } from "../models/WeightGoal";
-import { WishlistItem } from "../models/WishlistItem";
-import { CareerTopic } from "../models/CareerTopic";
-import { toDayUTC, monthRange } from "../lib/dates";
+import { DashboardTracker, DASHBOARD_TRACKER_KINDS } from "../models/DashboardTracker";
+import { monthRange, toDayUTC } from "../lib/dates";
 
 const router = Router();
 
-function last7DaysISO(): string[] {
-  const out: string[] = [];
-  const today = toDayUTC(new Date().toISOString().slice(0, 10));
-  for (let i = 6; i >= 0; i--) {
-    const d = new Date(today);
-    d.setUTCDate(d.getUTCDate() - i);
-    out.push(d.toISOString().slice(0, 10));
-  }
-  return out;
+const CALORIES_TARGET = 2000;
+const PROTEIN_TARGET = 160;
+const WATER_TARGET_ML = 3500;
+const STEPS_TARGET = 7000;
+const WORK_WEEKLY_MONEY_TARGET = 200;
+const WORK_DAY_MONEY_TARGET = 40;
+const GYM_MONTHLY_TARGET = 20;
+const JULY_2026_GYM_TARGET = 10;
+const ENGLISH_MONTHLY_TARGET = 20;
+const NUTRITION_MONTHLY_TARGET = 26;
+const PROJECT_MONTHLY_TARGET = 25;
+const MIN_TRACKER_YEAR = 2026;
+const MIN_TRACKER_MONTH = 7;
+const JULY_2026_START_DAY = 13;
+
+const julyHabitKinds = ["wake", "sleep", "gym", "reading", "english", "planning", "tasks", "projects", "focus", "vitamins", "steps", "work", "calories", "protein", "water"] as const;
+const standardHabitKinds = ["wake", "sleep", "gym", "reading", "english", "planning", "tasks", "projectGym", "projectMedical", "focus", "vitamins", "steps", "work", "calories", "protein", "water"] as const;
+type HabitKind = (typeof julyHabitKinds)[number] | (typeof standardHabitKinds)[number];
+
+type Day = {
+  iso: string;
+  label: string;
+  day: number;
+  weekend: boolean;
+  week: number;
+  active: boolean;
+};
+
+type DailyCell = {
+  date: string;
+  checked: boolean;
+  completed: boolean;
+  editable: boolean;
+  state?: "done" | "excused" | null;
+  detail?: string | null;
+  value?: number;
+  target?: number;
+};
+
+type AmountCell = {
+  date: string;
+  amount: number;
+  checked: boolean;
+  completed: boolean;
+  editable: boolean;
+  target: number;
+  weekend: boolean;
+  state?: "done" | "excused" | null;
+  detail?: string | null;
+};
+
+type TrackerRow = {
+  id: string;
+  label: string;
+  description: string;
+  icon: string;
+  kind: "daily-check" | "target-count" | "steps-count" | "work-money";
+  percent: number;
+  goal: number;
+  actual: number;
+  left: number;
+  doneCount?: number;
+  cells: DailyCell[] | AmountCell[];
+};
+
+function iso(date: Date) {
+  return date.toISOString().slice(0, 10);
 }
 
-const WORKOUT_UPPER_SET_COUNT = 8 * 3; // training sets
-const WORKOUT_LOWER_SET_COUNT = 5 * 3; // training sets
-const WORKOUT_ROTATION = ["upperA", "lowerA", "upperB", "lowerB"] as const;
-type DashboardWorkoutType = (typeof WORKOUT_ROTATION)[number];
+function addDays(date: Date, days: number) {
+  const next = new Date(date);
+  next.setUTCDate(next.getUTCDate() + days);
+  return next;
+}
 
-// Mirrors client/src/lib/career-curriculum.ts TOTAL_TOPICS.
-const TOTAL_CAREER_TOPICS = 177;
-
-type DashboardSubscriptions = {
-  monthlyTotal: number;
-  count: number;
-  next: {
-    name: string;
-    price: number;
-    billingDay: number;
-    daysUntil: number;
-    sourceNameSnapshot: string;
-  } | null;
-};
-
-type DashboardWeight = {
-  current: number | null;
-  target: number;
-  earliest: { date: string; weightKg: number } | null;
-  lostSinceStart: number;
-  remainingToTarget: number;
-  sparkline: { date: string; value: number }[];
-};
-
-type DashboardWishlist = {
-  totalToBuy: number;
-  countLeft: number;
-  topPriority: Awaited<ReturnType<typeof WishlistItem.find>>;
-};
-
-type DashboardCareer = {
-  doneCount: number;
-  totalTopics: number;
-  percent: number;
-  recentlyCompleted: number;
-};
-
-router.get("/", async (_req, res) => {
-  const now = new Date();
-  const todayISO = now.toISOString().slice(0, 10);
-  const today = toDayUTC(todayISO);
-  const tomorrow = new Date(today);
-  tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
-
-  const days = last7DaysISO();
-  const sevenAgo = toDayUTC(days[0]);
-
-  const { start: monthStart, end: monthEnd } = monthRange(now.getFullYear(), now.getMonth() + 1);
-
-  // ===== Income =====
-  const incomeEntries = await IncomeEntry.find({
-    date: { $gte: monthStart, $lt: monthEnd },
-    deletedAt: null,
-  });
-  const incomeMonthTotal = incomeEntries.reduce((s, e) => s + e.amount, 0);
-
-  const incomeRecent = await IncomeEntry.find({
-    date: { $gte: sevenAgo, $lt: tomorrow },
-    deletedAt: null,
-  });
-  const incomeByDay: Record<string, number> = {};
-  for (const d of days) incomeByDay[d] = 0;
-  for (const e of incomeRecent) {
-    const k = e.date.toISOString().slice(0, 10);
-    if (k in incomeByDay) incomeByDay[k] += e.amount;
+function monthFromQuery(input: unknown) {
+  const fallback = toDayUTC(new Date());
+  if (typeof input !== "string" || !/^\d{4}-\d{2}$/.test(input)) {
+    const fallbackYear = fallback.getUTCFullYear();
+    const fallbackMonth = fallback.getUTCMonth() + 1;
+    if (fallbackYear < MIN_TRACKER_YEAR || (fallbackYear === MIN_TRACKER_YEAR && fallbackMonth < MIN_TRACKER_MONTH)) {
+      return { year: MIN_TRACKER_YEAR, month: MIN_TRACKER_MONTH };
+    }
+    return { year: fallbackYear, month: fallbackMonth };
   }
-  const incomeSparkline = days.map((d) => ({ date: d, value: incomeByDay[d] }));
-  const incomeToday = incomeByDay[todayISO] ?? 0;
-
-  // ===== Wallets / Payments =====
-  const wallets = await Wallet.find({ archived: false }).sort({ createdAt: 1 });
-  const banks = await Bank.find({ archived: false }).sort({ createdAt: 1 });
-  const walletsTotal = wallets.reduce((s, w) => s + w.balance, 0);
-  const egpBanksTotal = banks.filter((b) => b.currency === "EGP").reduce((s, b) => s + b.balance, 0);
-  const totalEgp = walletsTotal + egpBanksTotal;
-  const totalUsd = banks.filter((b) => b.currency === "USD").reduce((s, b) => s + b.balance, 0);
-  const walletTotal = totalEgp;
-
-  const expenseRecent = await Expense.find({
-    date: { $gte: sevenAgo, $lt: tomorrow },
-    deletedAt: null,
-  });
-  const spendByDay: Record<string, number> = {};
-  for (const d of days) spendByDay[d] = 0;
-  for (const e of expenseRecent) {
-    const k = e.date.toISOString().slice(0, 10);
-    if (k in spendByDay) spendByDay[k] += e.amount;
+  const [year, month] = input.split("-").map(Number);
+  if (month < 1 || month > 12) return { year: MIN_TRACKER_YEAR, month: MIN_TRACKER_MONTH };
+  if (year < MIN_TRACKER_YEAR || (year === MIN_TRACKER_YEAR && month < MIN_TRACKER_MONTH)) {
+    return { year: MIN_TRACKER_YEAR, month: MIN_TRACKER_MONTH };
   }
-  const spendSparkline = days.map((d) => ({ date: d, value: spendByDay[d] }));
-  const spentToday = spendByDay[todayISO] ?? 0;
-  const externalFundedToday = expenseRecent
-    .filter((e) => e.sourceType === "external" && e.date.toISOString().slice(0, 10) === todayISO)
-    .reduce((s, e) => s + e.amount, 0);
+  return { year, month };
+}
 
-  const expenseMonth = await Expense.find({
-    date: { $gte: monthStart, $lt: monthEnd },
-    deletedAt: null,
+function percent(actual: number, goal: number) {
+  if (goal <= 0) return 0;
+  return Math.min(100, Math.round((actual / goal) * 100));
+}
+
+function uncappedPercent(actual: number, goal: number) {
+  if (goal <= 0) return 0;
+  return Math.round((actual / goal) * 100);
+}
+
+function trackerState(doc: { checked: boolean; state?: "done" | "excused" | null } | undefined, completed: boolean) {
+  if (doc?.state === "excused") return "excused";
+  if (doc?.state === "done" || completed || doc?.checked) return "done";
+  return null;
+}
+
+function dailySatisfied(state: "done" | "excused" | null) {
+  return state === "done" || state === "excused";
+}
+
+function gymTargetForMonth(year: number, month: number) {
+  return year === 2026 && month === 7 ? JULY_2026_GYM_TARGET : GYM_MONTHLY_TARGET;
+}
+
+function habitKindsForMonth(year: number, month: number) {
+  return year === 2026 && month === 7 ? julyHabitKinds : standardHabitKinds;
+}
+
+function checkRowTarget(kind: HabitKind, year: number, month: number, activeDayCount: number) {
+  if (kind === "gym") return gymTargetForMonth(year, month);
+  if (kind === "english") return ENGLISH_MONTHLY_TARGET;
+  if (year === 2026 && month === 7) return activeDayCount;
+  if (kind === "focus") return ENGLISH_MONTHLY_TARGET;
+  if (kind === "projectGym" || kind === "projectMedical") return PROJECT_MONTHLY_TARGET;
+  if (kind === "water" || kind === "protein" || kind === "calories") return NUTRITION_MONTHLY_TARGET;
+  return activeDayCount;
+}
+
+function habitLabel(kind: HabitKind) {
+  const labels: Record<HabitKind, string> = {
+    wake: "Wake before 9",
+    sleep: "Sleep 6-8h",
+    gym: "GYM",
+    reading: "Reading",
+    english: "English",
+    planning: "Quran",
+    tasks: "Tasks",
+    projects: "Projects",
+    projectGym: "Project GYM",
+    projectMedical: "Project Medical",
+    focus: "Learning",
+    vitamins: "Vitamins",
+    steps: "7k Steps",
+    work: "Work",
+    calories: "Calories Target",
+    protein: "Protein 160g+",
+    water: "Water 3.5L",
+  };
+  return labels[kind];
+}
+
+function habitDescription(kind: HabitKind) {
+  const descriptions: Record<HabitKind, string> = {
+    wake: "Start the day before 9:00",
+    sleep: "Hit the 6-8 hour sleep range",
+    gym: "Training days logged from workouts or manually checked",
+    reading: "Read or learn intentionally",
+    english: "English study or practice",
+    planning: "Read one page daily",
+    tasks: "Finish the daily task list",
+    projects: "Move at least one meaningful project forward",
+    projectGym: "Work on Project GYM",
+    projectMedical: "Work on Project Medical",
+    focus: "Daily focused learning session",
+    vitamins: "Take the daily stack",
+    steps: "Monthly movement target, counted against 7k times active days",
+    work: "Money made toward the monthly weekday target",
+    calories: "Stay inside the daily calorie target",
+    protein: "Hit the daily protein floor",
+    water: "Hit the daily water target",
+  };
+  return descriptions[kind];
+}
+
+function habitIcon(kind: HabitKind) {
+  const icons: Record<HabitKind, string> = {
+    wake: "alarm-clock",
+    sleep: "moon",
+    gym: "dumbbell",
+    reading: "book-open",
+    english: "languages",
+    planning: "calendar-check",
+    tasks: "list-checks",
+    projects: "folder-kanban",
+    projectGym: "dumbbell",
+    projectMedical: "folder-kanban",
+    focus: "brain",
+    vitamins: "pill",
+    steps: "footprints",
+    work: "briefcase-business",
+    calories: "flame",
+    protein: "beef",
+    water: "droplet",
+  };
+  return icons[kind];
+}
+
+function makeCheckRow(kind: HabitKind, days: Day[], cells: DailyCell[], monthlyGoal = days.length, allowOverGoal = false): TrackerRow {
+  const doneCount = cells.filter((cell) => cell.editable && cell.completed).length;
+  return {
+    id: kind,
+    label: habitLabel(kind),
+    description: habitDescription(kind),
+    icon: habitIcon(kind),
+    kind: kind === "gym" ? "target-count" : "daily-check",
+    percent: allowOverGoal ? uncappedPercent(doneCount, monthlyGoal) : percent(doneCount, monthlyGoal),
+    goal: monthlyGoal,
+    actual: doneCount,
+    left: Math.max(monthlyGoal - doneCount, 0),
+    doneCount,
+    cells,
+  };
+}
+
+router.get("/", async (req, res) => {
+  const { year, month } = monthFromQuery(req.query.month);
+  const { start: monthStart, end: monthEnd } = monthRange(year, month);
+  const rangeStart = year === MIN_TRACKER_YEAR && month === MIN_TRACKER_MONTH ? new Date(Date.UTC(year, month - 1, JULY_2026_START_DAY)) : monthStart;
+  const today = iso(toDayUTC(new Date()));
+  const days: Day[] = Array.from({ length: Math.round((monthEnd.getTime() - monthStart.getTime()) / 86400000) }, (_, index) => {
+    const date = addDays(monthStart, index);
+    return {
+      iso: iso(date),
+      label: date.toLocaleDateString("en-US", { weekday: "short", timeZone: "UTC" }),
+      day: date.getUTCDate(),
+      weekend: date.getUTCDay() === 0 || date.getUTCDay() === 6,
+      week: Math.floor(index / 7) + 1,
+      active: date >= rangeStart,
+    };
   });
-  const spentMonth = expenseMonth.reduce((s, e) => s + e.amount, 0);
+  const activeDays = days.filter((day) => day.active);
 
-  const recentExpenses = await Expense.find({ deletedAt: null }).sort({ date: -1, createdAt: -1 }).limit(5);
+  const trackerDocs = await DashboardTracker.find({ date: { $gte: rangeStart, $lt: monthEnd } });
 
-  // ===== Subscriptions =====
-  const subscriptionDocs = await Subscription.find({ archived: false }).sort({ billingDay: 1, name: 1 });
-  const subscriptionMonthlyTotal = subscriptionDocs.reduce((s, sub) => s + sub.price, 0);
-  const todayDay = today.getUTCDate();
-  let nextSubscription: DashboardSubscriptions["next"] = null;
-  for (const sub of subscriptionDocs) {
-    const daysUntil = sub.billingDay >= todayDay ? sub.billingDay - todayDay : 31 - todayDay + sub.billingDay;
-    if (
-      !nextSubscription ||
-      daysUntil < nextSubscription.daysUntil ||
-      (daysUntil === nextSubscription.daysUntil && sub.price > nextSubscription.price)
-    ) {
-      nextSubscription = {
-        name: sub.name,
-        price: sub.price,
-        billingDay: sub.billingDay,
-        daysUntil,
-        sourceNameSnapshot: sub.sourceNameSnapshot,
+  const trackerByKindDay = new Map<string, (typeof trackerDocs)[number]>();
+  for (const doc of trackerDocs) trackerByKindDay.set(`${doc.kind}:${iso(doc.date)}`, doc);
+
+  const manualRows = habitKindsForMonth(year, month).map((kind) => {
+    if (kind === "steps") {
+      const cells: DailyCell[] = days.map((day) => {
+        const doc = trackerByKindDay.get(`${kind}:${day.iso}`);
+        const value = doc?.amount ?? 0;
+        const state = day.active ? trackerState(doc, value > 0) : "done";
+        return {
+          date: day.iso,
+          checked: dailySatisfied(state),
+          completed: day.active ? value > 0 : true,
+          editable: day.active,
+          state,
+          value,
+          target: STEPS_TARGET,
+          detail: day.active ? (state === "excused" ? "Intentional skip" : value ? `${Math.round(value).toLocaleString("en-US")} steps` : "Log steps") : "Prefilled warm-up day",
+        };
+      });
+      const actual = Math.round(cells.reduce((sum, cell) => sum + (cell.editable ? cell.value ?? 0 : 0), 0));
+      const goal = activeDays.length * STEPS_TARGET;
+      const doneCount = cells.filter((cell) => cell.editable && cell.checked).length;
+      return {
+        id: kind,
+        label: habitLabel(kind),
+        description: habitDescription(kind),
+        icon: habitIcon(kind),
+        kind: "steps-count" as const,
+        percent: uncappedPercent(actual, goal),
+        goal,
+        actual,
+        left: Math.max(goal - actual, 0),
+        doneCount,
+        cells,
       };
     }
-  }
-  const subscriptions: DashboardSubscriptions = {
-    monthlyTotal: subscriptionMonthlyTotal,
-    count: subscriptionDocs.length,
-    next: nextSubscription,
-  };
 
-  // ===== Weight =====
-  const weightEntries = await WeightEntry.find({ deletedAt: null }).sort({ date: 1 });
-  let weightGoal = await WeightGoal.findOne();
-  if (!weightGoal) weightGoal = await WeightGoal.create({});
-
-  const firstWeight = weightEntries[0] ?? null;
-  const latestWeight = weightEntries[weightEntries.length - 1] ?? null;
-  const currentWeight = latestWeight?.weightKg ?? null;
-  const targetWeight = weightGoal.targetKg;
-  const weight: DashboardWeight = {
-    current: currentWeight,
-    target: targetWeight,
-    earliest: firstWeight
-      ? {
-          date: firstWeight.date.toISOString().slice(0, 10),
-          weightKg: firstWeight.weightKg,
-        }
-      : null,
-    lostSinceStart: firstWeight && latestWeight && weightEntries.length >= 2 ? firstWeight.weightKg - latestWeight.weightKg : 0,
-    remainingToTarget: currentWeight !== null && currentWeight > targetWeight ? currentWeight - targetWeight : 0,
-    sparkline: weightEntries.slice(-30).map((entry) => ({
-      date: entry.date.toISOString().slice(0, 10),
-      value: entry.weightKg,
-    })),
-  };
-
-  // ===== Wishlist =====
-  const wishlistItems = await WishlistItem.find({ archived: false });
-  const unboughtWishlist = wishlistItems.filter((item) => !item.bought);
-  const wishlistPriorityRank = { high: 0, medium: 1, low: 2 } as const;
-  const wishlist: DashboardWishlist = {
-    totalToBuy: unboughtWishlist.reduce((s, item) => s + item.price, 0),
-    countLeft: unboughtWishlist.length,
-    topPriority: [...unboughtWishlist]
-      .sort((a, b) => {
-        const priorityDiff = wishlistPriorityRank[a.priority] - wishlistPriorityRank[b.priority];
-        if (priorityDiff !== 0) return priorityDiff;
-        return b.createdAt.getTime() - a.createdAt.getTime();
-      })
-      .slice(0, 3),
-  };
-
-  // ===== Career =====
-  const careerTopics = await CareerTopic.find();
-  const sevenDaysAgo = new Date(now);
-  sevenDaysAgo.setUTCDate(sevenDaysAgo.getUTCDate() - 7);
-  const doneCount = careerTopics.filter((topic) => topic.done).length;
-  const career: DashboardCareer = {
-    doneCount,
-    totalTopics: TOTAL_CAREER_TOPICS,
-    percent: Math.round((doneCount / TOTAL_CAREER_TOPICS) * 100),
-    recentlyCompleted: careerTopics.filter((topic) => topic.completedAt && topic.completedAt >= sevenDaysAgo).length,
-  };
-
-  // ===== Tasks =====
-  const todayTasks = await Task.find({ date: today }).sort({ createdAt: 1 });
-  const todayDone = todayTasks.filter((t) => t.done).length;
-
-  const sevenAhead = new Date(today);
-  sevenAhead.setUTCDate(sevenAhead.getUTCDate() + 7);
-  const upcoming = await Task.find({
-    date: { $gt: today, $lt: sevenAhead },
-  }).sort({ date: 1 });
-
-  // ===== Calories =====
-  const todayEntries = await CalorieEntry.find({ date: today, deletedAt: null });
-  let calToday = 0,
-    pToday = 0,
-    cToday = 0,
-    fToday = 0;
-  for (const e of todayEntries) {
-    if (e.entryMode === "perUnit" && e.units) {
-      calToday += e.units * e.caloriesPerUnitSnapshot;
-      pToday += e.units * e.proteinPerUnitSnapshot;
-      cToday += e.units * e.carbsPerUnitSnapshot;
-      fToday += e.units * e.fatPerUnitSnapshot;
-    } else if (e.grams) {
-      calToday += e.grams * e.caloriesPerGramSnapshot;
-      pToday += e.grams * e.proteinPerGramSnapshot;
-      cToday += e.grams * e.carbsPerGramSnapshot;
-      fToday += e.grams * e.fatPerGramSnapshot;
+    if (kind === "work") {
+      const workGoal = activeDays.filter((day) => !day.weekend).length * WORK_DAY_MONEY_TARGET;
+      const cells: AmountCell[] = days.map((day) => {
+        const doc = trackerByKindDay.get(`${kind}:${day.iso}`);
+        const amount = doc?.amount ?? 0;
+        const state = day.active ? (day.weekend && !doc ? "excused" : trackerState(doc, amount > 0)) : "done";
+        const checked = day.active ? day.weekend || dailySatisfied(state) : true;
+        return {
+          date: day.iso,
+          amount,
+          checked,
+          completed: day.active ? amount > 0 : true,
+          editable: day.active,
+          target: WORK_DAY_MONEY_TARGET,
+          weekend: day.weekend,
+          state,
+          detail: day.active ? (state === "excused" ? "Intentional skip. Add money if you worked." : amount ? `$${amount}` : day.weekend ? "Weekend auto-checked. Add money if you worked." : "Log money") : "Prefilled warm-up day",
+        };
+      });
+      const actual = Math.round(cells.reduce((sum, cell) => sum + (cell.editable ? cell.amount : 0), 0) * 100) / 100;
+      return {
+        id: kind,
+        label: habitLabel(kind),
+        description: habitDescription(kind),
+        icon: habitIcon(kind),
+        kind: "work-money" as const,
+        percent: uncappedPercent(actual, workGoal),
+        goal: workGoal,
+        actual,
+        left: Math.max(workGoal - actual, 0),
+        cells,
+      };
     }
-  }
 
-  const caloriesRecent = await CalorieEntry.find({
-    date: { $gte: sevenAgo, $lt: tomorrow },
-    deletedAt: null,
+    const cells: DailyCell[] = days.map((day) => {
+      const doc = trackerByKindDay.get(`${kind}:${day.iso}`);
+      const state = day.active ? trackerState(doc, Boolean(doc?.checked)) : "done";
+      return {
+        date: day.iso,
+        checked: dailySatisfied(state),
+        completed: day.active ? state === "done" : true,
+        editable: day.active,
+        state,
+        detail: day.active ? (state === "excused" ? "Intentional skip" : null) : "Prefilled warm-up day",
+      };
+    });
+    return makeCheckRow(kind, days, cells, checkRowTarget(kind, year, month, activeDays.length), kind === "gym");
   });
-  const calByDay: Record<string, number> = {};
-  for (const d of days) calByDay[d] = 0;
-  for (const e of caloriesRecent) {
-    const k = e.date.toISOString().slice(0, 10);
-    if (!(k in calByDay)) continue;
-    if (e.entryMode === "perUnit" && e.units) {
-      calByDay[k] += e.units * e.caloriesPerUnitSnapshot;
-    } else if (e.grams) {
-      calByDay[k] += e.grams * e.caloriesPerGramSnapshot;
-    }
-  }
-  const caloriesSparkline = days.map((d) => ({ date: d, value: calByDay[d] }));
 
-  // ===== Water =====
-  const todayWater = await WaterEntry.find({ date: today, deletedAt: null });
-  const waterTodayMl = todayWater.reduce((s, w) => s + w.ml, 0);
-
-  // ===== Cheat day status for today =====
-  const cheatToday = await CheatDay.findOne({ date: today });
-
-  // ===== Goal =====
-  let goal = await Goal.findOne();
-  if (!goal) goal = await Goal.create({});
-
-  // ===== Fridge =====
-  const fridgeItems = await FridgeItem.find().sort({ count: 1, foodNameSnapshot: 1 });
-  const fridgeTotal = fridgeItems.reduce((s, i) => s + i.count, 0);
-  const fridgeEmpty = fridgeItems.filter((i) => i.count === 0).length;
-
-  // ===== Workout (today's session + suggestion) =====
-  const workoutSession = await WorkoutSession.findOne({ date: today });
-  let workoutSetsDone = 0;
-  let workoutSetsTotal = 0;
-  let workoutSuggested: DashboardWorkoutType = "upperA";
-
-  if (workoutSession) {
-    if (workoutSession.type === "upperA" || workoutSession.type === "upperB") workoutSetsTotal = WORKOUT_UPPER_SET_COUNT;
-    else if (workoutSession.type === "lowerA" || workoutSession.type === "lowerB") workoutSetsTotal = WORKOUT_LOWER_SET_COUNT;
-
-    if (workoutSession.type !== "rest") {
-      const sets = await SetLog.find({ sessionId: workoutSession._id, done: true });
-      workoutSetsDone = sets.length;
-    }
-  } else {
-    const lastWorkout = await WorkoutSession.findOne({ type: { $in: WORKOUT_ROTATION } }).sort({ date: -1 });
-    if (lastWorkout) {
-      const idx = WORKOUT_ROTATION.indexOf(lastWorkout.type as DashboardWorkoutType);
-      if (idx !== -1) workoutSuggested = WORKOUT_ROTATION[(idx + 1) % WORKOUT_ROTATION.length];
-    }
-  }
-
-  // Workout streak: count consecutive days going back where there's any session
-  const recentSessions = await WorkoutSession.find().sort({ date: -1 }).limit(14);
-  let streak = 0;
-  if (recentSessions.length > 0) {
-    const cursor = new Date(today);
-    for (const s of recentSessions) {
-      const sIso = s.date.toISOString().slice(0, 10);
-      const cIso = cursor.toISOString().slice(0, 10);
-      if (sIso === cIso) {
-        streak++;
-        cursor.setUTCDate(cursor.getUTCDate() - 1);
-      } else if (sIso > cIso) {
-        continue;
-      } else {
-        break;
-      }
-    }
-  }
+  const rows = manualRows;
+  const primaryRows = rows;
+  const totalGoal = primaryRows.reduce((sum, row) => sum + row.goal, 0);
+  const totalActual = primaryRows.reduce((sum, row) => sum + Math.min(row.actual, row.goal), 0);
+  const overallPercent = primaryRows.length ? Math.round(primaryRows.reduce((sum, row) => sum + Math.min(row.percent, 100), 0) / primaryRows.length) : 0;
+  const completedRows = rows.filter((row) => row.percent >= 100).length;
+  const misses = rows
+    .filter((row) => row.left > 0)
+    .map((row) => ({ id: row.id, label: row.label, left: row.left, percent: row.percent }))
+    .sort((a, b) => a.percent - b.percent)
+    .slice(0, 5);
+  const topHabits = rows
+    .map((row) => ({ id: row.id, label: row.label, percent: row.percent, actual: row.actual, goal: row.goal }))
+    .sort((a, b) => b.percent - a.percent)
+    .slice(0, 10);
+  const dayProgress = days.map((day) => {
+    const editableRows = primaryRows;
+    const done = editableRows.reduce((sum, row) => {
+      const cell = row.cells.find((candidate) => candidate.date === day.iso) as DailyCell | AmountCell | undefined;
+      return sum + (cell?.editable && cell.checked ? 1 : 0);
+    }, 0);
+    return {
+      date: day.iso,
+      day: day.day,
+      label: day.label,
+      percent: day.active ? percent(done, editableRows.length) : 100,
+    };
+  });
 
   res.json({
-    today: todayISO,
-    income: {
-      monthTotal: incomeMonthTotal,
-      todayAmount: incomeToday,
-      sparkline: incomeSparkline,
+    today,
+    month: {
+      key: `${year}-${String(month).padStart(2, "0")}`,
+      label: monthStart.toLocaleDateString("en-US", { month: "long", year: "numeric", timeZone: "UTC" }),
+      year,
+      month,
+      start: iso(rangeStart),
+      end: iso(addDays(monthEnd, -1)),
+      days,
     },
-    payments: {
-      walletTotal,
-      totalEgp,
-      totalUsd,
-      spentToday,
-      spentMonth,
-      externalFundedToday: externalFundedToday ?? 0,
-      wallets,
-      banks,
-      recentExpenses,
-      sparkline: spendSparkline,
+    targets: {
+      calories: CALORIES_TARGET,
+      protein: PROTEIN_TARGET,
+      waterMl: WATER_TARGET_ML,
+      steps: STEPS_TARGET,
+      workWeeklyMoney: WORK_WEEKLY_MONEY_TARGET,
+      workDayMoney: WORK_DAY_MONEY_TARGET,
+      gymMonthlyDays: gymTargetForMonth(year, month),
+      englishMonthlyDays: ENGLISH_MONTHLY_TARGET,
+      learningMonthlyDays: year === 2026 && month === 7 ? activeDays.length : ENGLISH_MONTHLY_TARGET,
+      projectMonthlyDays: year === 2026 && month === 7 ? activeDays.length : PROJECT_MONTHLY_TARGET,
     },
-    subscriptions,
-    weight,
-    wishlist,
-    career,
-    tasksToday: {
-      list: todayTasks,
-      done: todayDone,
-      total: todayTasks.length,
+    metrics: {
+      overallPercent,
+      completedRows,
+      totalRows: rows.length,
+      totalGoal,
+      totalActual,
+      goalsLeft: Math.max(totalGoal - totalActual, 0),
+      gymCount: manualRows.find((row) => row.id === "gym")?.actual ?? 0,
+      workHours: manualRows.find((row) => row.id === "work")?.actual ?? 0,
+      misses,
+      topHabits,
+      dayProgress,
     },
-    tasksUpcoming: {
-      list: upcoming,
-    },
-    calories: {
-      todayCal: calToday,
-      todayProtein: pToday,
-      todayCarbs: cToday,
-      todayFat: fToday,
-      waterTodayMl,
-      isCheat: !!cheatToday,
-      sparkline: caloriesSparkline,
-    },
-    goal: {
-      caloriesTarget: goal.caloriesTarget,
-      proteinTarget: goal.proteinTarget,
-      carbsTarget: goal.carbsTarget,
-      fatTarget: goal.fatTarget,
-      waterMin: goal.waterMin,
-      waterTarget: goal.waterTarget,
-      waterMax: goal.waterMax,
-    },
-    fridge: {
-      items: fridgeItems,
-      total: fridgeTotal,
-      emptyCount: fridgeEmpty,
-    },
-    workout: {
-      session: workoutSession,
-      suggested: workoutSession ? null : workoutSuggested,
-      setsDone: workoutSetsDone,
-      setsTotal: workoutSetsTotal,
-      streak,
-    },
+    rows,
   });
+});
+
+router.put("/tracker/:kind/:date", async (req, res) => {
+  const kind = req.params.kind;
+  if (!DASHBOARD_TRACKER_KINDS.includes(kind as (typeof DASHBOARD_TRACKER_KINDS)[number])) {
+    return res.status(400).json({ error: "Invalid tracker kind" });
+  }
+
+  const date = toDayUTC(req.params.date);
+  const checked = Boolean(req.body.checked);
+  const stateInput = req.body.state;
+  const state = stateInput === "done" || stateInput === "excused" ? stateInput : checked ? "done" : null;
+  const amount = req.body.amount === null || req.body.amount === undefined || req.body.amount === "" ? null : Number(req.body.amount);
+  if (amount !== null && (!Number.isFinite(amount) || amount < 0)) {
+    return res.status(400).json({ error: "Amount must be a positive number" });
+  }
+
+  const doc = await DashboardTracker.findOneAndUpdate(
+    { kind, date } as Record<string, unknown>,
+    {
+      $set: {
+        checked: state === "done" || state === "excused",
+        amount,
+        state,
+      },
+    },
+    { upsert: true, new: true, setDefaultsOnInsert: true },
+  );
+
+  res.json(doc);
 });
 
 export default router;

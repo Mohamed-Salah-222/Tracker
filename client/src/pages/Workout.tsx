@@ -26,70 +26,53 @@ type SectionKind = "warmup" | "training" | "abs";
 
 type WorkoutDef = Record<SectionKind, Exercise[]>;
 
-const WARMUP_TREADMILL: Exercise[] = [{ id: "treadmill-30", name: "30 min Treadmill", sets: 1, reps: "-" }];
+const NO_EXERCISES: Exercise[] = [];
 
 const TRAINING_UPPER_A: Exercise[] = [
-  { id: "chest-press-machine", name: "Chest Press Machine", sets: 3, reps: "12" },
-  { id: "chest-fly-machine", name: "Chest Fly Machine", sets: 3, reps: "12" },
-  { id: "shoulder-press-machine", name: "Shoulder Press Machine", sets: 3, reps: "12" },
+  { id: "chest-press", name: "Chest Press", sets: 4, reps: "10" },
+  { id: "chest-fly", name: "Chest Fly", sets: 3, reps: "12" },
+  { id: "shoulder-press", name: "Shoulder Press", sets: 3, reps: "12" },
   { id: "lateral-raises", name: "Lateral Raises", sets: 3, reps: "12" },
-  { id: "hammer-strength-close", name: "Hammer Strength Close Grip", sets: 3, reps: "12" },
-  { id: "hammer-strength-wide", name: "Hammer Strength Wide Grip", sets: 3, reps: "12" },
-  { id: "high-pulley-curl", name: "High Pulley Curl", sets: 3, reps: "12" },
-  { id: "skull-crushers", name: "Skull Crushers", sets: 3, reps: "12" },
+  { id: "lat-pulldown", name: "Lat Pulldown", sets: 4, reps: "12" },
+  { id: "bicep-curl", name: "Bicep Curl", sets: 3, reps: "12" },
+  { id: "triceps-pushdown", name: "Triceps Pushdown", sets: 3, reps: "12" },
 ];
 
-const TRAINING_LOWER: Exercise[] = [
-  { id: "leg-press", name: "Leg Press", sets: 3, reps: "12" },
-  { id: "hack-squats", name: "Hack Squats", sets: 3, reps: "10" },
+const TRAINING_LOWER_A: Exercise[] = [
+  { id: "leg-press", name: "Leg Press", sets: 4, reps: "12" },
+  { id: "hack-squat", name: "Hack Squat", sets: 4, reps: "10" },
   { id: "leg-extension", name: "Leg Extension", sets: 3, reps: "12" },
-  { id: "romanian-deadlift", name: "Romanian Deadlift", sets: 3, reps: "12" },
-  { id: "calf-raise-hack", name: "Calf Raise on Hack", sets: 3, reps: "15" },
+  { id: "romanian-deadlift", name: "Romanian Deadlift", sets: 4, reps: "-" },
+  { id: "cable-pull-through", name: "Cable Pull-Through", sets: 3, reps: "12" },
+  { id: "calf-raise", name: "Calf Raise", sets: 3, reps: "12" },
 ];
 
 const TRAINING_UPPER_B: Exercise[] = [
-  { id: "bar-bench-press", name: "Bar Bench Press", sets: 3, reps: "10" },
-  { id: "low-cable-crossover", name: "Low Cable Crossover", sets: 3, reps: "12" },
-  { id: "dumbbell-lateral-raise", name: "Dumbbell Lateral Raise", sets: 3, reps: "12" },
-  { id: "cable-raise", name: "Cable Raise", sets: 3, reps: "12" },
-  { id: "bar-machine", name: "Bar Machine", sets: 3, reps: "12" },
-  { id: "pull-over", name: "Pull Over", sets: 3, reps: "12" },
-  { id: "barbell-bicep-curl", name: "Barbell Bicep Curl", sets: 3, reps: "12" },
-  { id: "rope-overhead", name: "Rope Overhead", sets: 3, reps: "12" },
+  { id: "incline-chest-press", name: "Incline Chest Press", sets: 4, reps: "10" },
+  { id: "cable-crossover-fly", name: "Cable Crossover Fly", sets: 3, reps: "12" },
+  { id: "dumbbell-shoulder-press", name: "Dumbbell Shoulder Press", sets: 3, reps: "12" },
+  { id: "rear-delt-fly", name: "Rear Delt Fly", sets: 3, reps: "12" },
+  { id: "lat-pulldown-wide-grip", name: "Lat Pulldown Wide Grip", sets: 4, reps: "12" },
+  { id: "hammer-curl", name: "Hammer Curl", sets: 3, reps: "12" },
+  { id: "overhead-tricep-extension", name: "Overhead Tricep Extension", sets: 3, reps: "12" },
 ];
 
-const ABS_UPPER_A: Exercise[] = [
-  { id: "planks", name: "Planks", sets: 2, reps: "30s" },
-  { id: "crunches", name: "Crunches", sets: 2, reps: "15" },
-  { id: "leg-raises-abs", name: "Leg Raises", sets: 2, reps: "15" },
-];
-
-const ABS_LOWER_A: Exercise[] = [
-  { id: "planks", name: "Planks", sets: 2, reps: "30s" },
-  { id: "russian-twist", name: "Russian Twist", sets: 2, reps: "15" },
-  { id: "leg-raises-abs", name: "Leg Raises", sets: 2, reps: "15" },
-];
-
-const ABS_UPPER_B: Exercise[] = [
-  { id: "high-cable-side-bend", name: "High Cable Side Bend", sets: 2, reps: "15" },
-  { id: "high-rope-crunches", name: "High Rope Crunches", sets: 2, reps: "15" },
-  { id: "rope-crunches", name: "Rope Crunches", sets: 2, reps: "15" },
-];
-
-const ABS_LOWER_B: Exercise[] = [
-  { id: "side-planks", name: "Side Planks", sets: 2, reps: "15" },
-  { id: "crunches", name: "Crunches", sets: 2, reps: "15" },
-  { id: "sit-ups", name: "Sit Ups", sets: 2, reps: "15" },
+const TRAINING_LOWER_B: Exercise[] = [
+  { id: "leg-press", name: "Leg Press", sets: 4, reps: "12" },
+  { id: "hack-squat", name: "Hack Squat", sets: 4, reps: "10" },
+  { id: "seated-leg-curl", name: "Seated Leg Curl", sets: 3, reps: "12" },
+  { id: "cable-pull-through", name: "Cable Pull-Through", sets: 3, reps: "12" },
+  { id: "standing-calf-raise", name: "Standing Calf Raise", sets: 3, reps: "12" },
 ];
 
 // ===== Types =====
 type WorkoutType = "upperA" | "lowerA" | "upperB" | "lowerB" | "rest";
 
 const PROGRAM: Record<Exclude<WorkoutType, "rest">, WorkoutDef> = {
-  upperA: { warmup: WARMUP_TREADMILL, training: TRAINING_UPPER_A, abs: ABS_UPPER_A },
-  lowerA: { warmup: WARMUP_TREADMILL, training: TRAINING_LOWER, abs: ABS_LOWER_A },
-  upperB: { warmup: WARMUP_TREADMILL, training: TRAINING_UPPER_B, abs: ABS_UPPER_B },
-  lowerB: { warmup: WARMUP_TREADMILL, training: TRAINING_LOWER, abs: ABS_LOWER_B },
+  upperA: { warmup: NO_EXERCISES, training: TRAINING_UPPER_A, abs: NO_EXERCISES },
+  lowerA: { warmup: NO_EXERCISES, training: TRAINING_LOWER_A, abs: NO_EXERCISES },
+  upperB: { warmup: NO_EXERCISES, training: TRAINING_UPPER_B, abs: NO_EXERCISES },
+  lowerB: { warmup: NO_EXERCISES, training: TRAINING_LOWER_B, abs: NO_EXERCISES },
 };
 
 type Session = {
@@ -140,6 +123,11 @@ function workoutLabel(type: WorkoutType) {
   if (type === "upperB") return "Upper B";
   if (type === "lowerB") return "Lower B";
   return "Rest day";
+}
+
+function exerciseTarget(exercise: Exercise) {
+  if (!exercise.reps || exercise.reps === "-") return `${exercise.sets} sets`;
+  return `${exercise.sets} x ${exercise.reps}`;
 }
 
 // ===== Motion =====
@@ -383,17 +371,21 @@ export default function Workout() {
       {/* ===== Workout day ===== */}
       {session && activeDef && (
         <>
-          <SectionHeader title="Warmup" index={2} />
-          {activeDef.warmup.map((ex, i) => (
-            <ChecklistRow
-              key={ex.id}
-              exercise={ex}
-              existingSets={sets.filter((s) => s.exerciseId === ex.id)}
-              sessionId={session._id}
-              onChanged={() => loadSets(session._id)}
-              index={i + 3}
-            />
-          ))}
+          {activeDef.warmup.length > 0 && (
+            <>
+              <SectionHeader title="Warmup" index={2} />
+              {activeDef.warmup.map((ex, i) => (
+                <ChecklistRow
+                  key={ex.id}
+                  exercise={ex}
+                  existingSets={sets.filter((s) => s.exerciseId === ex.id)}
+                  sessionId={session._id}
+                  onChanged={() => loadSets(session._id)}
+                  index={i + 3}
+                />
+              ))}
+            </>
+          )}
 
           <SectionHeader title="Training" index={activeDef.warmup.length + 3} />
           {activeDef.training.map((ex, i) => (
@@ -408,17 +400,21 @@ export default function Workout() {
             />
           ))}
 
-          <SectionHeader title="Abs" index={activeDef.warmup.length + activeDef.training.length + 4} />
-          {activeDef.abs.map((ex, i) => (
-            <ChecklistRow
-              key={ex.id}
-              exercise={ex}
-              existingSets={sets.filter((s) => s.exerciseId === ex.id)}
-              sessionId={session._id}
-              onChanged={() => loadSets(session._id)}
-              index={i + activeDef.warmup.length + activeDef.training.length + 5}
-            />
-          ))}
+          {activeDef.abs.length > 0 && (
+            <>
+              <SectionHeader title="Abs" index={activeDef.warmup.length + activeDef.training.length + 4} />
+              {activeDef.abs.map((ex, i) => (
+                <ChecklistRow
+                  key={ex.id}
+                  exercise={ex}
+                  existingSets={sets.filter((s) => s.exerciseId === ex.id)}
+                  sessionId={session._id}
+                  onChanged={() => loadSets(session._id)}
+                  index={i + activeDef.warmup.length + activeDef.training.length + 5}
+                />
+              ))}
+            </>
+          )}
 
           <div className="flex justify-center pt-2">
             <Button variant="ghost" size="sm" onClick={deleteSession} className="text-xs text-muted-foreground">
@@ -537,7 +533,7 @@ function ChecklistRow({ exercise, sessionId, existingSets, onChanged, index }: {
             <div className="flex items-center gap-2.5 min-w-0 flex-1">
               <span className={`text-sm font-medium truncate ${allDone ? "line-through text-muted-foreground" : ""}`}>{exercise.name}</span>
               <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium font-mono tabular-nums flex-shrink-0">
-                {exercise.sets > 1 ? `${exercise.sets} x ${exercise.reps}` : exercise.reps !== "-" ? exercise.reps : ""}
+                {exerciseTarget(exercise)}
               </span>
             </div>
             <div className="flex items-center gap-1.5 flex-shrink-0">
@@ -610,7 +606,7 @@ function ExerciseCard({ exercise, sessionId, existingSets, lastSession, onChange
             <div className="flex items-baseline gap-2 min-w-0 flex-1">
               <span className="text-sm font-semibold truncate">{exercise.name}</span>
               <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium font-mono tabular-nums">
-                {exercise.sets} x {exercise.reps}
+                {exerciseTarget(exercise)}
               </span>
             </div>
             <div className="text-xs font-mono tabular-nums flex-shrink-0" style={{ color: completed === exercise.sets ? "var(--color-income)" : "var(--color-muted-foreground)" }}>
@@ -650,8 +646,12 @@ function ExerciseCard({ exercise, sessionId, existingSets, lastSession, onChange
                       className="h-7 w-24 font-mono tabular-nums text-right"
                     />
                     <span className="text-xs text-muted-foreground">kg</span>
-                    <span className="text-muted-foreground/40 px-1">-</span>
-                    <span className="text-xs font-mono tabular-nums text-muted-foreground">{exercise.reps} reps</span>
+                    {exercise.reps !== "-" && (
+                      <>
+                        <span className="text-muted-foreground/40 px-1">-</span>
+                        <span className="text-xs font-mono tabular-nums text-muted-foreground">{exercise.reps} reps</span>
+                      </>
+                    )}
                   </div>
                 </motion.div>
               );
