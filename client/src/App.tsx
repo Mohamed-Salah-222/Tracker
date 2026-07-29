@@ -16,6 +16,8 @@ import Workout from "./pages/Workout";
 import Career from "./pages/Career";
 import CareerTopic from "./pages/CareerTopic";
 import MedicalEnglish from "./pages/MedicalEnglish";
+import Goals from "./pages/Goals";
+import GoalDetail from "./pages/GoalDetail";
 
 export default function App() {
   return (
@@ -44,6 +46,8 @@ export default function App() {
                 }
               />
               <Route path="/tasks" element={<Tasks />} />
+              <Route path="/goals" element={<Goals />} />
+              <Route path="/goals/:goalId" element={<GoalDetail />} />
               <Route path="/today" element={<Today />} />
               <Route path="/calories" element={<Calories />} />
               <Route path="/fridge" element={<Fridge />} />
