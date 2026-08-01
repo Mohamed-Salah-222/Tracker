@@ -1,13 +1,9 @@
 import { Schema, model } from "mongoose";
 
 export const DASHBOARD_TRACKER_KINDS = [
-  "wake",
   "sleep",
   "gym",
-  "reading",
   "english",
-  "planning",
-  "focus",
   "vitamins",
   "steps",
   "work",

@@ -29,4 +29,30 @@ const foodSchema = new Schema(
   { timestamps: true },
 );
 
+// entryMode decides which half of this document is real; the other half is dead
+// weight that every consumer ignores. Letting both halves carry values means a
+// food whose mode is later flipped would silently start reporting stale macros
+// from its old mode, so the inactive half must stay blank.
+foodSchema.pre("validate", function () {
+  if (this.entryMode === "perGram") {
+    for (const path of ["caloriesPerUnit", "proteinPerUnit", "carbsPerUnit", "fatPerUnit"] as const) {
+      if (this.get(path)) {
+        this.invalidate(path, `${path} must be 0 when entryMode is perGram`, this.get(path));
+      }
+    }
+    if (this.unitLabel) {
+      this.invalidate("unitLabel", "unitLabel must be empty when entryMode is perGram", this.unitLabel);
+    }
+  } else if (this.entryMode === "perUnit") {
+    for (const path of ["caloriesPerGram", "proteinPerGram", "carbsPerGram", "fatPerGram"] as const) {
+      if (this.get(path)) {
+        this.invalidate(path, `${path} must be 0 when entryMode is perUnit`, this.get(path));
+      }
+    }
+    if (this.defaultServingGrams !== null && this.defaultServingGrams !== undefined) {
+      this.invalidate("defaultServingGrams", "defaultServingGrams must be null when entryMode is perUnit", this.defaultServingGrams);
+    }
+  }
+});
+
 export const Food = model("Food", foodSchema);

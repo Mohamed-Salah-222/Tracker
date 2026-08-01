@@ -7,7 +7,11 @@
     "dev": "ts-node-dev --respawn src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "migrate:expense-source": "ts-node-dev --transpile-only --no-notify src/scripts/migrate-expense-source.ts"
+    "migrate:expense-source": "ts-node-dev --transpile-only --no-notify src/scripts/migrate-expense-source.ts",
+    "migrate:wallet-currency": "ts-node-dev --transpile-only --no-notify src/scripts/migrate-wallet-currency.ts",
+    "reset:august-dashboard": "ts-node-dev --transpile-only --no-notify src/scripts/reset-august-dashboard.ts",
+    "reset:payments": "ts-node-dev --transpile-only --no-notify src/scripts/reset-payments.ts",
+    "seed:goals": "ts-node-dev --transpile-only --no-notify src/scripts/seed-goals.ts"
   },
   "keywords": [],
   "author": "",
@@ -17,6 +21,8 @@
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
+    "express-rate-limit": "^8.6.1",
+    "helmet": "^8.3.0",
     "mongoose": "^9.6.1"
   },
   "devDependencies": {

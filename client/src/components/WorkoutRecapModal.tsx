@@ -48,9 +48,8 @@ type StatsResp = {
   totalSessions: number;
   completedSessions: number;
   sessionsByType: { upperA: number; lowerA: number; upperB: number; lowerB: number; rest: number };
-  totalVolume: number;
+  totalWeightLogged: number;
   totalSetsDone: number;
-  totalReps: number;
   days: { date: string; type: WorkoutType; volume: number; setsDone: number; completed: boolean }[];
   bestByExercise: Record<string, { weight: number; reps: number; date: string }>;
 };
@@ -167,7 +166,7 @@ export function WorkoutRecapModal({ open, onOpenChange }: { open: boolean; onOpe
                 {/* ===== Top stats ===== */}
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                   <StatCard label="Sessions" value={`${stats!.completedSessions}/${stats!.totalSessions}`} sub="completed" icon={<Calendar className="h-3 w-3" />} />
-                  <StatCard label="Total volume" value={`${stats!.totalVolume.toLocaleString("en-US")}`} sub="kg" icon={<Dumbbell className="h-3 w-3" />} />
+                  <StatCard label="Weight logged" value={`${stats!.totalWeightLogged.toLocaleString("en-US")}`} sub="kg" icon={<Dumbbell className="h-3 w-3" />} />
                   <StatCard label="Sets done" value={`${stats!.totalSetsDone}`} icon={<TrendingUp className="h-3 w-3" />} />
                   <StatCard label="Split" value={`${stats!.sessionsByType.upperA + stats!.sessionsByType.upperB} upper`} sub={`${stats!.sessionsByType.lowerA + stats!.sessionsByType.lowerB} lower - ${stats!.sessionsByType.rest} rest`} icon={<Flame className="h-3 w-3" />} />
                 </div>

@@ -7,17 +7,21 @@ import { WaterEntry } from "../models/WaterEntry";
 import { Goal } from "../models/Goal";
 import { WeightEntry } from "../models/WeightEntry";
 import { WeightGoal } from "../models/WeightGoal";
-import { toDayUTC } from "../lib/dates";
+import { isNonNegativeNumber, isObjectId, isPositiveNumber, objectIdParam, parseDayUTC } from "../lib/validation";
+import { pageOf, parsePageParams } from "../lib/pagination";
 
 const router = Router();
+
+router.param("id", objectIdParam);
 
 type Meal = (typeof MEAL_SLOTS)[number];
 function isValidMeal(m: string): m is Meal {
   return (MEAL_SLOTS as readonly string[]).includes(m);
 }
 
-function fridayOnOrBefore(iso: string): Date {
-  const d = toDayUTC(iso);
+// Expects an already-validated UTC day.
+function fridayOnOrBefore(day: Date): Date {
+  const d = new Date(day);
   const dow = d.getUTCDay();
   const back = (dow - 5 + 7) % 7;
   d.setUTCDate(d.getUTCDate() - back);
@@ -29,9 +33,8 @@ function fridayOnOrBefore(iso: string): Date {
 // ===========================================================
 
 router.get("/day", async (req, res) => {
-  const dateStr = req.query.date as string;
-  if (!dateStr) return res.status(400).json({ error: "date required" });
-  const day = toDayUTC(dateStr);
+  const day = parseDayUTC(req.query.date);
+  if (!day) return res.status(400).json({ error: "valid date required" });
   const entries = await CalorieEntry.find({ date: day, deletedAt: null }).sort({
     createdAt: 1,
   });
@@ -47,17 +50,17 @@ router.get("/recent-foods", async (_req, res) => {
 
 router.post("/", async (req, res) => {
   const { date, foodId, meal, grams, units } = req.body;
-  if (!date || !foodId || !meal) return res.status(400).json({ error: "missing fields" });
-  if (!isValidMeal(meal)) return res.status(400).json({ error: "invalid meal" });
+  const day = parseDayUTC(date);
+  if (!day) return res.status(400).json({ error: "valid date required" });
+  if (!isObjectId(foodId)) return res.status(400).json({ error: "invalid foodId" });
+  if (typeof meal !== "string" || !isValidMeal(meal)) return res.status(400).json({ error: "invalid meal" });
 
   const food = await Food.findById(foodId);
   if (!food || food.archived) return res.status(404).json({ error: "food not found" });
 
-  const day = toDayUTC(date);
-
   if (food.entryMode === "perUnit") {
-    const n = typeof units === "number" ? units : null;
-    if (!n || n <= 0) return res.status(400).json({ error: "units > 0 required" });
+    const n = isPositiveNumber(units) ? units : null;
+    if (!n) return res.status(400).json({ error: "units > 0 required" });
 
     let deducted = 0;
     if (food.trackInFridge) {
@@ -87,8 +90,8 @@ router.post("/", async (req, res) => {
     });
     res.json(entry);
   } else {
-    const g = typeof grams === "number" ? grams : null;
-    if (!g || g <= 0) return res.status(400).json({ error: "grams > 0 required" });
+    const g = isPositiveNumber(grams) ? grams : null;
+    if (!g) return res.status(400).json({ error: "grams > 0 required" });
     const entry = await CalorieEntry.create({
       date: day,
       foodId: food._id,
@@ -107,7 +110,7 @@ router.post("/", async (req, res) => {
 
 router.patch("/weight-goal", async (req, res) => {
   const { targetKg } = req.body;
-  if (typeof targetKg !== "number" || targetKg <= 0) {
+  if (!isPositiveNumber(targetKg)) {
     return res.status(400).json({ error: "positive targetKg required" });
   }
 
@@ -119,12 +122,18 @@ router.patch("/weight-goal", async (req, res) => {
 });
 
 router.patch("/goal", async (req, res) => {
+  const fields = ["caloriesTarget", "proteinTarget", "carbsTarget", "fatTarget", "waterMin", "waterTarget", "waterMax"] as const;
+  for (const f of fields) {
+    if (req.body[f] !== undefined && !isNonNegativeNumber(req.body[f])) {
+      return res.status(400).json({ error: `${f} must be a non-negative number` });
+    }
+  }
+
   let goal = await Goal.findOne();
   if (!goal) goal = await Goal.create({});
 
-  const fields = ["caloriesTarget", "proteinTarget", "carbsTarget", "fatTarget", "waterMin", "waterTarget", "waterMax"] as const;
   for (const f of fields) {
-    if (typeof req.body[f] === "number" && req.body[f] >= 0) {
+    if (req.body[f] !== undefined) {
       goal.set(f, req.body[f]);
     }
   }
@@ -133,19 +142,27 @@ router.patch("/goal", async (req, res) => {
 });
 
 router.patch("/:id", async (req, res) => {
+  const { grams, units, meal } = req.body;
+
+  if (meal !== undefined && (typeof meal !== "string" || !isValidMeal(meal))) {
+    return res.status(400).json({ error: "invalid meal" });
+  }
+  if (units !== undefined && !isPositiveNumber(units)) {
+    return res.status(400).json({ error: "units > 0 required" });
+  }
+  if (grams !== undefined && !isPositiveNumber(grams)) {
+    return res.status(400).json({ error: "grams > 0 required" });
+  }
+
   const entry = await CalorieEntry.findById(req.params.id);
   if (!entry || entry.deletedAt) return res.status(404).json({ error: "not found" });
 
-  const { grams, units, meal } = req.body;
-
   if (meal) {
-    if (!isValidMeal(meal)) return res.status(400).json({ error: "invalid meal" });
     entry.set("meal", meal);
   }
 
   if (entry.entryMode === "perUnit") {
-    if (typeof units === "number") {
-      if (units <= 0) return res.status(400).json({ error: "units > 0 required" });
+    if (units !== undefined) {
       const oldUnits = entry.units ?? 0;
       entry.units = units;
 
@@ -168,11 +185,8 @@ router.patch("/:id", async (req, res) => {
         }
       }
     }
-  } else {
-    if (typeof grams === "number") {
-      if (grams <= 0) return res.status(400).json({ error: "grams > 0 required" });
-      entry.grams = grams;
-    }
+  } else if (grams !== undefined) {
+    entry.grams = grams;
   }
 
   await entry.save();
@@ -201,17 +215,19 @@ router.delete("/:id", async (req, res) => {
 // ===========================================================
 
 router.get("/cheat-day", async (req, res) => {
-  const dateStr = req.query.date as string;
-  if (!dateStr) return res.status(400).json({ error: "date required" });
-  const day = toDayUTC(dateStr);
+  const day = parseDayUTC(req.query.date);
+  if (!day) return res.status(400).json({ error: "valid date required" });
   const cd = await CheatDay.findOne({ date: day });
   res.json(cd);
 });
 
 router.put("/cheat-day", async (req, res) => {
   const { date, on, note } = req.body;
-  if (!date) return res.status(400).json({ error: "date required" });
-  const day = toDayUTC(date);
+  const day = parseDayUTC(date);
+  if (!day) return res.status(400).json({ error: "valid date required" });
+  if (note !== undefined && note !== null && typeof note !== "string") {
+    return res.status(400).json({ error: "note must be a string" });
+  }
 
   if (!on) {
     await CheatDay.deleteOne({ date: day });
@@ -227,19 +243,19 @@ router.put("/cheat-day", async (req, res) => {
 // ===========================================================
 
 router.get("/water/day", async (req, res) => {
-  const dateStr = req.query.date as string;
-  if (!dateStr) return res.status(400).json({ error: "date required" });
-  const day = toDayUTC(dateStr);
+  const day = parseDayUTC(req.query.date);
+  if (!day) return res.status(400).json({ error: "valid date required" });
   const entries = await WaterEntry.find({ date: day, deletedAt: null }).sort({ createdAt: 1 });
   res.json(entries);
 });
 
 router.post("/water", async (req, res) => {
   const { date, ml } = req.body;
-  if (!date || typeof ml !== "number" || ml <= 0) {
-    return res.status(400).json({ error: "date and positive ml required" });
+  const day = parseDayUTC(date);
+  if (!day || !isPositiveNumber(ml)) {
+    return res.status(400).json({ error: "valid date and positive ml required" });
   }
-  const entry = await WaterEntry.create({ date: toDayUTC(date), ml });
+  const entry = await WaterEntry.create({ date: day, ml });
   res.json(entry);
 });
 
@@ -268,10 +284,10 @@ router.get("/goal", async (_req, res) => {
 // ===========================================================
 
 router.get("/week-summary", async (req, res) => {
-  const startStr = req.query.startDate as string;
-  if (!startStr) return res.status(400).json({ error: "startDate required" });
+  const startDay = parseDayUTC(req.query.startDate);
+  if (!startDay) return res.status(400).json({ error: "valid startDate required" });
 
-  const start = fridayOnOrBefore(startStr);
+  const start = fridayOnOrBefore(startDay);
   const end = new Date(start);
   end.setUTCDate(end.getUTCDate() + 7); // exclusive
 
@@ -437,10 +453,10 @@ router.get("/week-summary", async (req, res) => {
 });
 
 router.get("/coach-report", async (req, res) => {
-  const startStr = req.query.startDate as string;
-  if (!startStr) return res.status(400).json({ error: "startDate required" });
+  const startDay = parseDayUTC(req.query.startDate);
+  if (!startDay) return res.status(400).json({ error: "valid startDate required" });
 
-  const start = fridayOnOrBefore(startStr);
+  const start = fridayOnOrBefore(startDay);
   const end = new Date(start);
   end.setUTCDate(end.getUTCDate() + 7);
 
@@ -567,19 +583,29 @@ router.get("/coach-report", async (req, res) => {
 // WEIGHT JOURNEY
 // ===========================================================
 
-router.get("/weight", async (_req, res) => {
-  const entries = await WeightEntry.find({ deletedAt: null }).sort({ date: 1 });
-  res.json(entries);
+// Paged newest-first, not oldest-first as before: a bounded window of the *latest*
+// weigh-ins is the useful one for the chart. The client re-sorts ascending to plot.
+router.get("/weight", async (req, res) => {
+  const page = parsePageParams(req.query);
+  const filter = { deletedAt: null };
+  const [entries, total] = await Promise.all([
+    WeightEntry.find(filter).sort({ date: -1 }).skip(page.offset).limit(page.limit),
+    WeightEntry.countDocuments(filter),
+  ]);
+  res.json(pageOf(entries, total, page));
 });
 
 router.post("/weight", async (req, res) => {
   const { date, weightKg, note } = req.body;
-  if (!date) return res.status(400).json({ error: "date required" });
-  if (typeof weightKg !== "number" || weightKg <= 0) {
+  const day = parseDayUTC(date);
+  if (!day) return res.status(400).json({ error: "valid date required" });
+  if (!isPositiveNumber(weightKg)) {
     return res.status(400).json({ error: "positive weightKg required" });
   }
+  if (note !== undefined && note !== null && typeof note !== "string") {
+    return res.status(400).json({ error: "note must be a string" });
+  }
 
-  const day = toDayUTC(date);
   const entry = await WeightEntry.findOneAndUpdate(
     { date: day, deletedAt: null },
     { weightKg, note: note ?? "" },
@@ -589,21 +615,26 @@ router.post("/weight", async (req, res) => {
 });
 
 router.patch("/weight/:id", async (req, res) => {
+  const { weightKg, note, date } = req.body;
+
+  if ("weightKg" in req.body && !isPositiveNumber(weightKg)) {
+    return res.status(400).json({ error: "positive weightKg required" });
+  }
+  if ("note" in req.body && note !== null && note !== undefined && typeof note !== "string") {
+    return res.status(400).json({ error: "note must be a string" });
+  }
+  let day: Date | null = null;
+  if ("date" in req.body) {
+    day = parseDayUTC(date);
+    if (!day) return res.status(400).json({ error: "valid date required" });
+  }
+
   const entry = await WeightEntry.findById(req.params.id);
   if (!entry || entry.deletedAt) return res.status(404).json({ error: "not found" });
 
-  const { weightKg, note, date } = req.body;
-  if ("weightKg" in req.body) {
-    if (typeof weightKg !== "number" || weightKg <= 0) {
-      return res.status(400).json({ error: "positive weightKg required" });
-    }
-    entry.weightKg = weightKg;
-  }
+  if ("weightKg" in req.body) entry.weightKg = weightKg;
   if ("note" in req.body) entry.note = note ?? "";
-  if ("date" in req.body) {
-    if (!date) return res.status(400).json({ error: "date required" });
-    entry.date = toDayUTC(date);
-  }
+  if (day) entry.date = day;
 
   await entry.save();
   res.json(entry);

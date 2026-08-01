@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { motion } from "motion/react";
 import { api } from "../lib/api";
+import { todayISO } from "../lib/today";
+import { PAGE_LIMIT, pageRangeLabel, type Page } from "../lib/pagination";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
@@ -67,7 +69,7 @@ type Movement = {
   note: string;
 };
 
-export type Wallet = { _id: string; name: string; balance: number };
+export type Wallet = { _id: string; name: string; balance: number; currency: "EGP" | "USD" };
 export type Bank = { _id: string; name: string; balance: number; currency: "EGP" | "USD" };
 export type ExternalSource = { _id: string; name: string };
 
@@ -76,8 +78,6 @@ const fmtEGP = (n: number) =>
   `${Math.round(Math.abs(n)).toLocaleString("en-US")} L.E`;
 const fmtUSD = (n: number) =>
   `$${Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-const todayISO = () => new Date().toISOString().slice(0, 10);
-
 function fmtAmount(amount: number, currency: string | null): string {
   if (currency === "USD") return fmtUSD(amount);
   return fmtEGP(amount);
@@ -329,19 +329,24 @@ function AddMovementDialog({
     setConversionRate("50");
   };
 
-  // Currency of selected accounts
+  // Currency of selected accounts. Wallets carry their own currency now, so
+  // nothing here may assume a wallet is EGP.
   const fromBankCurrency = banks.find((b) => b._id === fromBankId)?.currency ?? "EGP";
   const toBankCurrency = banks.find((b) => b._id === toBankId)?.currency ?? "EGP";
+  const fromWalletCurrency = wallets.find((w) => w._id === fromWalletId)?.currency ?? "EGP";
+  const toWalletCurrency = wallets.find((w) => w._id === toWalletId)?.currency ?? "EGP";
+
+  // Which side of each movement type is a wallet vs a bank.
+  const fromSelected = selType === "deposit" || selType === "transfer_wallet" ? !!fromWalletId : !!fromBankId;
+  const toSelected = selType === "withdraw" || selType === "transfer_wallet" ? !!toWalletId : !!toBankId;
+  const fromCurrencyLabel = selType === "deposit" || selType === "transfer_wallet" ? fromWalletCurrency : fromBankCurrency;
+  const toCurrencyLabel = selType === "withdraw" || selType === "transfer_wallet" ? toWalletCurrency : toBankCurrency;
 
   const showConversion =
-    (selType === "withdraw" && fromBankCurrency === "USD") ||
-    (selType === "deposit" && !!toBankId && toBankCurrency !== "EGP") ||
-    (selType === "transfer_bank" && !!fromBankId && !!toBankId && fromBankCurrency !== toBankCurrency);
-
-  const fromCurrencyLabel =
-    selType === "deposit" ? "EGP" : fromBankCurrency;
-  const toCurrencyLabel =
-    selType === "withdraw" ? "EGP" : selType === "deposit" ? toBankCurrency : toBankCurrency;
+    (selType === "withdraw" || selType === "deposit" || selType === "transfer_bank" || selType === "transfer_wallet") &&
+    fromSelected &&
+    toSelected &&
+    fromCurrencyLabel !== toCurrencyLabel;
 
   const computedAmountTo = (() => {
     const af = parseFloat(amountFrom);
@@ -395,7 +400,10 @@ function AddMovementDialog({
         if (!fromWalletId) return toast.error("Select source wallet");
         if (!toWalletId) return toast.error("Select target wallet");
         if (fromWalletId === toWalletId) return toast.error("Source and target wallets must differ");
-        payload = { ...base, fromType: "wallet", fromId: fromWalletId, toType: "wallet", toId: toWalletId, amountFrom: af, amountTo: af, conversionRate: 1 };
+        const rate = showConversion ? parseFloat(conversionRate) : 1;
+        const at = showConversion ? parseFloat(computedAmountTo) : af;
+        if (showConversion && (isNaN(rate) || rate <= 0)) return toast.error("Enter a valid conversion rate");
+        payload = { ...base, fromType: "wallet", fromId: fromWalletId, toType: "wallet", toId: toWalletId, amountFrom: af, amountTo: at, conversionRate: rate };
         break;
       }
       case "adjustment": {
@@ -529,7 +537,7 @@ function AddMovementDialog({
                   <SelectContent>
                     {wallets.map((w) => (
                       <SelectItem key={w._id} value={w._id}>
-                        {w.name}
+                        {w.name} ({w.currency})
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -554,7 +562,7 @@ function AddMovementDialog({
                   <SelectContent>
                     {wallets.map((w) => (
                       <SelectItem key={w._id} value={w._id}>
-                        {w.name}
+                        {w.name} ({w.currency})
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -640,7 +648,7 @@ function AddMovementDialog({
                       .filter((w) => w._id !== toWalletId)
                       .map((w) => (
                         <SelectItem key={w._id} value={w._id}>
-                          {w.name}
+                          {w.name} ({w.currency})
                         </SelectItem>
                       ))}
                   </SelectContent>
@@ -657,7 +665,7 @@ function AddMovementDialog({
                       .filter((w) => w._id !== fromWalletId)
                       .map((w) => (
                         <SelectItem key={w._id} value={w._id}>
-                          {w.name}
+                          {w.name} ({w.currency})
                         </SelectItem>
                       ))}
                   </SelectContent>
@@ -665,6 +673,7 @@ function AddMovementDialog({
               </div>
             </div>
             {amountField}
+            {conversionRow}
           </>
         );
 
@@ -686,7 +695,7 @@ function AddMovementDialog({
                       </SelectLabel>
                       {wallets.map((w) => (
                         <SelectItem key={w._id} value={encodeAccount("wallet", w._id)}>
-                          {w.name}
+                          {w.name} ({w.currency})
                         </SelectItem>
                       ))}
                     </SelectGroup>
@@ -743,7 +752,7 @@ function AddMovementDialog({
                         <SelectLabel>Wallets</SelectLabel>
                         {wallets.map((w) => (
                           <SelectItem key={w._id} value={encodeAccount("wallet", w._id)}>
-                            {w.name}
+                            {w.name} ({w.currency})
                           </SelectItem>
                         ))}
                       </SelectGroup>
@@ -899,24 +908,43 @@ export function MovementsModal({
   onChanged,
 }: MovementsModalProps) {
   const [movements, setMovements] = useState<Movement[]>([]);
+  const [movementTotal, setMovementTotal] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [filterType, setFilterType] = useState<MovementType | "all">("all");
   const [addOpen, setAddOpen] = useState(false);
   const [editingMovement, setEditingMovement] = useState<Movement | null>(null);
 
+  // Loads the first page; switching the type filter re-runs it from offset 0.
   const loadMovements = useCallback(async () => {
     setLoading(true);
     try {
-      const params: Record<string, string> = {};
+      const params: Record<string, string | number> = { limit: PAGE_LIMIT, offset: 0 };
       if (filterType !== "all") params.type = filterType;
-      const r = await api.get<Movement[]>("/payments/movements", { params });
-      setMovements(r.data);
+      const r = await api.get<Page<Movement>>("/payments/movements", { params });
+      setMovements(r.data.items);
+      setMovementTotal(r.data.total);
     } catch (e) {
       toast.error(getApiError(e));
     } finally {
       setLoading(false);
     }
   }, [filterType]);
+
+  const loadMoreMovements = async () => {
+    setLoadingMore(true);
+    try {
+      const params: Record<string, string | number> = { limit: PAGE_LIMIT, offset: movements.length };
+      if (filterType !== "all") params.type = filterType;
+      const r = await api.get<Page<Movement>>("/payments/movements", { params });
+      setMovements((prev) => [...prev, ...r.data.items]);
+      setMovementTotal(r.data.total);
+    } catch (e) {
+      toast.error(getApiError(e));
+    } finally {
+      setLoadingMore(false);
+    }
+  };
 
   useEffect(() => {
     if (open) void loadMovements();
@@ -1067,7 +1095,21 @@ export function MovementsModal({
                   </motion.div>
                 );
               })}
+            {!loading && movements.length < movementTotal && (
+              <div className="flex justify-center pt-1">
+                <Button variant="outline" size="sm" onClick={() => void loadMoreMovements()} disabled={loadingMore}>
+                  {loadingMore ? "Loading…" : `Load ${Math.min(PAGE_LIMIT, movementTotal - movements.length)} more`}
+                </Button>
+              </div>
+            )}
           </div>
+
+          {/* Footer count */}
+          {!loading && movementTotal > 0 && (
+            <div className="border-t border-border px-5 py-2 text-[11px] text-muted-foreground shrink-0">
+              Showing {pageRangeLabel(movements.length, movementTotal)} {movementTotal === 1 ? "movement" : "movements"}
+            </div>
+          )}
         </DialogContent>
       </Dialog>
 

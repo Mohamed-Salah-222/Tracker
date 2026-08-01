@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { motion } from "motion/react";
 import { api } from "../lib/api";
+import { todayISO } from "../lib/today";
+import { PAGE_LIMIT, pageRangeLabel, type Page } from "../lib/pagination";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
@@ -17,8 +19,8 @@ import { SubscriptionsModal } from "../components/SubscriptionsModal";
 import { WishlistModal } from "../components/WishlistModal";
 
 // ===== Types =====
-type Wallet = { _id: string; name: string; balance: number };
 type BankCurrency = "EGP" | "USD";
+type Wallet = { _id: string; name: string; balance: number; currency: BankCurrency };
 type Bank = { _id: string; name: string; balance: number; currency: BankCurrency };
 type ExternalSource = { _id: string; name: string };
 type Category = "food" | "transport" | "bills" | "shopping" | "entertainment" | "health" | "education" | "other";
@@ -41,13 +43,32 @@ const BANK_CURRENCIES: BankCurrency[] = ["EGP", "USD"];
 // ===== Helpers =====
 const fmtEGP = (n: number) => `${Math.round(n).toLocaleString("en-US")} L.E`;
 const fmtUSD = (n: number) => `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-const todayISO = () => new Date().toISOString().slice(0, 10);
-
 function getApiError(e: unknown): string {
   if (e instanceof AxiosError) {
     return (e.response?.data as { error?: string })?.error ?? e.message;
   }
   return "Something went wrong";
+}
+
+const fmtByCurrency = (n: number, currency: BankCurrency) => (currency === "USD" ? fmtUSD(n) : fmtEGP(n));
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
+// Balances are never written directly. A manual correction is recorded as an
+// "adjustment" MoneyMovement so every change to an account has a ledger entry
+// behind it and shows up in the Movements list.
+async function recordBalanceAdjustment(accountType: "wallet" | "bank", accountId: string, delta: number, note: string) {
+  await api.post("/payments/movements", {
+    type: "adjustment",
+    fromType: accountType,
+    fromId: accountId,
+    toType: null,
+    toId: null,
+    amountFrom: delta,
+    amountTo: delta,
+    conversionRate: 1,
+    date: todayISO(),
+    note,
+  });
 }
 
 // ===== Motion =====
@@ -200,6 +221,8 @@ export default function Payments() {
   const [banks, setBanks] = useState<Bank[]>([]);
   const [externalSources, setExternalSources] = useState<ExternalSource[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [expenseTotal, setExpenseTotal] = useState(0);
+  const [loadingMoreExpenses, setLoadingMoreExpenses] = useState(false);
 
   const [search, setSearch] = useState("");
   const [filterCategory, setFilterCategory] = useState<string>("all");
@@ -239,20 +262,44 @@ export default function Payments() {
     }
   }, []);
 
+  const expenseFilters = useCallback(() => {
+    const params: Record<string, string> = {};
+    if (search) params.search = search;
+    if (filterCategory !== "all") params.category = filterCategory;
+    if (filterSourceId !== "all") params.sourceId = filterSourceId;
+    if (filterFrom) params.from = filterFrom;
+    if (filterTo) params.to = filterTo;
+    return params;
+  }, [search, filterCategory, filterSourceId, filterFrom, filterTo]);
+
+  // Loads the first page. Changing a filter re-runs this (via the effect below),
+  // which resets the list back to offset 0.
   const loadExpenses = useCallback(async () => {
     try {
-      const params: Record<string, string> = {};
-      if (search) params.search = search;
-      if (filterCategory !== "all") params.category = filterCategory;
-      if (filterSourceId !== "all") params.sourceId = filterSourceId;
-      if (filterFrom) params.from = filterFrom;
-      if (filterTo) params.to = filterTo;
-      const r = await api.get<Expense[]>("/payments/expenses", { params });
-      setExpenses(r.data);
+      const r = await api.get<Page<Expense>>("/payments/expenses", {
+        params: { ...expenseFilters(), limit: PAGE_LIMIT, offset: 0 },
+      });
+      setExpenses(r.data.items);
+      setExpenseTotal(r.data.total);
     } catch (e) {
       toast.error(getApiError(e));
     }
-  }, [search, filterCategory, filterSourceId, filterFrom, filterTo]);
+  }, [expenseFilters]);
+
+  const loadMoreExpenses = async () => {
+    setLoadingMoreExpenses(true);
+    try {
+      const r = await api.get<Page<Expense>>("/payments/expenses", {
+        params: { ...expenseFilters(), limit: PAGE_LIMIT, offset: expenses.length },
+      });
+      setExpenses((prev) => [...prev, ...r.data.items]);
+      setExpenseTotal(r.data.total);
+    } catch (e) {
+      toast.error(getApiError(e));
+    } finally {
+      setLoadingMoreExpenses(false);
+    }
+  };
 
   useEffect(() => {
     void loadWallets();
@@ -277,7 +324,8 @@ export default function Payments() {
     void loadExpenses();
   };
 
-  const totalBalance = wallets.reduce((s, w) => s + w.balance, 0);
+  const walletTotalEGP = wallets.filter((w) => w.currency === "EGP").reduce((s, w) => s + w.balance, 0);
+  const walletTotalUSD = wallets.filter((w) => w.currency === "USD").reduce((s, w) => s + w.balance, 0);
 
   const grouped: Record<string, Expense[]> = {};
   for (const e of expenses) {
@@ -296,7 +344,7 @@ export default function Payments() {
   };
 
   return (
-    <div className="w-full max-w-[1100px] mx-auto space-y-5">
+    <div className="w-full max-w-[1100px] space-y-5">
       {/* ===== Top bar ===== */}
       <motion.div {...fadeUp} className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-3">
@@ -332,11 +380,21 @@ export default function Payments() {
           <WalletIcon className="h-4 w-4 text-muted-foreground" />
           <span className="text-sm font-medium">Wallets</span>
         </div>
-        <div className="text-right">
-          <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Total balance</div>
-          <div className="text-2xl md:text-3xl font-semibold font-mono tracking-tight tabular-nums" style={{ color: totalBalance > 0 ? "var(--color-income)" : "var(--color-muted-foreground)" }}>
-            {fmtEGP(totalBalance)}
+        <div className="flex items-end gap-6">
+          <div className="text-right">
+            <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Total EGP</div>
+            <div className="text-2xl md:text-3xl font-semibold font-mono tracking-tight tabular-nums" style={{ color: walletTotalEGP > 0 ? "var(--color-income)" : "var(--color-muted-foreground)" }}>
+              {fmtEGP(walletTotalEGP)}
+            </div>
           </div>
+          {wallets.some((w) => w.currency === "USD") && (
+            <div className="text-right">
+              <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Total USD</div>
+              <div className="text-2xl md:text-3xl font-semibold font-mono tracking-tight tabular-nums" style={{ color: walletTotalUSD > 0 ? "var(--color-income)" : "var(--color-muted-foreground)" }}>
+                {fmtUSD(walletTotalUSD)}
+              </div>
+            </div>
+          )}
         </div>
       </motion.div>
 
@@ -488,6 +546,13 @@ export default function Payments() {
 
       {/* ===== History list ===== */}
       <div className="space-y-3">
+        {expenseTotal > 0 && (
+          <div className="flex items-center justify-between px-1 text-[11px] text-muted-foreground">
+            <span>
+              Showing {pageRangeLabel(expenses.length, expenseTotal)} {expenseTotal === 1 ? "expense" : "expenses"}
+            </span>
+          </div>
+        )}
         {groupKeys.length === 0 && (
           <Card>
             <CardContent className="p-12 text-center">
@@ -530,6 +595,13 @@ export default function Payments() {
             </motion.div>
           );
         })}
+        {expenses.length < expenseTotal && (
+          <div className="flex justify-center pt-1">
+            <Button variant="outline" size="sm" onClick={() => void loadMoreExpenses()} disabled={loadingMoreExpenses}>
+              {loadingMoreExpenses ? "Loading…" : `Load ${Math.min(PAGE_LIMIT, expenseTotal - expenses.length)} more`}
+            </Button>
+          </div>
+        )}
       </div>
 
       {/* ===== Recap modal ===== */}
@@ -554,29 +626,43 @@ function WalletCard({ wallet, onChanged, index }: { wallet: Wallet; onChanged: (
   const [editOpen, setEditOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [name, setName] = useState(wallet.name);
-  const [balance, setBalance] = useState(wallet.balance.toString());
+  const [correctedBalance, setCorrectedBalance] = useState(wallet.balance.toString());
+  const [adjustNote, setAdjustNote] = useState("");
+  const [saving, setSaving] = useState(false);
 
   const handleEditOpen = (next: boolean) => {
     if (next) {
       setName(wallet.name);
-      setBalance(wallet.balance.toString());
+      setCorrectedBalance(wallet.balance.toString());
+      setAdjustNote("");
     }
     setEditOpen(next);
   };
 
+  const parsedTarget = parseFloat(correctedBalance);
+  const delta = isNaN(parsedTarget) ? 0 : round2(parsedTarget - wallet.balance);
+
   const save = async () => {
-    const b = parseFloat(balance);
-    if (!name.trim() || isNaN(b)) return toast.error("Invalid input");
+    if (!name.trim()) return toast.error("Name required");
+    if (correctedBalance.trim() !== "" && isNaN(parsedTarget)) return toast.error("Invalid balance");
+
+    setSaving(true);
     try {
-      await api.patch(`/payments/wallets/${wallet._id}`, {
-        name: name.trim(),
-        balance: b,
-      });
-      toast.success("Saved");
+      if (name.trim() !== wallet.name) {
+        await api.patch(`/payments/wallets/${wallet._id}`, { name: name.trim() });
+      }
+      if (delta !== 0) {
+        await recordBalanceAdjustment("wallet", wallet._id, delta, adjustNote.trim() || "Manual balance correction");
+        toast.success(`Adjustment logged (${delta > 0 ? "+" : "−"}${fmtByCurrency(Math.abs(delta), wallet.currency)})`);
+      } else {
+        toast.success("Saved");
+      }
       setEditOpen(false);
       onChanged();
     } catch (e) {
       toast.error(getApiError(e));
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -601,8 +687,18 @@ function WalletCard({ wallet, onChanged, index }: { wallet: Wallet; onChanged: (
         onClick={() => handleEditOpen(true)}
         className="text-left rounded-[10px] border border-border bg-card p-4 hover:border-border-strong hover:shadow-md transition-all relative overflow-hidden"
       >
-        <div className="text-xs text-muted-foreground truncate font-medium">{wallet.name}</div>
-        <div className="text-xl font-semibold font-mono tracking-tight tabular-nums mt-2">{fmtEGP(wallet.balance)}</div>
+        <div className="text-xs text-muted-foreground truncate font-medium pr-8">{wallet.name}</div>
+        <div className="text-xl font-semibold font-mono tracking-tight tabular-nums mt-2">{fmtByCurrency(wallet.balance, wallet.currency)}</div>
+        <span
+          className="absolute top-2 right-2 text-[9px] font-bold px-1.5 py-0.5 rounded border"
+          style={
+            wallet.currency === "USD"
+              ? { color: "var(--color-income)", borderColor: "var(--color-income)", background: "color-mix(in oklch, var(--color-income), transparent 85%)" }
+              : { color: "var(--color-muted-foreground)", borderColor: "var(--color-border)" }
+          }
+        >
+          {wallet.currency}
+        </span>
       </motion.button>
 
       <Dialog open={editOpen} onOpenChange={handleEditOpen}>
@@ -616,10 +712,26 @@ function WalletCard({ wallet, onChanged, index }: { wallet: Wallet; onChanged: (
               <Input value={name} onChange={(e) => setName(e.target.value)} />
             </div>
             <div className="space-y-1.5">
-              <Label>Balance (L.E)</Label>
-              <Input type="number" step="1" value={balance} onChange={(e) => setBalance(e.target.value)} className="font-mono" />
-              <p className="text-xs text-muted-foreground">Use this to manually correct or top up.</p>
+              <div className="flex items-baseline justify-between">
+                <Label>Correct balance ({wallet.currency})</Label>
+                <span className="text-xs text-muted-foreground font-mono tabular-nums">now {fmtByCurrency(wallet.balance, wallet.currency)}</span>
+              </div>
+              <Input type="number" step="0.01" value={correctedBalance} onChange={(e) => setCorrectedBalance(e.target.value)} className="font-mono" />
+              {delta !== 0 ? (
+                <p className="text-xs" style={{ color: delta > 0 ? "var(--color-income)" : "var(--color-expense)" }}>
+                  Logs a {delta > 0 ? "+" : "−"}
+                  {fmtByCurrency(Math.abs(delta), wallet.currency)} adjustment in Movements.
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground">Corrections are logged as an adjustment, never a silent overwrite.</p>
+              )}
             </div>
+            {delta !== 0 && (
+              <div className="space-y-1.5">
+                <Label>Reason</Label>
+                <Input value={adjustNote} onChange={(e) => setAdjustNote(e.target.value)} placeholder="e.g. found 200 in my pocket" />
+              </div>
+            )}
           </div>
           <DialogFooter className="flex justify-between sm:justify-between">
             <Button
@@ -632,8 +744,8 @@ function WalletCard({ wallet, onChanged, index }: { wallet: Wallet; onChanged: (
             >
               Delete
             </Button>
-            <Button variant="default" size="default" onClick={save}>
-              Save
+            <Button variant="default" size="default" onClick={save} disabled={saving}>
+              {saving ? "Saving…" : "Save"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -666,11 +778,13 @@ function AddWalletCard({ onAdded }: { onAdded: () => void }) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [balance, setBalance] = useState("0");
+  const [currency, setCurrency] = useState<BankCurrency>("EGP");
 
   const handleOpen = (next: boolean) => {
     if (next) {
       setName("");
       setBalance("0");
+      setCurrency("EGP");
     }
     setOpen(next);
   };
@@ -679,7 +793,7 @@ function AddWalletCard({ onAdded }: { onAdded: () => void }) {
     const b = parseFloat(balance);
     if (!name.trim() || isNaN(b)) return toast.error("Invalid input");
     try {
-      await api.post("/payments/wallets", { name: name.trim(), balance: b });
+      await api.post("/payments/wallets", { name: name.trim(), balance: b, currency });
       toast.success("Added");
       setOpen(false);
       onAdded();
@@ -714,8 +828,24 @@ function AddWalletCard({ onAdded }: { onAdded: () => void }) {
               <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="CIB Visa, Vodafone Cash, Cash..." />
             </div>
             <div className="space-y-1.5">
-              <Label>Starting balance (L.E)</Label>
-              <Input type="number" step="1" value={balance} onChange={(e) => setBalance(e.target.value)} className="font-mono" />
+              <Label>Currency</Label>
+              <Select value={currency} onValueChange={(v) => setCurrency(v as BankCurrency)}>
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {BANK_CURRENCIES.map((c) => (
+                    <SelectItem key={c} value={c}>
+                      {c}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Starting balance ({currency})</Label>
+              <Input type="number" step="0.01" value={balance} onChange={(e) => setBalance(e.target.value)} className="font-mono" />
+              <p className="text-xs text-muted-foreground">A non-zero opening balance is logged as an adjustment in Movements.</p>
             </div>
           </div>
           <DialogFooter>
@@ -870,28 +1000,48 @@ function BankCard({ bank, onChanged, index }: { bank: Bank; onChanged: () => voi
   const [editOpen, setEditOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [name, setName] = useState(bank.name);
-  const [balance, setBalance] = useState(bank.balance.toString());
+  const [correctedBalance, setCorrectedBalance] = useState(bank.balance.toString());
+  const [adjustNote, setAdjustNote] = useState("");
   const [currency, setCurrency] = useState<BankCurrency>(bank.currency);
+  const [saving, setSaving] = useState(false);
 
   const handleEditOpen = (next: boolean) => {
     if (next) {
       setName(bank.name);
-      setBalance(bank.balance.toString());
+      setCorrectedBalance(bank.balance.toString());
+      setAdjustNote("");
       setCurrency(bank.currency);
     }
     setEditOpen(next);
   };
 
+  const parsedTarget = parseFloat(correctedBalance);
+  const delta = isNaN(parsedTarget) ? 0 : round2(parsedTarget - bank.balance);
+
   const save = async () => {
-    const b = parseFloat(balance);
-    if (!name.trim() || isNaN(b)) return toast.error("Invalid input");
+    if (!name.trim()) return toast.error("Name required");
+    if (correctedBalance.trim() !== "" && isNaN(parsedTarget)) return toast.error("Invalid balance");
+
+    setSaving(true);
     try {
-      await api.patch(`/payments/banks/${bank._id}`, { name: name.trim(), balance: b, currency });
-      toast.success("Saved");
+      const patch: Record<string, unknown> = {};
+      if (name.trim() !== bank.name) patch.name = name.trim();
+      if (currency !== bank.currency) patch.currency = currency;
+      if (Object.keys(patch).length > 0) {
+        await api.patch(`/payments/banks/${bank._id}`, patch);
+      }
+      if (delta !== 0) {
+        await recordBalanceAdjustment("bank", bank._id, delta, adjustNote.trim() || "Manual balance correction");
+        toast.success(`Adjustment logged (${delta > 0 ? "+" : "−"}${fmtByCurrency(Math.abs(delta), bank.currency)})`);
+      } else {
+        toast.success("Saved");
+      }
       setEditOpen(false);
       onChanged();
     } catch (e) {
       toast.error(getApiError(e));
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -943,13 +1093,29 @@ function BankCard({ bank, onChanged, index }: { bank: Bank; onChanged: () => voi
               <Input value={name} onChange={(e) => setName(e.target.value)} />
             </div>
             <div className="space-y-1.5">
-              <Label>Balance</Label>
-              <Input type="number" step="0.01" value={balance} onChange={(e) => setBalance(e.target.value)} className="font-mono" />
-              <p className="text-xs text-muted-foreground">Use this to manually correct or top up.</p>
+              <div className="flex items-baseline justify-between">
+                <Label>Correct balance ({bank.currency})</Label>
+                <span className="text-xs text-muted-foreground font-mono tabular-nums">now {fmtByCurrency(bank.balance, bank.currency)}</span>
+              </div>
+              <Input type="number" step="0.01" value={correctedBalance} onChange={(e) => setCorrectedBalance(e.target.value)} className="font-mono" />
+              {delta !== 0 ? (
+                <p className="text-xs" style={{ color: delta > 0 ? "var(--color-income)" : "var(--color-expense)" }}>
+                  Logs a {delta > 0 ? "+" : "−"}
+                  {fmtByCurrency(Math.abs(delta), bank.currency)} adjustment in Movements.
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground">Corrections are logged as an adjustment, never a silent overwrite.</p>
+              )}
             </div>
+            {delta !== 0 && (
+              <div className="space-y-1.5">
+                <Label>Reason</Label>
+                <Input value={adjustNote} onChange={(e) => setAdjustNote(e.target.value)} placeholder="e.g. bank fee I forgot to log" />
+              </div>
+            )}
             <div className="space-y-1.5">
               <Label className="text-muted-foreground">Currency</Label>
-              <Select value={currency} onValueChange={(v) => setCurrency(v as BankCurrency)}>
+              <Select value={currency} onValueChange={(v) => setCurrency(v as BankCurrency)} disabled={bank.balance !== 0}>
                 <SelectTrigger className="w-full">
                   <SelectValue />
                 </SelectTrigger>
@@ -961,7 +1127,7 @@ function BankCard({ bank, onChanged, index }: { bank: Bank; onChanged: () => voi
                   ))}
                 </SelectContent>
               </Select>
-              {bank.balance !== 0 && <p className="text-xs text-muted-foreground">Changing currency on a non-zero balance is on you.</p>}
+              {bank.balance !== 0 && <p className="text-xs text-muted-foreground">Empty the account first — flipping currency on a non-zero balance would silently rewrite its value.</p>}
             </div>
           </div>
           <DialogFooter className="flex justify-between sm:justify-between">
@@ -975,8 +1141,8 @@ function BankCard({ bank, onChanged, index }: { bank: Bank; onChanged: () => voi
             >
               Delete
             </Button>
-            <Button variant="default" size="default" onClick={save}>
-              Save
+            <Button variant="default" size="default" onClick={save} disabled={saving}>
+              {saving ? "Saving…" : "Save"}
             </Button>
           </DialogFooter>
         </DialogContent>

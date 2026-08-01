@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { api } from "../lib/api";
+import { PAGE_LIMIT, PICKER_LIMIT, pageRangeLabel, type Page } from "../lib/pagination";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
@@ -54,22 +55,46 @@ const stagger = (i: number) => ({
 // =====================================================================
 export default function Fridge() {
   const [items, setItems] = useState<FridgeItem[]>([]);
+  const [itemTotal, setItemTotal] = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [foods, setFoods] = useState<Food[]>([]);
   const [addOpen, setAddOpen] = useState(false);
 
+  // Stable identity: a fresh Set every render would re-run AddItemDialog's
+  // availableFoods memo on every parent render, not just when items change.
+  const existingFoodIds = useMemo(() => new Set(items.map((i) => i.foodId)), [items]);
+
   const loadItems = useCallback(async () => {
     try {
-      const r = await api.get<FridgeItem[]>("/fridge");
-      setItems(r.data);
+      const r = await api.get<Page<FridgeItem>>("/fridge", { params: { limit: PAGE_LIMIT, offset: 0 } });
+      setItems(r.data.items);
+      setItemTotal(r.data.total);
     } catch (e) {
       toast.error(getApiError(e));
     }
   }, []);
 
+  const loadMoreItems = async () => {
+    setLoadingMore(true);
+    try {
+      const r = await api.get<Page<FridgeItem>>("/fridge", { params: { limit: PAGE_LIMIT, offset: items.length } });
+      setItems((prev) => [...prev, ...r.data.items]);
+      setItemTotal(r.data.total);
+    } catch (e) {
+      toast.error(getApiError(e));
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
+  // Picker options, not a paged list — see PICKER_LIMIT.
   const loadFoods = useCallback(async () => {
     try {
-      const r = await api.get<Food[]>("/foods");
-      setFoods(r.data);
+      const r = await api.get<Page<Food>>("/foods", { params: { limit: PICKER_LIMIT, offset: 0 } });
+      setFoods(r.data.items);
+      if (r.data.total > r.data.items.length) {
+        toast.warning(`Showing the first ${r.data.items.length} of ${r.data.total} foods in the picker.`);
+      }
     } catch (e) {
       toast.error(getApiError(e));
     }
@@ -100,7 +125,7 @@ export default function Fridge() {
   }, [items]);
 
   return (
-    <div className="w-full max-w-[1100px] mx-auto space-y-5">
+    <div className="w-full max-w-[1100px] space-y-5">
       {/* ===== Top bar ===== */}
       <motion.div {...fadeUp} className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-3">
@@ -110,7 +135,7 @@ export default function Fridge() {
           </h1>
           {items.length > 0 && (
             <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium font-mono tabular-nums">
-              {items.length} {items.length === 1 ? "item" : "items"}
+              {pageRangeLabel(items.length, itemTotal)} {itemTotal === 1 ? "item" : "items"}
             </span>
           )}
         </div>
@@ -167,7 +192,15 @@ export default function Fridge() {
         </AnimatePresence>
       </div>
 
-      <AddItemDialog open={addOpen} onOpenChange={setAddOpen} foods={foods} existingFoodIds={new Set(items.map((i) => i.foodId))} onSaved={reload} />
+      {items.length < itemTotal && (
+        <div className="flex justify-center">
+          <Button variant="outline" size="sm" onClick={() => void loadMoreItems()} disabled={loadingMore}>
+            {loadingMore ? "Loading…" : `Load ${Math.min(PAGE_LIMIT, itemTotal - items.length)} more`}
+          </Button>
+        </div>
+      )}
+
+      <AddItemDialog open={addOpen} onOpenChange={setAddOpen} foods={foods} existingFoodIds={existingFoodIds} onSaved={reload} />
     </div>
   );
 }

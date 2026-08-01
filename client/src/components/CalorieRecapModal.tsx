@@ -6,6 +6,7 @@ import { Card, CardContent } from "../components/ui/card";
 import { ChevronLeft, ChevronRight, Cake, Award, AlertTriangle } from "lucide-react";
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, PieChart, Pie, Cell } from "recharts";
 import { api } from "../lib/api";
+import { todayISO } from "../lib/today";
 import { AxiosError } from "axios";
 import { toast } from "sonner";
 
@@ -84,13 +85,13 @@ const MEALS: Meal[] = ["breakfast", "lunch", "dinner", "snack"];
 // MAIN
 // =====================================================================
 export function CalorieRecapModal({ open, onOpenChange }: { open: boolean; onOpenChange: (next: boolean) => void }) {
-  const [anchor, setAnchor] = useState(() => fridayOnOrBefore(new Date().toISOString().slice(0, 10)));
+  const [anchor, setAnchor] = useState(() => fridayOnOrBefore(todayISO()));
   const [data, setData] = useState<WeekSummary | null>(null);
   const [, setPrevData] = useState<WeekSummary | null>(null);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (open) setAnchor(fridayOnOrBefore(new Date().toISOString().slice(0, 10)));
+    if (open) setAnchor(fridayOnOrBefore(todayISO()));
   }, [open]);
 
   const prevAnchor = useMemo(() => shiftDay(anchor, -7), [anchor]);

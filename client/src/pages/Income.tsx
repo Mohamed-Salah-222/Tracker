@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { api } from "../lib/api";
+import { todayISO } from "../lib/today";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
@@ -32,7 +33,6 @@ type View = "today" | "week" | "month";
 // ===== Helpers =====
 const fmtMoney = (n: number) => `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const fmtCompact = (n: number) => (n === 0 ? "—" : `$${Math.round(n)}`);
-const todayISO = () => new Date().toISOString().slice(0, 10);
 const isWeekend = (iso: string) => {
   const day = new Date(iso).getUTCDay();
   return day === 0 || day === 6;
@@ -293,7 +293,7 @@ export default function Income() {
   };
 
   return (
-    <div className="w-full max-w-[1100px] mx-auto space-y-5">
+    <div className="w-full max-w-[1500px] lg:min-w-[1100px] space-y-4">
       {/* ===== Top bar ===== */}
       <motion.div {...fadeUp} className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-3">
@@ -330,9 +330,9 @@ export default function Income() {
       </motion.div>
 
       {/* ===== Body: two columns ===== */}
-      <div className="grid grid-cols-1 lg:grid-cols-[1fr_260px] gap-5">
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(818px,1fr)_262px] xl:grid-cols-[minmax(818px,1fr)_300px] gap-4">
         {/* Main column */}
-        <div className="space-y-5 min-w-0">
+        <div className="space-y-4 min-w-0">
           <AnimatePresence mode="wait">
             <motion.div key={view + anchor} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}>
               {view === "today" && <TodayView dayKey={anchor} entry={entriesByDate[anchor]} status={statusByDate[anchor]} onChanged={loadAll} />}
@@ -402,7 +402,7 @@ function SidebarMain({ label, value, hasValue }: { label: string; value: string;
   return (
     <motion.div {...stagger(2)}>
       <Card>
-        <CardContent className="p-4">
+        <CardContent className="min-h-[96px] p-4 flex flex-col justify-center">
           <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">{label}</div>
           <AnimatePresence mode="wait">
             <motion.div key={value} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }} transition={{ duration: 0.2 }} className="text-2xl font-semibold font-mono mt-1.5 tracking-tight tabular-nums" style={{ color: hasValue ? "var(--color-income)" : "var(--color-muted-foreground)" }}>
@@ -419,7 +419,7 @@ function SidebarStat({ label, value }: { label: string; value: string }) {
   return (
     <motion.div {...stagger(3)}>
       <Card>
-        <CardContent className="p-3">
+        <CardContent className="min-h-[88px] p-3 flex flex-col justify-center">
           <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">{label}</div>
           <div className="text-lg font-semibold font-mono mt-1 tabular-nums">{value}</div>
         </CardContent>
@@ -628,7 +628,7 @@ function DayCard({ dayKey, entry, status, onChanged, size }: { dayKey: string; e
     return (
       <>
         <Card className="w-full" style={bgStyle}>
-          <CardContent className="p-6 md:p-8 min-h-[180px] md:min-h-[220px]">
+          <CardContent className="p-5 md:p-6 min-h-[172px] md:min-h-[196px]">
             <div className="flex items-start justify-between gap-3 mb-3">
               <div className="flex flex-col min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">{status && <StatusTag status={status.status} />}</div>
@@ -780,7 +780,7 @@ function Sparkline({ sparkByDate, todayIso }: { sparkByDate: Record<string, { en
   return (
     <motion.div {...stagger(3)}>
       <Card>
-        <CardContent className="p-5">
+        <CardContent className="min-h-[190px] p-5 flex flex-col">
           <div className="flex items-center justify-between mb-4">
             <div>
               <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Last 14 days</div>
@@ -811,7 +811,7 @@ function Sparkline({ sparkByDate, todayIso }: { sparkByDate: Record<string, { en
             </div>
           </div>
 
-          <div className="flex items-end gap-1.5 h-28">
+          <div className="flex flex-1 items-end gap-1.5 min-h-20">
             {days.map((d, i) => {
               const v = sparkByDate[d]?.entry?.amount ?? 0;
               const s = sparkByDate[d]?.status;
@@ -858,7 +858,7 @@ function LogSessionForm({ rate, logDate, setLogDate, minutes, setMinutes, livePr
   return (
     <motion.div {...stagger(4)}>
       <Card>
-        <CardContent className="p-5">
+        <CardContent className="min-h-[144px] p-5">
           <div className="flex items-center justify-between mb-4">
             <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium flex items-center gap-1.5">
               <Plus className="h-3 w-3" />

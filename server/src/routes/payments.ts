@@ -8,9 +8,74 @@ import { Subscription, SUBSCRIPTION_SOURCE_TYPES } from "../models/Subscription"
 import { WishlistItem, WISHLIST_PRIORITIES } from "../models/WishlistItem";
 import { validateMovementShape } from "../lib/movement-validation";
 import { toDayUTC } from "../lib/dates";
+import { buildSearchFilter, isFiniteNumber, isNonNegativeNumber, isObjectId, isPositiveNumber, objectIdParam, parseDayUTC, trimmedString } from "../lib/validation";
+import { pageOf, parsePageParams } from "../lib/pagination";
 import mongoose from "mongoose";
 
 const router = Router();
+
+router.param("id", objectIdParam);
+
+// Balances are a derived value: they only move through logged Expense and
+// MoneyMovement records, never a direct field write. Rejected here so the
+// audit trail can't be bypassed by an old client or a stray script.
+const BALANCE_EDIT_ERROR = "balance cannot be edited directly — record an adjustment movement instead";
+
+// A new account starts at 0; a non-zero opening balance is applied as an
+// "adjustment" movement in the same transaction, so even the first peso has a
+// ledger entry behind it.
+async function createAccountWithOpeningBalance<T extends { _id: mongoose.Types.ObjectId }>(
+  accountType: "wallet" | "bank",
+  createAccount: (session: mongoose.ClientSession) => Promise<T>,
+  openingBalance: number,
+): Promise<T> {
+  const session = await mongoose.startSession();
+  try {
+    let account!: T;
+    await session.withTransaction(async () => {
+      account = await createAccount(session);
+      if (openingBalance === 0) return;
+
+      const snapshots = await applyMovementEffect(
+        {
+          type: "adjustment",
+          fromType: accountType,
+          fromId: String(account._id),
+          toType: null,
+          toId: null,
+          amountFrom: openingBalance,
+          amountTo: openingBalance,
+          conversionRate: 1,
+        },
+        session,
+      );
+      await MoneyMovement.create(
+        [
+          {
+            type: "adjustment",
+            fromType: accountType,
+            fromId: account._id,
+            fromNameSnapshot: snapshots.fromName,
+            fromCurrencySnapshot: snapshots.fromCurrency,
+            toType: null,
+            toId: null,
+            toNameSnapshot: null,
+            toCurrencySnapshot: null,
+            amountFrom: openingBalance,
+            amountTo: openingBalance,
+            conversionRate: 1,
+            date: todayUTC(),
+            note: "Opening balance",
+          },
+        ],
+        { session },
+      );
+    });
+    return account;
+  } finally {
+    await session.endSession();
+  }
+}
 
 // ===== WALLETS =====
 
@@ -20,20 +85,49 @@ router.get("/wallets", async (_req, res) => {
 });
 
 router.post("/wallets", async (req, res) => {
-  const { name, balance } = req.body;
-  if (!name || typeof balance !== "number") {
-    return res.status(400).json({ error: "name and balance required" });
+  const { name, balance, currency } = req.body;
+  const cleanName = trimmedString(name);
+  if (!cleanName) return res.status(400).json({ error: "name required" });
+  const openingBalance = balance === undefined ? 0 : balance;
+  if (!isFiniteNumber(openingBalance)) {
+    return res.status(400).json({ error: "balance must be a finite number" });
   }
-  const w = await Wallet.create({ name: name.trim(), balance });
-  res.json(w);
+  const walletCurrency = currency === undefined ? "EGP" : currency;
+  if (!BANK_CURRENCIES.includes(walletCurrency as "EGP" | "USD")) {
+    return res.status(400).json({ error: "invalid currency" });
+  }
+
+  const w = await createAccountWithOpeningBalance(
+    "wallet",
+    async (session) =>
+      (await Wallet.create([{ name: cleanName, balance: 0, currency: walletCurrency as "EGP" | "USD" }], { session }))[0],
+    openingBalance,
+  );
+  // The opening adjustment updates its own copy of the account, so re-read to
+  // return the committed balance rather than the stale pre-adjustment document.
+  res.json(await Wallet.findById(w._id));
 });
 
 router.patch("/wallets/:id", async (req, res) => {
-  const { name, balance } = req.body;
+  const { name, currency } = req.body;
+  if ("balance" in req.body) return res.status(400).json({ error: BALANCE_EDIT_ERROR });
+
+  let cleanName: string | null = null;
+  if (name !== undefined) {
+    cleanName = trimmedString(name);
+    if (!cleanName) return res.status(400).json({ error: "name required" });
+  }
+  if (currency !== undefined && !BANK_CURRENCIES.includes(currency as "EGP" | "USD")) {
+    return res.status(400).json({ error: "invalid currency" });
+  }
+
   const w = await Wallet.findById(req.params.id);
   if (!w || w.archived) return res.status(404).json({ error: "not found" });
-  if (typeof name === "string") w.name = name.trim();
-  if (typeof balance === "number") w.balance = balance;
+  if (currency !== undefined && currency !== w.currency && w.balance !== 0) {
+    return res.status(400).json({ error: "empty the wallet before changing its currency" });
+  }
+  if (cleanName) w.name = cleanName;
+  if (typeof currency === "string") w.currency = currency as "EGP" | "USD";
   await w.save();
   res.json(w);
 });
@@ -55,28 +149,46 @@ router.get("/banks", async (_req, res) => {
 
 router.post("/banks", async (req, res) => {
   const { name, balance, currency } = req.body;
-  if (!name || typeof balance !== "number" || !currency) {
-    return res.status(400).json({ error: "name, balance, and currency required" });
+  const cleanName = trimmedString(name);
+  if (!cleanName) return res.status(400).json({ error: "name required" });
+  const openingBalance = balance === undefined ? 0 : balance;
+  if (!isFiniteNumber(openingBalance)) {
+    return res.status(400).json({ error: "balance must be a finite number" });
   }
   if (!BANK_CURRENCIES.includes(currency as "EGP" | "USD")) {
     return res.status(400).json({ error: "invalid currency" });
   }
-  const b = await Bank.create({ name: name.trim(), balance, currency: currency as "EGP" | "USD" });
-  res.json(b);
+
+  const b = await createAccountWithOpeningBalance(
+    "bank",
+    async (session) =>
+      (await Bank.create([{ name: cleanName, balance: 0, currency: currency as "EGP" | "USD" }], { session }))[0],
+    openingBalance,
+  );
+  // See the wallet route: re-read so the response carries the committed balance.
+  res.json(await Bank.findById(b._id));
 });
 
 router.patch("/banks/:id", async (req, res) => {
-  const { name, balance, currency } = req.body;
+  const { name, currency } = req.body;
+  if ("balance" in req.body) return res.status(400).json({ error: BALANCE_EDIT_ERROR });
+
+  let cleanName: string | null = null;
+  if (name !== undefined) {
+    cleanName = trimmedString(name);
+    if (!cleanName) return res.status(400).json({ error: "name required" });
+  }
+  if (currency !== undefined && !BANK_CURRENCIES.includes(currency as "EGP" | "USD")) {
+    return res.status(400).json({ error: "invalid currency" });
+  }
+
   const b = await Bank.findById(req.params.id);
   if (!b || b.archived) return res.status(404).json({ error: "not found" });
-  if (typeof name === "string") b.name = name.trim();
-  if (typeof balance === "number") b.balance = balance;
-  if (typeof currency === "string") {
-    if (!BANK_CURRENCIES.includes(currency as "EGP" | "USD")) {
-      return res.status(400).json({ error: "invalid currency" });
-    }
-    b.currency = currency as "EGP" | "USD";
+  if (currency !== undefined && currency !== b.currency && b.balance !== 0) {
+    return res.status(400).json({ error: "empty the account before changing its currency" });
   }
+  if (cleanName) b.name = cleanName;
+  if (typeof currency === "string") b.currency = currency as "EGP" | "USD";
   await b.save();
   res.json(b);
 });
@@ -98,16 +210,23 @@ router.get("/external-sources", async (_req, res) => {
 
 router.post("/external-sources", async (req, res) => {
   const { name } = req.body;
-  if (!name) return res.status(400).json({ error: "name required" });
-  const s = await ExternalSource.create({ name: name.trim() });
+  const cleanName = trimmedString(name);
+  if (!cleanName) return res.status(400).json({ error: "name required" });
+  const s = await ExternalSource.create({ name: cleanName });
   res.json(s);
 });
 
 router.patch("/external-sources/:id", async (req, res) => {
   const { name } = req.body;
+  let cleanName: string | null = null;
+  if (name !== undefined) {
+    cleanName = trimmedString(name);
+    if (!cleanName) return res.status(400).json({ error: "name required" });
+  }
+
   const s = await ExternalSource.findById(req.params.id);
   if (!s || s.archived) return res.status(404).json({ error: "not found" });
-  if (typeof name === "string") s.name = name.trim();
+  if (cleanName) s.name = cleanName;
   await s.save();
   res.json(s);
 });
@@ -128,28 +247,48 @@ router.get("/expenses", async (req, res) => {
 
   if (from || to) {
     const dateFilter: Record<string, Date> = {};
-    if (from) dateFilter.$gte = toDayUTC(from as string);
+    if (from) {
+      const fromDay = parseDayUTC(from);
+      if (!fromDay) return res.status(400).json({ error: "valid from date required" });
+      dateFilter.$gte = fromDay;
+    }
     if (to) {
-      const end = toDayUTC(to as string);
+      const end = parseDayUTC(to);
+      if (!end) return res.status(400).json({ error: "valid to date required" });
       end.setUTCDate(end.getUTCDate() + 1);
       dateFilter.$lt = end;
     }
     filter.date = dateFilter;
   }
-  if (sourceId) filter.sourceId = sourceId;
-  if (sourceType) filter.sourceType = sourceType;
-  if (category) filter.category = category;
-  if (search) filter.name = { $regex: search as string, $options: "i" };
+  if (sourceId) {
+    if (!isObjectId(sourceId)) return res.status(400).json({ error: "invalid sourceId" });
+    filter.sourceId = sourceId;
+  }
+  if (typeof sourceType === "string" && sourceType) filter.sourceType = sourceType;
+  if (typeof category === "string" && category) filter.category = category;
+  const nameFilter = buildSearchFilter(search);
+  if (nameFilter) filter.name = nameFilter;
 
-  const expenses = await Expense.find(filter).sort({ date: -1, createdAt: -1 });
-  res.json(expenses);
+  const page = parsePageParams(req.query);
+  const [expenses, total] = await Promise.all([
+    Expense.find(filter).sort({ date: -1, createdAt: -1 }).skip(page.offset).limit(page.limit),
+    Expense.countDocuments(filter),
+  ]);
+  res.json(pageOf(expenses, total, page));
 });
 
 router.post("/expenses", async (req, res) => {
   const { name, amount, category, sourceType, sourceId, date } = req.body;
-  if (!name || typeof amount !== "number" || amount <= 0 || !category || !sourceType || !sourceId || !date) {
+  const cleanName = trimmedString(name);
+  const day = parseDayUTC(date);
+  if (!cleanName || !category || !sourceType) {
     return res.status(400).json({ error: "missing fields" });
   }
+  if (!isPositiveNumber(amount)) {
+    return res.status(400).json({ error: "amount must be a positive number" });
+  }
+  if (!day) return res.status(400).json({ error: "valid date required" });
+  if (!isObjectId(sourceId)) return res.status(400).json({ error: "invalid sourceId" });
   if (!EXPENSE_CATEGORIES.includes(category)) {
     return res.status(400).json({ error: "invalid category" });
   }
@@ -168,7 +307,7 @@ router.post("/expenses", async (req, res) => {
         wallet.balance -= amount;
         await wallet.save({ session });
         const created = await Expense.create(
-          [{ name: name.trim(), amount, category, sourceType, sourceId: wallet._id, sourceNameSnapshot: wallet.name, date: toDayUTC(date) }],
+          [{ name: cleanName, amount, category, sourceType, sourceId: wallet._id, sourceNameSnapshot: wallet.name, date: day }],
           { session },
         );
         expense = created[0];
@@ -192,7 +331,7 @@ router.post("/expenses", async (req, res) => {
         bank.balance -= amount;
         await bank.save({ session });
         const created = await Expense.create(
-          [{ name: name.trim(), amount, category, sourceType, sourceId: bank._id, sourceNameSnapshot: bank.name, date: toDayUTC(date) }],
+          [{ name: cleanName, amount, category, sourceType, sourceId: bank._id, sourceNameSnapshot: bank.name, date: day }],
           { session },
         );
         expense = created[0];
@@ -210,19 +349,34 @@ router.post("/expenses", async (req, res) => {
   if (!ext || ext.archived) return res.status(404).json({ error: "external source not found" });
 
   const expense = await Expense.create({
-    name: name.trim(),
+    name: cleanName,
     amount,
     category,
     sourceType,
     sourceId: ext._id,
     sourceNameSnapshot: ext.name,
-    date: toDayUTC(date),
+    date: day,
   });
   return res.json(expense);
 });
 
 router.patch("/expenses/:id", async (req, res) => {
   const { name, amount, category, sourceType, sourceId, date } = req.body;
+
+  let cleanName: string | null = null;
+  if (name !== undefined) {
+    cleanName = trimmedString(name);
+    if (!cleanName) return res.status(400).json({ error: "name required" });
+  }
+  if (amount !== undefined && !isPositiveNumber(amount)) {
+    return res.status(400).json({ error: "amount must be a positive number" });
+  }
+  let day: Date | null = null;
+  if (date !== undefined) {
+    day = parseDayUTC(date);
+    if (!day) return res.status(400).json({ error: "valid date required" });
+  }
+
   const exp = await Expense.findById(req.params.id);
   if (!exp || exp.deletedAt) return res.status(404).json({ error: "not found" });
 
@@ -232,12 +386,12 @@ router.patch("/expenses/:id", async (req, res) => {
   if (!EXPENSE_SOURCE_TYPES.includes(newSourceType as (typeof EXPENSE_SOURCE_TYPES)[number])) {
     return res.status(400).json({ error: "invalid sourceType" });
   }
+  if (!isObjectId(newSourceId)) return res.status(400).json({ error: "invalid sourceId" });
   if (category && !EXPENSE_CATEGORIES.includes(category)) {
     return res.status(400).json({ error: "invalid category" });
   }
 
-  const newAmount = typeof amount === "number" ? amount : exp.amount;
-  if (newAmount <= 0) return res.status(400).json({ error: "invalid amount" });
+  const newAmount = amount !== undefined ? amount : exp.amount;
 
   const session = await mongoose.startSession();
   try {
@@ -274,10 +428,10 @@ router.patch("/expenses/:id", async (req, res) => {
       }
 
       exp.sourceType = newSourceType as (typeof EXPENSE_SOURCE_TYPES)[number];
-      if (typeof name === "string") exp.name = name.trim();
-      if (typeof amount === "number") exp.amount = amount;
+      if (cleanName) exp.name = cleanName;
+      if (amount !== undefined) exp.amount = amount;
       if (category) exp.category = category;
-      if (date) exp.date = toDayUTC(date);
+      if (day) exp.date = day;
 
       await exp.save({ session });
     });
@@ -320,12 +474,9 @@ router.get("/categories", (_req, res) => {
 });
 
 router.get("/summary", async (req, res) => {
-  const fromStr = req.query.from as string;
-  const toStr = req.query.to as string;
-  if (!fromStr || !toStr) return res.status(400).json({ error: "from and to required" });
-
-  const from = toDayUTC(fromStr);
-  const toEnd = toDayUTC(toStr);
+  const from = parseDayUTC(req.query.from);
+  const toEnd = parseDayUTC(req.query.to);
+  if (!from || !toEnd) return res.status(400).json({ error: "valid from and to dates required" });
   toEnd.setUTCDate(toEnd.getUTCDate() + 1);
 
   const expenses = await Expense.find({
@@ -473,6 +624,17 @@ async function applyMovementEffect(
 ): Promise<{ fromName: string | null; fromCurrency: string | null; toName: string | null; toCurrency: string | null }> {
   const { type, fromType, fromId, toType, toId, amountFrom, amountTo, conversionRate } = fields;
 
+  // Guard here so both POST and PATCH get the same checks before any findById runs.
+  if (fromId !== null && !isObjectId(fromId)) {
+    throw Object.assign(new Error("invalid fromId"), { httpStatus: 400 });
+  }
+  if (toId !== null && !isObjectId(toId)) {
+    throw Object.assign(new Error("invalid toId"), { httpStatus: 400 });
+  }
+  if (!isFiniteNumber(amountFrom) || !isFiniteNumber(amountTo) || !isFiniteNumber(conversionRate)) {
+    throw Object.assign(new Error("amountFrom, amountTo, conversionRate must be finite numbers"), { httpStatus: 400 });
+  }
+
   let fromName: string | null = null;
   let fromCurrency: string | null = null;
   let toName: string | null = null;
@@ -493,7 +655,7 @@ async function applyMovementEffect(
     fromWallet = await Wallet.findById(fromId).session(session);
     if (!fromWallet || fromWallet.archived) throw Object.assign(new Error("from wallet not found or archived"), { httpStatus: 404 });
     fromName = fromWallet.name;
-    fromCurrency = "EGP";
+    fromCurrency = fromWallet.currency;
   } else if (fromType === "bank" && fromId) {
     fromBank = await Bank.findById(fromId).session(session);
     if (!fromBank || fromBank.archived) throw Object.assign(new Error("from bank not found or archived"), { httpStatus: 404 });
@@ -511,7 +673,7 @@ async function applyMovementEffect(
     toWallet = await Wallet.findById(toId).session(session);
     if (!toWallet || toWallet.archived) throw Object.assign(new Error("to wallet not found or archived"), { httpStatus: 404 });
     toName = toWallet.name;
-    toCurrency = "EGP";
+    toCurrency = toWallet.currency;
   } else if (toType === "bank" && toId) {
     toBank = await Bank.findById(toId).session(session);
     if (!toBank || toBank.archived) throw Object.assign(new Error("to bank not found or archived"), { httpStatus: 404 });
@@ -556,16 +718,24 @@ router.get("/movements", async (req, res) => {
   const { type, from, to, accountType, accountId } = req.query;
   const filter: Record<string, unknown> = { deletedAt: null };
 
-  if (type) filter.type = type;
+  if (typeof type === "string" && type) filter.type = type;
   if (from || to) {
     const dateFilter: Record<string, Date> = {};
-    if (from) dateFilter.$gte = toDayUTC(from as string);
+    if (from) {
+      const fromDay = parseDayUTC(from);
+      if (!fromDay) return res.status(400).json({ error: "valid from date required" });
+      dateFilter.$gte = fromDay;
+    }
     if (to) {
-      const end = toDayUTC(to as string);
+      const end = parseDayUTC(to);
+      if (!end) return res.status(400).json({ error: "valid to date required" });
       end.setUTCDate(end.getUTCDate() + 1);
       dateFilter.$lt = end;
     }
     filter.date = dateFilter;
+  }
+  if (accountId && !isObjectId(accountId)) {
+    return res.status(400).json({ error: "invalid accountId" });
   }
   if (accountId && accountType) {
     filter.$or = [
@@ -578,8 +748,12 @@ router.get("/movements", async (req, res) => {
     filter.$or = [{ fromType: accountType }, { toType: accountType }];
   }
 
-  const movements = await MoneyMovement.find(filter).sort({ date: -1, createdAt: -1 });
-  res.json(movements);
+  const page = parsePageParams(req.query);
+  const [movements, total] = await Promise.all([
+    MoneyMovement.find(filter).sort({ date: -1, createdAt: -1 }).skip(page.offset).limit(page.limit),
+    MoneyMovement.countDocuments(filter),
+  ]);
+  res.json(pageOf(movements, total, page));
 });
 
 router.post("/movements", async (req, res) => {
@@ -588,10 +762,14 @@ router.post("/movements", async (req, res) => {
   if (!MOVEMENT_TYPES.includes(type)) {
     return res.status(400).json({ error: "invalid movement type" });
   }
-  if (typeof amountFrom !== "number" || typeof amountTo !== "number" || typeof conversionRate !== "number") {
-    return res.status(400).json({ error: "amountFrom, amountTo, conversionRate must be numbers" });
+  if (!isFiniteNumber(amountFrom) || !isFiniteNumber(amountTo) || !isFiniteNumber(conversionRate)) {
+    return res.status(400).json({ error: "amountFrom, amountTo, conversionRate must be finite numbers" });
   }
-  if (!date) return res.status(400).json({ error: "date required" });
+  const day = parseDayUTC(date);
+  if (!day) return res.status(400).json({ error: "valid date required" });
+  if (note !== undefined && note !== null && typeof note !== "string") {
+    return res.status(400).json({ error: "note must be a string" });
+  }
 
   const session = await mongoose.startSession();
   try {
@@ -614,7 +792,7 @@ router.post("/movements", async (req, res) => {
         amountFrom,
         amountTo,
         conversionRate,
-        date: toDayUTC(date),
+        date: day,
         note: note ?? "",
       }], { session });
       movement = created[0];
@@ -639,12 +817,23 @@ router.patch("/movements/:id", async (req, res) => {
   const newFromId: string | null = "fromId" in b ? (b.fromId ?? null) : (mov.fromId?.toString() ?? null);
   const newToType: string | null = "toType" in b ? (b.toType ?? null) : (mov.toType ?? null);
   const newToId: string | null = "toId" in b ? (b.toId ?? null) : (mov.toId?.toString() ?? null);
-  const newAmountFrom = typeof b.amountFrom === "number" ? b.amountFrom : mov.amountFrom;
-  const newAmountTo = typeof b.amountTo === "number" ? b.amountTo : mov.amountTo;
-  const newConversionRate = typeof b.conversionRate === "number" ? b.conversionRate : mov.conversionRate;
+  const newAmountFrom = b.amountFrom !== undefined ? b.amountFrom : mov.amountFrom;
+  const newAmountTo = b.amountTo !== undefined ? b.amountTo : mov.amountTo;
+  const newConversionRate = b.conversionRate !== undefined ? b.conversionRate : mov.conversionRate;
 
   if (!MOVEMENT_TYPES.includes(newType)) {
     return res.status(400).json({ error: "invalid movement type" });
+  }
+  if (!isFiniteNumber(newAmountFrom) || !isFiniteNumber(newAmountTo) || !isFiniteNumber(newConversionRate)) {
+    return res.status(400).json({ error: "amountFrom, amountTo, conversionRate must be finite numbers" });
+  }
+  let newDate: Date | null = null;
+  if (b.date !== undefined) {
+    newDate = parseDayUTC(b.date);
+    if (!newDate) return res.status(400).json({ error: "valid date required" });
+  }
+  if ("note" in b && b.note !== null && b.note !== undefined && typeof b.note !== "string") {
+    return res.status(400).json({ error: "note must be a string" });
   }
 
   const session = await mongoose.startSession();
@@ -672,7 +861,7 @@ router.patch("/movements/:id", async (req, res) => {
       mov.amountFrom = newAmountFrom;
       mov.amountTo = newAmountTo;
       mov.conversionRate = newConversionRate;
-      if (b.date) mov.date = toDayUTC(b.date);
+      if (newDate) mov.date = newDate;
       if ("note" in b) mov.note = b.note ?? "";
       await mov.save({ session });
     });
@@ -734,17 +923,18 @@ router.get("/subscriptions", async (_req, res) => {
 
 router.post("/subscriptions", async (req, res) => {
   const { name, price, sourceType, sourceId, billingDay } = req.body;
-  if (!name || typeof name !== "string" || !name.trim()) {
+  const cleanName = trimmedString(name);
+  if (!cleanName) {
     return res.status(400).json({ error: "name required" });
   }
-  if (typeof price !== "number" || price < 0) {
+  if (!isNonNegativeNumber(price)) {
     return res.status(400).json({ error: "invalid price" });
   }
   if (!SUBSCRIPTION_SOURCE_TYPES.includes(sourceType)) {
     return res.status(400).json({ error: "invalid sourceType" });
   }
-  if (!sourceId) {
-    return res.status(400).json({ error: "sourceId required" });
+  if (!isObjectId(sourceId)) {
+    return res.status(400).json({ error: "invalid sourceId" });
   }
   if (!Number.isInteger(billingDay) || billingDay < 1 || billingDay > 31) {
     return res.status(400).json({ error: "invalid billingDay" });
@@ -754,7 +944,7 @@ router.post("/subscriptions", async (req, res) => {
   if (!source) return res.status(404).json({ error: `${sourceType} not found` });
 
   const subscription = await Subscription.create({
-    name: name.trim(),
+    name: cleanName,
     price,
     sourceType,
     sourceId: source.sourceId,
@@ -765,20 +955,22 @@ router.post("/subscriptions", async (req, res) => {
 });
 
 router.patch("/subscriptions/:id", async (req, res) => {
+  const { name, price, sourceType, sourceId, billingDay } = req.body;
+
+  let cleanName: string | null = null;
+  if ("name" in req.body) {
+    cleanName = trimmedString(name);
+    if (!cleanName) return res.status(400).json({ error: "name required" });
+  }
+  if ("price" in req.body && !isNonNegativeNumber(price)) {
+    return res.status(400).json({ error: "invalid price" });
+  }
+
   const subscription = await Subscription.findById(req.params.id);
   if (!subscription || subscription.archived) return res.status(404).json({ error: "not found" });
 
-  const { name, price, sourceType, sourceId, billingDay } = req.body;
-
-  if ("name" in req.body) {
-    if (typeof name !== "string" || !name.trim()) return res.status(400).json({ error: "name required" });
-    subscription.name = name.trim();
-  }
-
-  if ("price" in req.body) {
-    if (typeof price !== "number" || price < 0) return res.status(400).json({ error: "invalid price" });
-    subscription.price = price;
-  }
+  if (cleanName) subscription.name = cleanName;
+  if ("price" in req.body) subscription.price = price;
 
   const sourceTypeProvided = "sourceType" in req.body;
   const sourceIdProvided = "sourceId" in req.body;
@@ -789,7 +981,7 @@ router.patch("/subscriptions/:id", async (req, res) => {
     if (!SUBSCRIPTION_SOURCE_TYPES.includes(sourceType)) {
       return res.status(400).json({ error: "invalid sourceType" });
     }
-    if (!sourceId) return res.status(400).json({ error: "sourceId required" });
+    if (!isObjectId(sourceId)) return res.status(400).json({ error: "invalid sourceId" });
     const source = await resolveSubscriptionSource(sourceType, sourceId);
     if (!source) return res.status(404).json({ error: `${sourceType} not found` });
     subscription.sourceType = sourceType;
@@ -842,10 +1034,11 @@ router.get("/wishlist", async (_req, res) => {
 
 router.post("/wishlist", async (req, res) => {
   const { name, price, link, priority, notes } = req.body;
-  if (!name || typeof name !== "string" || !name.trim()) {
+  const cleanName = trimmedString(name);
+  if (!cleanName) {
     return res.status(400).json({ error: "name required" });
   }
-  if (typeof price !== "number" || price < 0) {
+  if (!isNonNegativeNumber(price)) {
     return res.status(400).json({ error: "invalid price" });
   }
   const nextPriority = priority ?? "medium";
@@ -854,7 +1047,7 @@ router.post("/wishlist", async (req, res) => {
   }
 
   const item = await WishlistItem.create({
-    name: name.trim(),
+    name: cleanName,
     price,
     bought: false,
     dateBought: null,
@@ -866,23 +1059,26 @@ router.post("/wishlist", async (req, res) => {
 });
 
 router.patch("/wishlist/:id", async (req, res) => {
+  const { name, price, link, priority, notes, bought } = req.body;
+
+  let cleanName: string | null = null;
+  if ("name" in req.body) {
+    cleanName = trimmedString(name);
+    if (!cleanName) return res.status(400).json({ error: "name required" });
+  }
+  if ("price" in req.body && !isNonNegativeNumber(price)) {
+    return res.status(400).json({ error: "invalid price" });
+  }
+  if ("priority" in req.body && !WISHLIST_PRIORITIES.includes(priority)) {
+    return res.status(400).json({ error: "invalid priority" });
+  }
+
   const item = await WishlistItem.findById(req.params.id);
   if (!item || item.archived) return res.status(404).json({ error: "not found" });
 
-  const { name, price, link, priority, notes, bought } = req.body;
-
-  if ("name" in req.body) {
-    if (typeof name !== "string" || !name.trim()) return res.status(400).json({ error: "name required" });
-    item.name = name.trim();
-  }
-  if ("price" in req.body) {
-    if (typeof price !== "number" || price < 0) return res.status(400).json({ error: "invalid price" });
-    item.price = price;
-  }
-  if ("priority" in req.body) {
-    if (!WISHLIST_PRIORITIES.includes(priority)) return res.status(400).json({ error: "invalid priority" });
-    item.priority = priority;
-  }
+  if (cleanName) item.name = cleanName;
+  if ("price" in req.body) item.price = price;
+  if ("priority" in req.body) item.priority = priority;
   if ("link" in req.body) item.link = typeof link === "string" ? link.trim() : "";
   if ("notes" in req.body) item.notes = typeof notes === "string" ? notes.trim() : "";
   if ("bought" in req.body) {

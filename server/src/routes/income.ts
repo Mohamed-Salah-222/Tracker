@@ -2,9 +2,12 @@ import { Router } from "express";
 import { Rate } from "../models/Rate";
 import { IncomeEntry } from "../models/IncomeEntry";
 import { DayStatus } from "../models/DayStatus";
-import { toDayUTC, monthRange } from "../lib/dates";
+import { monthRange } from "../lib/dates";
+import { isNonNegativeNumber, isPositiveNumber, objectIdParam, parseDayUTC } from "../lib/validation";
 
 const router = Router();
+
+router.param("id", objectIdParam);
 
 // ===== RATES =====
 
@@ -17,7 +20,7 @@ router.get("/rate", async (_req, res) => {
 // Set a new rate (closes the previous one)
 router.post("/rate", async (req, res) => {
   const { ratePerMinute } = req.body;
-  if (typeof ratePerMinute !== "number" || ratePerMinute < 0) {
+  if (!isNonNegativeNumber(ratePerMinute)) {
     return res.status(400).json({ error: "ratePerMinute must be a non-negative number" });
   }
   const now = new Date();
@@ -30,9 +33,14 @@ router.post("/rate", async (req, res) => {
 
 // Get all entries for a month + day statuses + month total
 router.get("/month", async (req, res) => {
-  const year = parseInt(req.query.year as string);
-  const month = parseInt(req.query.month as string); // 1-12
-  if (!year || !month) return res.status(400).json({ error: "year and month required" });
+  const year = parseInt(req.query.year as string, 10);
+  const month = parseInt(req.query.month as string, 10); // 1-12
+  if (!Number.isInteger(year) || year < 1970 || year > 9999) {
+    return res.status(400).json({ error: "valid year required" });
+  }
+  if (!Number.isInteger(month) || month < 1 || month > 12) {
+    return res.status(400).json({ error: "month must be between 1 and 12" });
+  }
 
   const { start, end } = monthRange(year, month);
 
@@ -52,12 +60,9 @@ router.get("/month", async (req, res) => {
 
 // Get entries + statuses for a date range (used for week view)
 router.get("/range", async (req, res) => {
-  const fromStr = req.query.from as string;
-  const toStr = req.query.to as string;
-  if (!fromStr || !toStr) return res.status(400).json({ error: "from and to required" });
-
-  const from = toDayUTC(fromStr);
-  const toEnd = toDayUTC(toStr);
+  const from = parseDayUTC(req.query.from);
+  const toEnd = parseDayUTC(req.query.to);
+  if (!from || !toEnd) return res.status(400).json({ error: "valid from and to dates required" });
   toEnd.setUTCDate(toEnd.getUTCDate() + 1); // inclusive
 
   const entries = await IncomeEntry.find({
@@ -76,8 +81,9 @@ router.get("/range", async (req, res) => {
 // Create entry
 router.post("/entry", async (req, res) => {
   const { date, minutes } = req.body;
-  if (!date || typeof minutes !== "number" || minutes <= 0) {
-    return res.status(400).json({ error: "date and positive minutes required" });
+  const day = parseDayUTC(date);
+  if (!day || !isPositiveNumber(minutes)) {
+    return res.status(400).json({ error: "valid date and positive minutes required" });
   }
 
   const activeRate = await Rate.findOne({ effectiveTo: null }).sort({ effectiveFrom: -1 });
@@ -85,7 +91,6 @@ router.post("/entry", async (req, res) => {
     return res.status(400).json({ error: "Set your rate first" });
   }
 
-  const day = toDayUTC(date);
   const amount = +(minutes * activeRate.ratePerMinute).toFixed(2);
 
   // Soft-delete any existing entry for this day
@@ -103,14 +108,24 @@ router.post("/entry", async (req, res) => {
 // Update entry (re-snapshots amount using stored rate)
 router.patch("/entry/:id", async (req, res) => {
   const { minutes, date } = req.body;
+
+  if (minutes !== undefined && !isPositiveNumber(minutes)) {
+    return res.status(400).json({ error: "minutes must be a positive number" });
+  }
+  let day: Date | null = null;
+  if (date !== undefined) {
+    day = parseDayUTC(date);
+    if (!day) return res.status(400).json({ error: "valid date required" });
+  }
+
   const entry = await IncomeEntry.findById(req.params.id);
   if (!entry || entry.deletedAt) return res.status(404).json({ error: "not found" });
 
-  if (typeof minutes === "number") {
+  if (minutes !== undefined) {
     entry.minutes = minutes;
     entry.amount = +(minutes * entry.ratePerMinute).toFixed(2);
   }
-  if (date) entry.date = toDayUTC(date);
+  if (day) entry.date = day;
 
   await entry.save();
   res.json(entry);
@@ -129,8 +144,15 @@ router.delete("/entry/:id", async (req, res) => {
 
 router.put("/day-status", async (req, res) => {
   const { date, status, note } = req.body;
-  if (!date) return res.status(400).json({ error: "date required" });
-  const day = toDayUTC(date);
+  const day = parseDayUTC(date);
+  if (!day) return res.status(400).json({ error: "valid date required" });
+
+  if (status !== undefined && status !== null && typeof status !== "string") {
+    return res.status(400).json({ error: "status must be a string" });
+  }
+  if (note !== undefined && note !== null && typeof note !== "string") {
+    return res.status(400).json({ error: "note must be a string" });
+  }
 
   if (!status) {
     await DayStatus.deleteOne({ date: day });

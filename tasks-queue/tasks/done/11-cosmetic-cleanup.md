@@ -1,0 +1,6 @@
+Four independent, low-risk fixes:
+
+1. client/src/index.css line 1: the Google Fonts @import currently comes after `@import "tailwindcss";`, which triggers a build warning since @import rules must precede all other rules. Move the Google Fonts import to the very top of the file, before the Tailwind import.
+2. Add route-level code splitting to the client (currently one ~1.5MB chunk) using dynamic import() for page components in client/src/App.tsx, so each route lazy-loads instead of all shipping in one bundle.
+3. Seed scripts (server/src/scripts/seed-medical-english-pain-quality.ts and seed-medical-english-pain-timing.ts) have mojibake in their Arabic text (appearing as "ÙˆØ..." instead of correct Arabic) — this is almost always a source-file encoding issue (not saved as UTF-8). Re-save the affected string literals as proper UTF-8 and confirm the Arabic renders correctly.
+4. server/src/routes/workouts.ts line 270 computes totalVolume by summing weight alone (totalVolume += set.weight), which is not real training volume (volume = weight × reps). Either rename the field to reflect what it actually is (e.g. totalWeightLogged), or fix the calculation to multiply by reps if reps data is being captured. Also confirm: totalReps is initialized at line 257 but never incremented anywhere — decide whether to implement it or remove the unused field.

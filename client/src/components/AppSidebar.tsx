@@ -1,7 +1,7 @@
 import { Link, useLocation } from "react-router-dom";
 import { motion } from "motion/react";
 import { Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarHeader, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../components/ui/sidebar";
-import { LayoutDashboard, Wallet, CreditCard, CheckSquare, Sun, Apple, Refrigerator, BookOpen, Sprout, Dumbbell, GraduationCap, Stethoscope, Target } from "lucide-react";
+import { LayoutDashboard, Wallet, CreditCard, CheckSquare, Sun, Apple, Refrigerator, BookOpen, Sprout, Dumbbell, Target, FolderKanban } from "lucide-react";
 
 type Item = {
   title: string;
@@ -13,7 +13,7 @@ const sections: { label: string; items: Item[] }[] = [
   {
     label: "Overview",
     items: [
-      { title: "Dashboard", url: "/", icon: LayoutDashboard },
+      { title: "Tracker", url: "/", icon: LayoutDashboard },
       { title: "Today", url: "/today", icon: Sun },
     ],
   },
@@ -36,15 +36,9 @@ const sections: { label: string; items: Item[] }[] = [
     label: "Planning",
     items: [
       { title: "Tasks", url: "/tasks", icon: CheckSquare },
+      { title: "Projects", url: "/projects", icon: FolderKanban },
       { title: "Goals", url: "/goals", icon: Target },
       { title: "Workout", url: "/workout", icon: Dumbbell },
-    ],
-  },
-  {
-    label: "Career",
-    items: [
-      { title: "AI Engineering", url: "/career", icon: GraduationCap },
-      { title: "Medical English", url: "/medical-english", icon: Stethoscope },
     ],
   },
 ];

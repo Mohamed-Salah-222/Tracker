@@ -78,7 +78,47 @@
   - Client uses effects to fetch on mount/range/filter changes.
   - `client/src/pages/CareerTopic.tsx` autosaves notes/done state with an 800 ms debounce.
   - Several UI-only timers for confetti/flash animations in `client/src/pages/Income.tsx`, `Today.tsx`, `Payments.tsx`.
-  - Payments uses MongoDB sessions/transactions in `server/src/routes/payments.ts`; requires replica set/transaction-capable Mongo deployment.
+  - Payments uses MongoDB sessions/transactions in `server/src/routes/payments.ts`; requires a replica-set/transaction-capable Mongo deployment. See "Deployment requirements" below for the verified topology and the exact call sites.
+
+## Deployment requirements
+
+### MongoDB transactions are mandatory
+`server/src/routes/payments.ts` wraps every balance-moving operation in a MongoDB
+transaction via `mongoose.startSession()` + `session.withTransaction()`. Transactions
+require a replica set or a sharded cluster. **A standalone `mongod` will fail these
+endpoints** with `Transaction numbers are only allowed on a replica set member or
+mongos` — meaning every expense, movement, and account creation breaks, while the
+rest of the app keeps working. There is no non-transactional fallback path.
+
+Transaction call sites in `server/src/routes/payments.ts`:
+
+| Operation | Route | Why it needs atomicity |
+| --- | --- | --- |
+| Create account with opening balance | `POST /wallets`, `POST /banks` | Account row + its opening `adjustment` movement must commit together |
+| Create expense (wallet-funded) | `POST /expenses` | Wallet balance decrement + `Expense` insert |
+| Create expense (bank-funded) | `POST /expenses` | Bank balance decrement + `Expense` insert |
+| Edit expense | `PATCH /expenses/:id` | Refund old source, deduct new source, update `Expense` |
+| Delete expense | `DELETE /expenses/:id` | Refund source + soft-delete `Expense` |
+| Create movement | `POST /movements` | Both account balances + `MoneyMovement` insert |
+| Edit movement | `PATCH /movements/:id` | Reverse old balance effects, apply new ones, update the doc |
+| Delete movement | `DELETE /movements/:id` | Reverse balance effects + soft-delete the doc |
+
+Expense routes not listed here (`GET /expenses`, `GET /summary`) are read-only and
+work on any topology.
+
+### Current deployment — verified 2026-07-29
+- API host: Render (`https://tracker-u98r.onrender.com/api`, hard-coded in `client/src/lib/api.ts`).
+- Database: **MongoDB Atlas, 3-node replica set** `atlas-7p9y1s-shard-0`, MongoDB **8.0.28**.
+  Driver reports topology `ReplicaSetWithPrimary`.
+- **Transactions are supported.** Verified by opening a real transaction, writing, and
+  aborting: the write rolled back cleanly and left nothing behind.
+- Caveat: `MONGO_URI` uses the plain `mongodb://` scheme with an explicit 3-host seed
+  list rather than `mongodb+srv://`. This works today, but it pins specific shard
+  hostnames — if Atlas rotates or resizes nodes the seed list can go stale. Prefer the
+  `mongodb+srv://` connection string, which resolves members via DNS SRV.
+- If the database is ever moved (local `mongod`, a single-container Mongo, a
+  budget host), it **must** be a replica set — even a single-node replica set
+  (`rs.initiate()`) is enough. Plain standalone Mongo will break payments.
 
 ## Data Model
 - `CalorieEntry` (`server/src/models/CalorieEntry.ts`), persisted in Mongo collection `calorieentries`:
@@ -113,7 +153,20 @@
   - `date: Date`, unique; `dismissed: boolean`; `dismissedAt: Date|null`; timestamps.
   - Comment refers to below-minimum income/day target flags; feature appears abandoned.
 - `Wallet` (`server/src/models/Wallet.ts`), persisted in Mongo:
-  - `name: string`; `balance: number`; `archived: boolean`; timestamps.
+  - `name: string`; `balance: number`; `currency: "EGP"|"USD"` (enum reuses `BANK_CURRENCIES` from `server/src/models/Bank.ts`, default `"EGP"`); `archived: boolean`; timestamps.
+  - `balance` is a derived value. It is only ever changed by an `Expense` or a `MoneyMovement`; the API refuses a direct write (see Features → Payments).
+  - `currency` was added after launch. `npm run migrate:wallet-currency` backfills pre-existing wallets to `EGP`.
+- `Bank` (`server/src/models/Bank.ts`), persisted in Mongo:
+  - `name: string`; `balance: number`; `currency: "EGP"|"USD"` (`BANK_CURRENCIES`, default `"EGP"`); `archived: boolean`; timestamps.
+  - `balance` is derived, same rule as `Wallet`.
+- `MoneyMovement` (`server/src/models/MoneyMovement.ts`), persisted in Mongo:
+  - `type: "withdraw"|"deposit"|"transfer_bank"|"transfer_wallet"|"adjustment"|"family_in"` indexed.
+  - From side: `fromType: "wallet"|"bank"|"external"|null`; `fromId: ObjectId|null`; `fromNameSnapshot`; `fromCurrencySnapshot`.
+  - To side: `toType`; `toId`; `toNameSnapshot`; `toCurrencySnapshot`.
+  - `amountFrom: number`; `amountTo: number`; `conversionRate: number`; `date: Date` indexed; `note: string`; `deletedAt: Date|null`; timestamps.
+  - Enforced **at the schema level** by a `pre("validate")` hook, not only in the route: amounts must be finite, `conversionRate` finite and `> 0`, per-type from/to shape valid, amounts consistent with the conversion, and `fromId`/`toId` must reference existing accounts. The hook honours `this.$session()` so an account created inside the same transaction resolves correctly.
+  - Shape rules live in `server/src/lib/movement-validation.ts` and are shared by the route and the schema, so the two cannot drift.
+  - A `conversionRate` of `1` between two *different* currencies is rejected: it is arithmetically self-consistent but means the conversion was never applied.
 - `Expense` (`server/src/models/Expense.ts`), persisted in Mongo:
   - `name: string`; `amount: number`; `category: "food"|"transport"|"bills"|"shopping"|"entertainment"|"health"|"education"|"other"`; `walletId: ObjectId ref Wallet`; `walletNameSnapshot: string`; `date: Date`; `deletedAt: Date|null`; timestamps.
   - Creation/update/delete adjusts wallet balances in `server/src/routes/payments.ts`.
@@ -144,8 +197,12 @@
   - Log/edit/soft-delete one income entry per day; monthly/range views; mark off days as vacation/sick/holiday in `server/src/routes/income.ts` and `client/src/pages/Income.tsx`.
   - Private client-side password gate for `/income` via `client/src/components/PrivateRoute.tsx`.
 - Payments:
-  - Create/edit/archive wallets in `server/src/routes/payments.ts` and `client/src/pages/Payments.tsx`.
-  - Create/filter/edit/soft-delete expenses with category, wallet, date, search; wallet balance is adjusted transactionally in `server/src/routes/payments.ts`.
+  - Create/edit/archive wallets and banks in `server/src/routes/payments.ts` and `client/src/pages/Payments.tsx`.
+  - **Balances are never edited directly.** `PATCH /payments/wallets/:id` and `PATCH /payments/banks/:id` reject a `balance` field with a 400. An account balance only changes through a logged `Expense` or `MoneyMovement`, so the Movements list is a complete audit trail.
+    - Manual corrections stay possible: the edit dialog's "Correct balance" field computes the delta against the current balance and posts an `adjustment` `MoneyMovement` (`recordBalanceAdjustment` in `client/src/pages/Payments.tsx`), with an optional reason stored as the movement note.
+    - A non-zero opening balance on account creation is applied the same way — the account is inserted at `0` and an `adjustment` movement noted `"Opening balance"` is committed in the same transaction.
+    - Changing an account's currency is refused while its balance is non-zero, since that would silently reinterpret the stored amount.
+  - Create/filter/edit/soft-delete expenses with category, source, date, search; source balance is adjusted transactionally in `server/src/routes/payments.ts`.
   - Weekly/monthly expense recap in `client/src/components/RecapModal.tsx` backed by `GET /api/payments/summary`.
   - Private client-side password gate for `/payments` via `client/src/components/PrivateRoute.tsx`.
 - Tasks:
@@ -224,7 +281,7 @@
 - `server/src/routes/workouts.ts` `changeType` path deletes sets only when changing to `rest`; changing A to B leaves existing set logs for A exercises attached to the session but hidden by B UI unless manually cleaned.
 - `server/src/routes/workouts.ts` `last-weights` groups latest set by `createdAt`, not session date; editing old sessions later can make old data appear as latest.
 - `server/src/routes/workouts.ts` `exercise-history` heaviest set sorts only by `weight`, no date tie-breaker, and includes all sessions including incomplete.
-- `server/src/routes/payments.ts` uses MongoDB transactions. This will fail on standalone MongoDB deployments; no fallback.
+- `server/src/routes/payments.ts` uses MongoDB transactions with no fallback. The current Atlas replica set supports them (verified 2026-07-29, see "Deployment requirements"), so this is a constraint on any future move rather than a present-day bug.
 - `server/src/routes/payments.ts` wallet archive does not prevent archived wallet IDs from being present on historical expenses, by design, but filtering only loads active wallets on client, so editing old expenses may fail if their wallet was archived.
 - `server/src/routes/payments.ts` catches `err` unused in expense create; no structured logging.
 - `server/src/routes/calories.ts` fridge deduction for per-unit tracked foods silently logs the full requested units even if fridge had fewer. `fridgeDeductedAtLog` stores partial deduction, but UI may imply full inventory consistency.
@@ -248,7 +305,7 @@
 - Should local development target localhost API through env config instead of the production Render URL?
 - Should workout rest days count in streaks and/or influence A/B suggestions?
 - Should changing a workout session from A to B delete incompatible old `SetLog` rows?
-- What is the intended Mongo deployment topology? Payments currently requires transaction support.
+- ~~What is the intended Mongo deployment topology?~~ Answered 2026-07-29: MongoDB Atlas 3-node replica set (`atlas-7p9y1s-shard-0`, Mongo 8.0.28), transactions verified working. Remaining question is whether to switch `MONGO_URI` to the `mongodb+srv://` form so the seed host list cannot go stale.
 - Are date boundaries supposed to follow UTC or the user's local timezone?
 - Is the career curriculum count supposed to be 172 or 177?
 - Are `node_modules` folders intentionally present in the workspace, or are they accidental local artifacts?

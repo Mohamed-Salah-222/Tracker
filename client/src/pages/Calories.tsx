@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type DragEvent } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { api } from "../lib/api";
+import { todayISO } from "../lib/today";
+import { PICKER_LIMIT, type Page } from "../lib/pagination";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
@@ -9,16 +11,21 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
 import { toast } from "sonner";
-import { ChevronLeft, ChevronRight, Plus, Search, Snowflake, Trash2, Droplet, BarChart3, Target, Cake, Scale, ClipboardCopy, Flame, Beef, Wheat, Nut } from "lucide-react";
+import { ChevronLeft, ChevronRight, Plus, Search, Snowflake, Trash2, Droplet, BarChart3, Target, Cake, Flame, Beef, Wheat, Nut, Utensils, GripVertical } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { AxiosError } from "axios";
 import { CalorieRecapModal } from "../components/CalorieRecapModal";
-import { WeightModal } from "../components/WeightModal";
-import { CoachReportModal } from "../components/CoachReportModal";
 
 // ===== Types =====
 type Meal = "breakfast" | "lunch" | "dinner" | "snack";
 const MEALS: Meal[] = ["breakfast", "lunch", "dinner", "snack"];
+const MEAL_LABELS: Record<Meal, string> = {
+  breakfast: "Breakfast",
+  lunch: "Lunch",
+  dinner: "Dinner",
+  snack: "Snack",
+};
+const DRAG_FOOD_TYPE = "application/x-lifetracker-food";
 type EntryMode = "perGram" | "perUnit";
 
 type Food = {
@@ -74,7 +81,6 @@ type Goal = {
 // ===== Helpers =====
 const round = (n: number) => Math.round(n);
 const round1 = (n: number) => Math.round(n * 10) / 10;
-const todayISO = () => new Date().toISOString().slice(0, 10);
 
 function getApiError(e: unknown): string {
   if (e instanceof AxiosError) {
@@ -108,6 +114,37 @@ function entryTotals(e: Entry) {
   };
 }
 
+function foodCalories(food: Food) {
+  return food.entryMode === "perUnit" ? round1(food.caloriesPerUnit) : round1(food.caloriesPerGram * 100);
+}
+
+function foodUnitDescription(food: Food) {
+  return food.entryMode === "perUnit" ? `/ ${food.unitLabel || "unit"}` : "/ 100g";
+}
+
+function defaultAmountText(food: Food) {
+  if (food.entryMode === "perUnit") return `1 ${food.unitLabel || "unit"}`;
+  if (food.defaultServingGrams) return `${food.defaultServingGrams}g`;
+  return "needs grams";
+}
+
+function mealAccent(meal: Meal) {
+  if (meal === "snack") {
+    return {
+      color: "var(--color-foreground)",
+      background: "var(--color-muted)",
+      borderColor: "var(--color-border-strong)",
+      header: "linear-gradient(135deg, color-mix(in oklch, var(--color-foreground), white 93%), var(--color-card))",
+    };
+  }
+  return {
+    color: `var(--color-meal-${meal})`,
+    background: `var(--color-meal-${meal}-bg)`,
+    borderColor: `color-mix(in oklch, var(--color-meal-${meal}), transparent 70%)`,
+    header: `linear-gradient(135deg, color-mix(in oklch, var(--color-meal-${meal}), white 88%), var(--color-card))`,
+  };
+}
+
 // ===== Motion =====
 const fadeUp = {
   initial: { opacity: 0, y: 8 },
@@ -133,15 +170,20 @@ export default function Calories() {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pendingMeal, setPendingMeal] = useState<Meal>("breakfast");
   const [recapOpen, setRecapOpen] = useState(false);
-  const [coachReportOpen, setCoachReportOpen] = useState(false);
   const [goalOpen, setGoalOpen] = useState(false);
-  const [weightOpen, setWeightOpen] = useState(false);
+  const [pendingFood, setPendingFood] = useState<Food | null>(null);
+  const [foodSearch, setFoodSearch] = useState("");
 
   // ----- Loaders -----
+  // Picker options, filtered client-side, so this asks for the whole set up to
+  // PICKER_LIMIT rather than paging.
   const loadFoods = useCallback(async () => {
     try {
-      const r = await api.get<Food[]>("/foods");
-      setFoods(r.data);
+      const r = await api.get<Page<Food>>("/foods", { params: { limit: PICKER_LIMIT, offset: 0 } });
+      setFoods(r.data.items);
+      if (r.data.total > r.data.items.length) {
+        toast.warning(`Showing the first ${r.data.items.length} of ${r.data.total} foods in the picker.`);
+      }
     } catch (e) {
       toast.error(getApiError(e));
     }
@@ -236,17 +278,50 @@ export default function Calories() {
     [date],
   );
 
-  const openPicker = (meal: Meal) => {
+  const openPicker = (meal: Meal, food: Food | null = null) => {
     setPendingMeal(meal);
+    setPendingFood(food);
     setPickerOpen(true);
   };
 
+  const quickLogFood = async (food: Food, meal: Meal) => {
+    try {
+      const body: Record<string, unknown> = {
+        date,
+        foodId: food._id,
+        meal,
+      };
+      if (food.entryMode === "perUnit") {
+        body.units = 1;
+      } else if (food.defaultServingGrams && food.defaultServingGrams > 0) {
+        body.grams = food.defaultServingGrams;
+      } else {
+        openPicker(meal, food);
+        toast.info("Add grams to finish logging this food.");
+        return;
+      }
+      await api.post("/calories", body);
+      toast.success(`Logged to ${MEAL_LABELS[meal]}`);
+      reload();
+    } catch (e) {
+      toast.error(getApiError(e));
+    }
+  };
+
   return (
-    <div className="w-full max-w-[1100px] mx-auto space-y-5">
+    <div className="w-full max-w-[1700px] space-y-3">
       {/* ===== Top bar ===== */}
-      <motion.div {...fadeUp} className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-3">
-          <h1 className="text-[15px] font-semibold tracking-tight">Calories</h1>
+      <motion.div {...fadeUp} className="flex flex-col gap-2 rounded-2xl border border-border bg-card/80 p-2.5 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="flex h-7 w-7 items-center justify-center rounded-xl bg-foreground text-background">
+              <Utensils className="h-3.5 w-3.5" />
+            </span>
+            <div>
+              <h1 className="text-base font-semibold tracking-tight">Calories</h1>
+              <div className="text-[11px] text-muted-foreground">{dateLabel}</div>
+            </div>
+          </div>
           {cheat && <CheatBadge />}
         </div>
         <div className="flex items-center gap-2 self-end sm:self-auto flex-wrap">
@@ -254,17 +329,9 @@ export default function Calories() {
             <Target className="h-3.5 w-3.5 mr-1.5" />
             Goals
           </Button>
-          <Button variant="ghost" size="sm" onClick={() => setWeightOpen(true)}>
-            <Scale className="h-3.5 w-3.5 mr-1.5" />
-            Weight
-          </Button>
           <Button variant="outline" size="sm" onClick={() => setRecapOpen(true)}>
             <BarChart3 className="h-3.5 w-3.5 mr-1.5" />
             Weekly recap
-          </Button>
-          <Button variant="outline" size="sm" onClick={() => setCoachReportOpen(true)}>
-            <ClipboardCopy className="h-3.5 w-3.5 mr-1.5" />
-            Coach report
           </Button>
           <Button variant={cheat ? "default" : "outline"} size="sm" onClick={toggleCheat}>
             <Cake className="h-3.5 w-3.5 mr-1.5" />
@@ -292,34 +359,51 @@ export default function Calories() {
         </Button>
       </motion.div>
 
-      {/* ===== Goal cards ===== */}
-      {goal && (
-        <motion.div {...stagger(2)} className="space-y-3">
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <MacroCard icon={Flame} label="Calories" value={totals.cal} target={goal.caloriesTarget} unit="cal" system="cap" cheat={!!cheat} decimals={0} />
-            <MacroCard icon={Beef} label="Protein" value={totals.p} target={goal.proteinTarget} unit="g" system="buildup" fromVar="--color-expense" cheat={!!cheat} decimals={1} />
-            <MacroCard icon={Wheat} label="Carbs" value={totals.c} target={goal.carbsTarget} unit="g" system="cap" cheat={!!cheat} decimals={1} />
-            <MacroCard icon={Nut} label="Fat" value={totals.f} target={goal.fatTarget} unit="g" system="cap" cheat={!!cheat} decimals={1} />
-          </div>
-          <WaterBar value={waterTotal} goal={goal} cheat={!!cheat} date={date} onChanged={loadDayData} waters={waters} />
-        </motion.div>
-      )}
+      <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_420px] 2xl:grid-cols-[minmax(0,1fr)_480px]">
+        <div className="min-w-0 space-y-3">
+          {/* ===== Goal cards ===== */}
+          {goal && (
+            <motion.div {...stagger(2)} className="grid gap-2 xl:grid-cols-[minmax(0,1fr)_300px]">
+              <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+                <MacroCard icon={Flame} label="Calories" value={totals.cal} target={goal.caloriesTarget} unit="cal" system="cap" cheat={!!cheat} decimals={0} />
+                <MacroCard icon={Beef} label="Protein" value={totals.p} target={goal.proteinTarget} unit="g" system="buildup" fromVar="--color-expense" cheat={!!cheat} decimals={1} />
+                <MacroCard icon={Wheat} label="Carbs" value={totals.c} target={goal.carbsTarget} unit="g" system="cap" cheat={!!cheat} decimals={1} />
+                <MacroCard icon={Nut} label="Fat" value={totals.f} target={goal.fatTarget} unit="g" system="cap" cheat={!!cheat} decimals={1} />
+              </div>
+              <WaterBar value={waterTotal} goal={goal} cheat={!!cheat} date={date} onChanged={loadDayData} waters={waters} />
+            </motion.div>
+          )}
 
-      {/* ===== Meals ===== */}
-      <div className="space-y-3">
-        {MEALS.map((meal, i) => (
-          <motion.div key={meal} {...stagger(i + 4)}>
-            <MealCard meal={meal} entries={byMeal[meal]} total={mealTotal(meal)} onAdd={() => openPicker(meal)} onChanged={reload} />
-          </motion.div>
-        ))}
+          {/* ===== Meals ===== */}
+          <div className="grid auto-rows-fr grid-cols-1 gap-3 lg:grid-cols-2">
+            {MEALS.map((meal, i) => (
+              <motion.div key={meal} {...stagger(i + 4)} className="min-w-0">
+                <MealCard
+                  meal={meal}
+                  entries={byMeal[meal]}
+                  total={mealTotal(meal)}
+                  onAdd={() => openPicker(meal)}
+                  onChanged={reload}
+                  onFoodDrop={(food) => void quickLogFood(food, meal)}
+                />
+              </motion.div>
+            ))}
+          </div>
+        </div>
+
+        <FoodRail
+          foods={foods}
+          recentIds={recentIds}
+          search={foodSearch}
+          onSearchChange={setFoodSearch}
+          onFoodClick={(food) => openPicker("breakfast", food)}
+        />
       </div>
 
       {/* ===== Dialogs ===== */}
-      <FoodPickerDialog open={pickerOpen} onOpenChange={setPickerOpen} foods={foods} recentIds={recentIds} meal={pendingMeal} date={date} onSaved={reload} />
+      <FoodPickerDialog open={pickerOpen} onOpenChange={setPickerOpen} foods={foods} recentIds={recentIds} meal={pendingMeal} date={date} initialFood={pendingFood} onSaved={reload} />
       <GoalDialog open={goalOpen} onOpenChange={setGoalOpen} goal={goal} onSaved={loadGoal} />
-      <WeightModal open={weightOpen} onOpenChange={setWeightOpen} />
       <CalorieRecapModal open={recapOpen} onOpenChange={setRecapOpen} />
-      <CoachReportModal open={coachReportOpen} onOpenChange={setCoachReportOpen} anchorDate={date} />
     </div>
   );
 }
@@ -334,9 +418,9 @@ function CheatBadge() {
       animate={{ scale: 1, opacity: 1 }}
       className="text-[11px] px-2 py-0.5 rounded border font-medium flex items-center gap-1"
       style={{
-        color: "var(--color-meal-snack)",
-        background: "var(--color-meal-snack-bg)",
-        borderColor: "color-mix(in oklch, var(--color-meal-snack), transparent 70%)",
+        color: "var(--color-foreground)",
+        background: "var(--color-muted)",
+        borderColor: "var(--color-border-strong)",
       }}
     >
       <Cake className="h-2.5 w-2.5" />
@@ -386,11 +470,21 @@ function MacroCard({
   const pct = target > 0 ? Math.min((v / target) * 100, 100) : 0;
   const over = v > target;
   const color = system === "cap" ? capColor(cheat, over) : buildupColor(cheat, pct, fromVar);
+  const fillColor = cheat ? "var(--color-muted)" : over ? "color-mix(in oklch, var(--color-expense), white 84%)" : `color-mix(in oklch, ${color}, white 86%)`;
+  const fillPct = over ? 100 : pct;
 
   return (
-    <Card>
-      <CardContent className="p-4">
-        <div className="flex items-baseline justify-between gap-2 mb-1.5">
+    <Card className="relative h-full overflow-hidden">
+      <motion.div
+        aria-hidden="true"
+        className="absolute inset-y-0 left-0"
+        initial={{ width: 0 }}
+        animate={{ width: `${fillPct}%` }}
+        transition={{ duration: 0.55, ease: [0.16, 1, 0.3, 1] }}
+        style={{ background: fillColor }}
+      />
+      <CardContent className="relative flex h-full flex-col justify-between p-3">
+        <div className="flex items-baseline justify-between gap-2 mb-1">
           <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium flex items-center gap-1">
             <Icon className="h-2.5 w-2.5" style={{ color }} />
             {label}
@@ -402,7 +496,7 @@ function MacroCard({
         </div>
         <div className="flex items-baseline gap-1.5">
           <AnimatePresence mode="wait">
-            <motion.span key={v} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }} transition={{ duration: 0.2 }} className="text-2xl font-semibold font-mono tabular-nums tracking-tight" style={{ color }}>
+            <motion.span key={v} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }} transition={{ duration: 0.2 }} className="text-xl font-semibold font-mono tabular-nums tracking-tight" style={{ color }}>
               {v}
             </motion.span>
           </AnimatePresence>
@@ -414,8 +508,9 @@ function MacroCard({
             {unit} over
           </div>
         )}
-        <div className="mt-2 h-1.5 rounded-full overflow-hidden" style={{ background: "var(--color-muted)" }}>
-          <motion.div initial={{ width: 0 }} animate={{ width: `${pct}%` }} transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }} style={{ background: color, height: "100%" }} />
+        <div className="mt-4 flex items-center justify-between text-[10px] font-mono tabular-nums text-muted-foreground">
+          <span>{Math.round(pct)}%</span>
+          <span>{over ? "over" : cheat ? "ignored" : "progress"}</span>
         </div>
       </CardContent>
     </Card>
@@ -431,6 +526,7 @@ function WaterBar({ value, goal, cheat, date, waters, onChanged }: { value: numb
   const pct = goal.waterTarget > 0 ? Math.min((v / goal.waterTarget) * 100, 100) : 0;
   const color = buildupColor(cheat, pct, "--color-water");
   const widthPct = pct;
+  const fillColor = cheat ? "var(--color-muted)" : `color-mix(in oklch, ${color}, white 84%)`;
 
   const add = async (ml: number) => {
     try {
@@ -453,9 +549,17 @@ function WaterBar({ value, goal, cheat, date, waters, onChanged }: { value: numb
   };
 
   return (
-    <Card>
-      <CardContent className="p-4">
-        <div className="flex items-baseline justify-between gap-2 mb-2">
+    <Card className="relative h-full overflow-hidden border-border/80 bg-card">
+      <motion.div
+        aria-hidden="true"
+        className="absolute inset-y-0 left-0"
+        initial={{ width: 0 }}
+        animate={{ width: `${widthPct}%` }}
+        transition={{ duration: 0.55, ease: [0.16, 1, 0.3, 1] }}
+        style={{ background: fillColor }}
+      />
+      <CardContent className="relative flex h-full flex-col justify-between p-3">
+        <div className="flex items-baseline justify-between gap-2 mb-1">
           <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium flex items-center gap-1">
             <Droplet className="h-2.5 w-2.5" style={{ color: "var(--color-water)" }} />
             Water
@@ -464,24 +568,25 @@ function WaterBar({ value, goal, cheat, date, waters, onChanged }: { value: numb
         </div>
         <div className="flex items-baseline gap-1.5">
           <AnimatePresence mode="wait">
-            <motion.span key={v} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }} transition={{ duration: 0.2 }} className="text-3xl font-semibold font-mono tabular-nums tracking-tight" style={{ color }}>
+            <motion.span key={v} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }} transition={{ duration: 0.2 }} className="text-2xl font-semibold font-mono tabular-nums tracking-tight" style={{ color }}>
               {(v / 1000).toFixed(1)}
             </motion.span>
           </AnimatePresence>
           <span className="text-xs text-muted-foreground font-medium">L</span>
         </div>
-        <div className="mt-3 h-1.5 rounded-full overflow-hidden" style={{ background: "var(--color-muted)" }}>
-          <motion.div initial={{ width: 0 }} animate={{ width: `${widthPct}%` }} transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }} style={{ background: color, height: "100%" }} />
+        <div className="mt-2 flex items-center justify-between text-[10px] font-mono tabular-nums text-muted-foreground">
+          <span>{Math.round(pct)}%</span>
+          <span>{waters.length} logs</span>
         </div>
         {/* Quick add */}
-        <div className="flex items-center gap-1 mt-3">
-          <Button variant="outline" size="sm" className="h-7 px-2 text-[11px] font-mono tabular-nums flex-1" onClick={() => add(200)}>
+        <div className="grid grid-cols-[1fr_1fr_1fr_auto] items-center gap-1.5 mt-2">
+          <Button variant="outline" size="sm" className="h-7 px-2 text-[11px] font-mono tabular-nums" onClick={() => add(200)}>
             +200
           </Button>
-          <Button variant="outline" size="sm" className="h-7 px-2 text-[11px] font-mono tabular-nums flex-1" onClick={() => add(300)}>
+          <Button variant="outline" size="sm" className="h-7 px-2 text-[11px] font-mono tabular-nums" onClick={() => add(300)}>
             +300
           </Button>
-          <Button variant="outline" size="sm" className="h-7 px-2 text-[11px] font-mono tabular-nums flex-1" onClick={() => add(600)}>
+          <Button variant="outline" size="sm" className="h-7 px-2 text-[11px] font-mono tabular-nums" onClick={() => add(600)}>
             +600
           </Button>
           <Button variant="ghost" size="icon" className="h-7 w-7" onClick={removeLast} disabled={waters.length === 0} aria-label="Undo last">
@@ -496,21 +601,41 @@ function WaterBar({ value, goal, cheat, date, waters, onChanged }: { value: numb
 // =====================================================================
 // MealCard
 // =====================================================================
-function MealCard({ meal, entries, total, onAdd, onChanged }: { meal: Meal; entries: Entry[]; total: number; onAdd: () => void; onChanged: () => void }) {
+function MealCard({ meal, entries, total, onAdd, onChanged, onFoodDrop }: { meal: Meal; entries: Entry[]; total: number; onAdd: () => void; onChanged: () => void; onFoodDrop: (food: Food) => void }) {
+  const [isOver, setIsOver] = useState(false);
+  const accent = mealAccent(meal);
+
+  const handleDrop = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setIsOver(false);
+    const raw = event.dataTransfer.getData(DRAG_FOOD_TYPE);
+    if (!raw) return;
+    try {
+      onFoodDrop(JSON.parse(raw) as Food);
+    } catch {
+      toast.error("Could not read dragged food.");
+    }
+  };
+
   return (
-    <Card>
-      <CardContent className="p-4">
-        <div className="flex items-center justify-between mb-2">
+    <Card className={`h-full min-h-[235px] border-border/80 transition-all ${isOver ? "ring-2 ring-foreground/30 bg-muted/40" : "bg-card"}`}>
+      <CardContent className="flex h-full flex-col p-0">
+        <div
+          className="flex items-center justify-between border-b border-border px-3 py-2.5"
+          style={{
+            background: accent.header,
+          }}
+        >
           <div className="flex items-center gap-2">
             <span
-              className="text-[11px] font-medium capitalize px-2 py-0.5 rounded border"
+              className="text-[11px] font-semibold px-2 py-0.5 rounded border"
               style={{
-                color: `var(--color-meal-${meal})`,
-                background: `var(--color-meal-${meal}-bg)`,
-                borderColor: `color-mix(in oklch, var(--color-meal-${meal}), transparent 70%)`,
+                color: accent.color,
+                background: accent.background,
+                borderColor: accent.borderColor,
               }}
             >
-              {meal}
+              {MEAL_LABELS[meal]}
             </span>
             <span className="text-xs font-mono tabular-nums text-muted-foreground">
               {entries.length} {entries.length === 1 ? "item" : "items"}
@@ -526,17 +651,34 @@ function MealCard({ meal, entries, total, onAdd, onChanged }: { meal: Meal; entr
           </div>
         </div>
 
-        {entries.length === 0 ? (
-          <div className="text-xs text-muted-foreground py-2">Nothing logged.</div>
-        ) : (
-          <div className="space-y-0">
+        <div
+          className="flex flex-1 flex-col p-2.5"
+          onDragEnter={(event) => {
+            event.preventDefault();
+            setIsOver(true);
+          }}
+          onDragOver={(event) => {
+            event.preventDefault();
+            event.dataTransfer.dropEffect = "copy";
+            setIsOver(true);
+          }}
+          onDragLeave={(event) => {
+            if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setIsOver(false);
+          }}
+          onDrop={handleDrop}
+        >
+          {entries.length === 0 ? (
+            <div className="flex min-h-[140px] flex-1 items-center justify-center rounded-xl border border-dashed border-border bg-muted/25 text-xs font-medium text-muted-foreground">Nothing logged.</div>
+          ) : (
+            <div className="space-y-1">
             <AnimatePresence initial={false}>
               {entries.map((e) => (
                 <EntryRow key={e._id} entry={e} onChanged={onChanged} />
               ))}
             </AnimatePresence>
           </div>
-        )}
+          )}
+        </div>
       </CardContent>
     </Card>
   );
@@ -654,9 +796,73 @@ function EntryRow({ entry, onChanged }: { entry: Entry; onChanged: () => void })
 }
 
 // =====================================================================
+// FoodRail
+// =====================================================================
+function FoodRail({
+  foods,
+  recentIds,
+  search,
+  onSearchChange,
+  onFoodClick,
+}: {
+  foods: Food[];
+  recentIds: string[];
+  search: string;
+  onSearchChange: (value: string) => void;
+  onFoodClick: (food: Food) => void;
+}) {
+  const recentFoods = useMemo(() => {
+    const byId = new Map(foods.map((f) => [f._id, f]));
+    return recentIds.map((id) => byId.get(id)).filter((f): f is Food => !!f);
+  }, [foods, recentIds]);
+
+  const visibleFoods = useMemo(() => {
+    const s = search.trim().toLowerCase();
+    if (s) return foods.filter((f) => f.name.toLowerCase().includes(s) || f.category.toLowerCase().includes(s));
+    return recentFoods.length > 0 ? recentFoods : foods.slice(0, 24);
+  }, [foods, recentFoods, search]);
+
+  const label = search.trim() ? "Results" : recentFoods.length > 0 ? "Frequently used" : "Suggested";
+
+  return (
+    <motion.aside {...stagger(8)} className="min-w-0 xl:sticky xl:top-0 xl:self-start">
+      <Card className="border-border/80 bg-card shadow-sm">
+        <CardContent className="p-3">
+          <div className="mb-3 flex items-start justify-between gap-3">
+            <div>
+              <div className="text-base font-semibold tracking-tight">Food shelf</div>
+              <div className="text-xs text-muted-foreground">Frequent foods and search.</div>
+            </div>
+            <span className="rounded-full border border-border bg-muted px-2 py-1 text-[10px] font-mono tabular-nums text-muted-foreground">{visibleFoods.length}</span>
+          </div>
+
+          <div className="relative mb-3">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input className="h-10 rounded-xl pl-9" value={search} onChange={(e) => onSearchChange(e.target.value)} placeholder="Search foods, protein, drinks..." />
+          </div>
+
+          <div className="mb-2 flex items-center justify-between">
+            <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</div>
+            <div className="text-[10px] font-medium text-muted-foreground">Serving</div>
+          </div>
+
+          <div className="grid max-h-[calc(100svh-250px)] min-h-[520px] grid-cols-1 gap-2 overflow-y-auto pr-1 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
+            {visibleFoods.length === 0 ? (
+              <div className="col-span-full rounded-xl border border-dashed border-border bg-muted/30 p-6 text-center text-sm text-muted-foreground">No foods match.</div>
+            ) : (
+              visibleFoods.map((food) => <FoodTile key={food._id} food={food} onClick={() => onFoodClick(food)} draggable />)
+            )}
+          </div>
+        </CardContent>
+      </Card>
+    </motion.aside>
+  );
+}
+
+// =====================================================================
 // FoodPickerDialog
 // =====================================================================
-function FoodPickerDialog({ open, onOpenChange, foods, recentIds, meal, date, onSaved }: { open: boolean; onOpenChange: (b: boolean) => void; foods: Food[]; recentIds: string[]; meal: Meal; date: string; onSaved: () => void }) {
+function FoodPickerDialog({ open, onOpenChange, foods, recentIds, meal, date, initialFood, onSaved }: { open: boolean; onOpenChange: (b: boolean) => void; foods: Food[]; recentIds: string[]; meal: Meal; date: string; initialFood: Food | null; onSaved: () => void }) {
   const [search, setSearch] = useState("");
   const [picked, setPicked] = useState<Food | null>(null);
   const [grams, setGrams] = useState("");
@@ -667,12 +873,12 @@ function FoodPickerDialog({ open, onOpenChange, foods, recentIds, meal, date, on
   useEffect(() => {
     if (open) {
       setSearch("");
-      setPicked(null);
-      setGrams("");
+      setPicked(initialFood);
+      setGrams(initialFood?.entryMode === "perGram" ? initialFood.defaultServingGrams?.toString() ?? "" : "");
       setUnits("1");
       setMeal2(meal);
     }
-  }, [open, meal]);
+  }, [open, meal, initialFood]);
 
   const recentFoods = useMemo(() => {
     const byId = new Map(foods.map((f) => [f._id, f]));
@@ -841,18 +1047,37 @@ function FoodPickerDialog({ open, onOpenChange, foods, recentIds, meal, date, on
 // =====================================================================
 // FoodTile
 // =====================================================================
-function FoodTile({ food, onClick }: { food: Food; onClick: () => void }) {
-  const unitText = food.unitLabel || "unit";
-  const cal = food.entryMode === "perUnit" ? round1(food.caloriesPerUnit) : round1(food.caloriesPerGram * 100);
-  const unitDesc = food.entryMode === "perUnit" ? `/ ${unitText}` : "/ 100g";
+function FoodTile({ food, onClick, draggable = false }: { food: Food; onClick: () => void; draggable?: boolean }) {
+  const cal = foodCalories(food);
+  const unitDesc = foodUnitDescription(food);
   return (
-    <motion.button whileHover={{ y: -1 }} whileTap={{ scale: 0.98 }} onClick={onClick} className="text-left border border-border bg-card rounded-md p-2.5 hover:border-border-strong transition-colors">
-      <div className="text-xs font-medium truncate flex items-center gap-1 text-foreground">
-        {food.name}
-        {food.trackInFridge && <Snowflake className="h-2.5 w-2.5 flex-shrink-0" style={{ color: "var(--color-water)" }} />}
+    <motion.button
+      whileHover={{ y: -1 }}
+      whileTap={{ scale: 0.98 }}
+      draggable={draggable}
+      onDragStartCapture={(event) => {
+        if (!draggable) return;
+        event.dataTransfer.effectAllowed = "copy";
+        event.dataTransfer.setData(DRAG_FOOD_TYPE, JSON.stringify(food));
+      }}
+      onClick={onClick}
+      className={`group/food text-left border border-border bg-card rounded-xl p-3 hover:border-border-strong hover:bg-muted/30 transition-colors ${draggable ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"}`}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="text-sm font-semibold truncate flex items-center gap-1.5 text-foreground">
+            {food.name}
+            {food.trackInFridge && <Snowflake className="h-3 w-3 flex-shrink-0" style={{ color: "var(--color-water)" }} />}
+          </div>
+          <div className="mt-1 text-[10px] uppercase tracking-wider text-muted-foreground">{food.category}</div>
+        </div>
+        {draggable && <GripVertical className="mt-0.5 h-4 w-4 flex-shrink-0 text-muted-foreground opacity-45 transition-opacity group-hover/food:opacity-100" />}
       </div>
-      <div className="text-[10px] text-muted-foreground font-mono tabular-nums mt-0.5">
-        {cal} cal {unitDesc}
+      <div className="mt-3 flex items-center justify-between gap-2">
+        <div className="text-xs font-mono tabular-nums text-foreground">
+          {cal} cal <span className="text-muted-foreground">{unitDesc}</span>
+        </div>
+        <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">{defaultAmountText(food)}</span>
       </div>
     </motion.button>
   );

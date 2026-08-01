@@ -1,6 +1,11 @@
-import express from "express";
+import dns from "dns";
+dns.setServers(["8.8.8.8", "1.1.1.1"]);
+
+import express, { type ErrorRequestHandler } from "express";
 import mongoose from "mongoose";
 import cors from "cors";
+import helmet from "helmet";
+import { rateLimit } from "express-rate-limit";
 import dotenv from "dotenv";
 import incomeRouter from "./routes/income";
 import paymentsRouter from "./routes/payments";
@@ -10,18 +15,43 @@ import caloriesRouter from "./routes/calories";
 import fridgeRouter from "./routes/fridge";
 import dashboardRouter from "./routes/dashboard";
 import workoutsRouter from "./routes/workouts";
-import careerRouter from "./routes/career";
-import medicalEnglishRouter from "./routes/medicalEnglish";
+import goalsRouter from "./routes/goals";
+import projectsRouter from "./routes/projects";
 
 dotenv.config();
 
 const app = express();
+
+// Render (and any similar host) terminates TLS and forwards the real client IP in
+// X-Forwarded-For. Trusting exactly one hop lets the rate limiter key on the caller
+// instead of the proxy — without it every request looks like one client.
+app.set("trust proxy", 1);
+
+// Security headers. This API only ever returns JSON, so the browser-facing policies
+// helmet sets by default are all safe here; CSP is left on its default since no HTML
+// is served from this origin.
+app.use(helmet());
 app.use(cors());
 app.use(express.json());
 
+// Liveness probe stays above the limiter so uptime pings can't exhaust the budget.
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true });
 });
+
+// Baseline abuse throttle for a single-user app that is publicly reachable. The
+// ceiling is far above normal use (a full dashboard load is a few dozen requests)
+// but low enough that scripted scraping or brute-forcing gets cut off.
+app.use(
+  "/api",
+  rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 1000,
+    standardHeaders: "draft-8",
+    legacyHeaders: false,
+    message: { error: "too many requests — slow down" },
+  }),
+);
 
 app.use("/api/income", incomeRouter);
 
@@ -39,12 +69,52 @@ app.use("/api/dashboard", dashboardRouter);
 
 app.use("/api/workouts", workoutsRouter);
 
-app.use("/api/career", careerRouter);
+app.use("/api/goals", goalsRouter);
 
-app.use("/api/medical-english", medicalEnglishRouter);
+app.use("/api/projects", projectsRouter);
+
+// Unknown /api paths get the same JSON shape as everything else.
+app.use("/api", (_req, res) => {
+  res.status(404).json({ error: "not found" });
+});
+
+// Centralized error handler. Express 5 forwards rejected async route handlers here,
+// so every unhandled failure returns { error: string } instead of an HTML stack page.
+const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
+  const e = (err ?? {}) as {
+    status?: number;
+    statusCode?: number;
+    name?: string;
+    type?: string;
+    message?: string;
+  };
+
+  // Malformed JSON body from express.json()
+  if (e.type === "entity.parse.failed") {
+    return res.status(400).json({ error: "invalid JSON body" });
+  }
+
+  // Anything that slipped past route validation and reached Mongoose
+  if (e.name === "CastError" || e.name === "ValidationError") {
+    return res.status(400).json({ error: e.message || "invalid request" });
+  }
+
+  const status = e.status ?? e.statusCode ?? 500;
+  if (status >= 500) {
+    console.error("Unhandled route error:", err);
+    return res.status(status).json({ error: "internal server error" });
+  }
+  res.status(status).json({ error: e.message || "request failed" });
+};
+
+app.use(errorHandler);
 
 const PORT = process.env.PORT || 5000;
-const MONGO_URI = process.env.MONGO_URI as string;
+const MONGO_URI = process.env.MONGO_URI;
+
+if (!MONGO_URI) {
+  throw new Error("MONGO_URI is not set. Add MONGO_URI to server/.env before starting the server.");
+}
 
 mongoose
   .connect(MONGO_URI)

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { api } from "../lib/api";
+import { todayISO } from "../lib/today";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
@@ -29,7 +30,6 @@ function getApiError(e: unknown): string {
 }
 
 const WEEKDAY_SHORT = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-const todayISO = () => new Date().toISOString().slice(0, 10);
 
 function isWeekend(iso: string) {
   const dow = new Date(iso).getUTCDay();
@@ -120,7 +120,7 @@ export default function Tasks() {
   const completedTasks = tasks.filter((t) => t.done).length;
 
   return (
-    <div className="w-full max-w-[1100px] mx-auto space-y-5">
+    <div className="w-full max-w-[1100px] space-y-5">
       {/* ===== Top bar ===== */}
       <motion.div {...fadeUp} className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-3">

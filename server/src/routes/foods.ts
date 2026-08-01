@@ -1,7 +1,11 @@
 import { Router } from "express";
 import { Food, FOOD_CATEGORIES, ENTRY_MODES } from "../models/Food";
+import { buildSearchFilter, isNonNegativeNumber, isPositiveNumber, objectIdParam, trimmedString } from "../lib/validation";
+import { pageOf, parsePageParams } from "../lib/pagination";
 
 const router = Router();
+
+router.param("id", objectIdParam);
 
 type FoodCategory = (typeof FOOD_CATEGORIES)[number];
 type EntryMode = (typeof ENTRY_MODES)[number];
@@ -35,6 +39,27 @@ function isValidEntryMode(m: string): m is EntryMode {
   return (ENTRY_MODES as readonly string[]).includes(m);
 }
 
+// Every macro must be a real, non-negative number before it reaches Mongoose —
+// NaN/Infinity would otherwise be stored and poison every downstream total.
+function validateNutrition(n: NutritionInput): string | null {
+  for (const field of ["calories", "protein", "carbs", "fat"] as const) {
+    if (!isNonNegativeNumber(n[field])) {
+      return `nutrition.${field} must be a non-negative number`;
+    }
+  }
+  if (n.mode === "perGram") {
+    if (n.unit !== "per100g" && n.unit !== "per1g") {
+      return "nutrition.unit must be per100g or per1g";
+    }
+    if (n.defaultServingGrams !== undefined && n.defaultServingGrams !== null && !isPositiveNumber(n.defaultServingGrams)) {
+      return "nutrition.defaultServingGrams must be a positive number";
+    }
+  } else if (n.unitLabel !== undefined && typeof n.unitLabel !== "string") {
+    return "nutrition.unitLabel must be a string";
+  }
+  return null;
+}
+
 function perGramFromNutrition(n: PerGramNutrition) {
   const divisor = n.unit === "per100g" ? 100 : 1;
   return {
@@ -48,10 +73,15 @@ function perGramFromNutrition(n: PerGramNutrition) {
 router.get("/", async (req, res) => {
   const { category, search } = req.query;
   const filter: Record<string, unknown> = { archived: false };
-  if (category && category !== "all") filter.category = category;
-  if (search) filter.name = { $regex: search as string, $options: "i" };
-  const foods = await Food.find(filter).sort({ category: 1, name: 1 });
-  res.json(foods);
+  if (typeof category === "string" && category && category !== "all") filter.category = category;
+  const nameFilter = buildSearchFilter(search);
+  if (nameFilter) filter.name = nameFilter;
+  const page = parsePageParams(req.query);
+  const [foods, total] = await Promise.all([
+    Food.find(filter).sort({ category: 1, name: 1 }).skip(page.offset).limit(page.limit),
+    Food.countDocuments(filter),
+  ]);
+  res.json(pageOf(foods, total, page));
 });
 
 router.post("/", async (req, res) => {
@@ -62,7 +92,8 @@ router.post("/", async (req, res) => {
     trackInFridge?: boolean;
   };
 
-  if (!name?.trim() || !category || !nutrition?.mode) {
+  const cleanName = trimmedString(name);
+  if (!cleanName || !category || !nutrition?.mode) {
     return res.status(400).json({ error: "missing fields" });
   }
   if (!isValidCategory(category)) {
@@ -70,6 +101,10 @@ router.post("/", async (req, res) => {
   }
   if (!isValidEntryMode(nutrition.mode)) {
     return res.status(400).json({ error: "invalid entry mode" });
+  }
+  const nutritionError = validateNutrition(nutrition);
+  if (nutritionError) {
+    return res.status(400).json({ error: nutritionError });
   }
 
   const tif = !!trackInFridge;
@@ -98,7 +133,7 @@ router.post("/", async (req, res) => {
   if (nutrition.mode === "perGram") {
     const pg = perGramFromNutrition(nutrition);
     doc = {
-      name: name.trim(),
+      name: cleanName,
       category,
       entryMode: "perGram",
       trackInFridge: false,
@@ -112,7 +147,7 @@ router.post("/", async (req, res) => {
     };
   } else {
     doc = {
-      name: name.trim(),
+      name: cleanName,
       category,
       entryMode: "perUnit",
       trackInFridge: tif,
@@ -134,9 +169,6 @@ router.post("/", async (req, res) => {
 });
 
 router.patch("/:id", async (req, res) => {
-  const food = await Food.findById(req.params.id);
-  if (!food || food.archived) return res.status(404).json({ error: "not found" });
-
   const { name, category, nutrition, trackInFridge } = req.body as {
     name?: string;
     category?: string;
@@ -144,20 +176,34 @@ router.patch("/:id", async (req, res) => {
     trackInFridge?: boolean;
   };
 
-  if (typeof name === "string") food.name = name.trim();
-
-  if (category) {
-    if (!isValidCategory(category)) {
-      return res.status(400).json({ error: "invalid category" });
-    }
-    food.set("category", category);
+  let cleanName: string | null = null;
+  if (name !== undefined) {
+    cleanName = trimmedString(name);
+    if (!cleanName) return res.status(400).json({ error: "name required" });
   }
-
+  if (category !== undefined && !isValidCategory(category)) {
+    return res.status(400).json({ error: "invalid category" });
+  }
   if (nutrition) {
     if (!isValidEntryMode(nutrition.mode)) {
       return res.status(400).json({ error: "invalid entry mode" });
     }
+    const nutritionError = validateNutrition(nutrition);
+    if (nutritionError) {
+      return res.status(400).json({ error: nutritionError });
+    }
+  }
 
+  const food = await Food.findById(req.params.id);
+  if (!food || food.archived) return res.status(404).json({ error: "not found" });
+
+  if (cleanName) food.name = cleanName;
+
+  if (category) {
+    food.set("category", category);
+  }
+
+  if (nutrition) {
     if (nutrition.mode === "perGram") {
       const pg = perGramFromNutrition(nutrition);
       food.set("entryMode", "perGram");

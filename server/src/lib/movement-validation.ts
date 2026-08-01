@@ -1,4 +1,6 @@
-import { MovementType } from "../models/MoneyMovement";
+// Type-only import: keeps this module free of a runtime cycle with MoneyMovement,
+// which imports validateMovementShape for its schema-level checks.
+import type { MovementType } from "../models/MoneyMovement";
 
 type ValidationResult = { ok: true } | { ok: false; error: string };
 
@@ -20,6 +22,12 @@ function checkAmountConsistency(body: MovementBody, fromCurrency: string | null,
   if (fromCurrency && toCurrency && fromCurrency !== toCurrency) {
     if (!body.conversionRate || body.conversionRate <= 0) {
       return { ok: false, error: "conversionRate required when currencies differ" };
+    }
+    // A rate of 1 across two different currencies is arithmetically self-consistent
+    // (100 * 1 = 100) but means the conversion was never actually applied. Reject it
+    // so a forgotten rate can't quietly rewrite the value of the money.
+    if (Math.abs(body.conversionRate - 1) < FLOAT_TOLERANCE) {
+      return { ok: false, error: `conversionRate of 1 is invalid between ${fromCurrency} and ${toCurrency} — supply the real rate` };
     }
     if (Math.abs(body.amountTo - body.amountFrom * body.conversionRate) >= FLOAT_TOLERANCE) {
       return { ok: false, error: "amountTo must equal amountFrom * conversionRate" };
@@ -76,13 +84,9 @@ export function validateMovementShape(type: MovementType, body: MovementBody): V
       if (body.fromId === body.toId) return { ok: false, error: "transfer_wallet: fromId and toId must differ" };
       if (body.amountFrom <= 0) return { ok: false, error: "transfer_wallet: amountFrom must be > 0" };
       if (body.amountTo <= 0) return { ok: false, error: "transfer_wallet: amountTo must be > 0" };
-      if (Math.abs(body.conversionRate - 1) >= FLOAT_TOLERANCE) {
-        return { ok: false, error: "transfer_wallet: conversionRate must be 1 (both wallets are EGP)" };
-      }
-      if (Math.abs(body.amountTo - body.amountFrom) >= FLOAT_TOLERANCE) {
-        return { ok: false, error: "transfer_wallet: amountTo must equal amountFrom" };
-      }
-      return { ok: true };
+      // Wallets carry a real currency now, so a wallet-to-wallet transfer is
+      // rate-checked like any other pair instead of being assumed EGP-to-EGP.
+      return checkAmountConsistency(body, body.fromCurrency ?? null, body.toCurrency ?? null);
     }
 
     case "adjustment": {

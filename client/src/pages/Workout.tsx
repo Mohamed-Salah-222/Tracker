@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { motion } from "motion/react";
 import { api } from "../lib/api";
+import { todayISO } from "../lib/today";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Card, CardContent } from "../components/ui/card";
@@ -108,8 +109,6 @@ function getApiError(e: unknown): string {
   }
   return "Something went wrong";
 }
-
-const todayISO = () => new Date().toISOString().slice(0, 10);
 
 function shiftDay(iso: string, by: number): string {
   const d = new Date(iso + "T00:00:00Z");
@@ -262,7 +261,7 @@ export default function Workout() {
   const activeDef = session && session.type !== "rest" ? PROGRAM[session.type] : null;
 
   return (
-    <div className="w-full max-w-[1100px] mx-auto space-y-5">
+    <div className="w-full max-w-[1100px] space-y-5">
       {/* ===== Top bar ===== */}
       <motion.div {...fadeUp} className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-3">

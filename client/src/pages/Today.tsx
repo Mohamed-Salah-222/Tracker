@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { api } from "../lib/api";
+import { todayISO } from "../lib/today";
 import { Card, CardContent } from "../components/ui/card";
 import { Checkbox } from "../components/ui/checkbox";
 import { Button } from "../components/ui/button";
@@ -20,8 +21,6 @@ type Task = {
 };
 
 // ===== Helpers =====
-const todayISO = () => new Date().toISOString().slice(0, 10);
-
 function getApiError(e: unknown): string {
   if (e instanceof AxiosError) {
     return (e.response?.data as { error?: string })?.error ?? e.message;
@@ -182,7 +181,7 @@ export default function Today() {
   };
 
   return (
-    <div className="w-full max-w-[720px] mx-auto space-y-5">
+    <div className="w-full max-w-[720px] space-y-5">
       {/* ===== Hero day card ===== */}
       <motion.div {...fadeUp}>
         <Card>
@@ -203,7 +202,7 @@ export default function Today() {
                         <span className="text-muted-foreground">/{total}</span>
                       </>
                     ) : (
-                      "—"
+                      "0"
                     )}
                   </motion.div>
                 </AnimatePresence>

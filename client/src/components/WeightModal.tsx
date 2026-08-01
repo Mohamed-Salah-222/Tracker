@@ -5,6 +5,8 @@ import { LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContai
 import { Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "../lib/api";
+import { todayISO } from "../lib/today";
+import { PAGE_LIMIT, pageRangeLabel, type Page } from "../lib/pagination";
 import { Button } from "./ui/button";
 import { Card, CardContent } from "./ui/card";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "./ui/dialog";
@@ -34,7 +36,6 @@ type WeightGoal = {
   targetKg: number;
 };
 
-const todayISO = () => new Date().toISOString().slice(0, 10);
 const round1 = (n: number) => Math.round(n * 10) / 10;
 const fmtKg = (n: number) => `${round1(n).toFixed(1)} kg`;
 const dayShort = (iso: string) => new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
@@ -210,22 +211,28 @@ function WeighInDialog({ open, onOpenChange, editing, onSaved }: WeighInDialogPr
 
 export function WeightModal({ open, onOpenChange }: { open: boolean; onOpenChange: (next: boolean) => void }) {
   const [entries, setEntries] = useState<WeightEntry[]>([]);
+  const [entryTotal, setEntryTotal] = useState(0);
   const [goal, setGoal] = useState<WeightGoal | null>(null);
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [editing, setEditing] = useState<WeightEntry | null>(null);
   const [targetDraft, setTargetDraft] = useState("100");
   const [savingTarget, setSavingTarget] = useState(false);
 
+  // The server returns the most recent PAGE_LIMIT weigh-ins first; "Load more"
+  // walks further back in time. Everything below re-sorts, so arrival order here
+  // does not matter.
   const load = useCallback(async () => {
     if (!open) return;
     setLoading(true);
     try {
       const [weightRows, weightGoal] = await Promise.all([
-        api.get<WeightEntry[]>("/calories/weight"),
+        api.get<Page<WeightEntry>>("/calories/weight", { params: { limit: PAGE_LIMIT, offset: 0 } }),
         api.get<WeightGoal>("/calories/weight-goal"),
       ]);
-      setEntries(weightRows.data);
+      setEntries(weightRows.data.items);
+      setEntryTotal(weightRows.data.total);
       setGoal(weightGoal.data);
       setTargetDraft(String(weightGoal.data.targetKg));
     } catch (e) {
@@ -234,6 +241,21 @@ export function WeightModal({ open, onOpenChange }: { open: boolean; onOpenChang
       setLoading(false);
     }
   }, [open]);
+
+  const loadMore = async () => {
+    setLoadingMore(true);
+    try {
+      const r = await api.get<Page<WeightEntry>>("/calories/weight", {
+        params: { limit: PAGE_LIMIT, offset: entries.length },
+      });
+      setEntries((prev) => [...prev, ...r.data.items]);
+      setEntryTotal(r.data.total);
+    } catch (e) {
+      toast.error(getApiError(e));
+    } finally {
+      setLoadingMore(false);
+    }
+  };
 
   useEffect(() => {
     void load();
@@ -388,7 +410,12 @@ export function WeightModal({ open, onOpenChange }: { open: boolean; onOpenChang
 
                   <Card>
                     <CardContent className="p-5">
-                      <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-3">Recent weigh-ins</div>
+                      <div className="flex items-baseline justify-between mb-3">
+                        <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Recent weigh-ins</div>
+                        <div className="text-[10px] text-muted-foreground font-mono tabular-nums">
+                          {pageRangeLabel(entries.length, entryTotal)}
+                        </div>
+                      </div>
                       <div className="rounded-[10px] border border-border bg-card px-3 divide-y divide-border">
                         {sortedDesc.map((entry, i) => (
                           <motion.div key={entry._id} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.2, delay: i * 0.04 }}>
@@ -402,6 +429,13 @@ export function WeightModal({ open, onOpenChange }: { open: boolean; onOpenChang
                           </motion.div>
                         ))}
                       </div>
+                      {entries.length < entryTotal && (
+                        <div className="flex justify-center pt-3">
+                          <Button variant="outline" size="sm" onClick={() => void loadMore()} disabled={loadingMore}>
+                            {loadingMore ? "Loading…" : `Load ${Math.min(PAGE_LIMIT, entryTotal - entries.length)} earlier`}
+                          </Button>
+                        </div>
+                      )}
                     </CardContent>
                   </Card>
                 </motion.div>

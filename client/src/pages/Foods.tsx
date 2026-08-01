@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { api } from "../lib/api";
+import { PAGE_LIMIT, pageRangeLabel, type Page } from "../lib/pagination";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
@@ -76,21 +77,54 @@ const stagger = (i: number) => ({
 // =====================================================================
 export default function Foods() {
   const [foods, setFoods] = useState<Food[]>([]);
+  const [foodTotal, setFoodTotal] = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [filterCat, setFilterCat] = useState<string>("all");
   const [addOpen, setAddOpen] = useState(false);
 
+  // The input stays instant, but only the settled value reaches the query —
+  // otherwise every keystroke fires its own /foods request.
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(search), 300);
+    return () => clearTimeout(timer);
+  }, [search]);
+
+  const foodFilters = useCallback(() => {
+    const params: Record<string, string> = {};
+    if (debouncedSearch) params.search = debouncedSearch;
+    if (filterCat !== "all") params.category = filterCat;
+    return params;
+  }, [debouncedSearch, filterCat]);
+
+  // First page; a search or category change re-runs this from offset 0.
   const load = useCallback(async () => {
     try {
-      const params: Record<string, string> = {};
-      if (search) params.search = search;
-      if (filterCat !== "all") params.category = filterCat;
-      const r = await api.get<Food[]>("/foods", { params });
-      setFoods(r.data);
+      const r = await api.get<Page<Food>>("/foods", {
+        params: { ...foodFilters(), limit: PAGE_LIMIT, offset: 0 },
+      });
+      setFoods(r.data.items);
+      setFoodTotal(r.data.total);
     } catch (e) {
       toast.error(getApiError(e));
     }
-  }, [search, filterCat]);
+  }, [foodFilters]);
+
+  const loadMore = async () => {
+    setLoadingMore(true);
+    try {
+      const r = await api.get<Page<Food>>("/foods", {
+        params: { ...foodFilters(), limit: PAGE_LIMIT, offset: foods.length },
+      });
+      setFoods((prev) => [...prev, ...r.data.items]);
+      setFoodTotal(r.data.total);
+    } catch (e) {
+      toast.error(getApiError(e));
+    } finally {
+      setLoadingMore(false);
+    }
+  };
 
   useEffect(() => {
     void load();
@@ -106,13 +140,13 @@ export default function Foods() {
   const hasFilters = !!search || filterCat !== "all";
 
   return (
-    <div className="w-full max-w-[1100px] mx-auto space-y-5">
+    <div className="w-full max-w-[1100px] space-y-5">
       {/* ===== Top bar ===== */}
       <motion.div {...fadeUp} className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-3">
           <h1 className="text-[15px] font-semibold tracking-tight">Food library</h1>
           <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium font-mono tabular-nums">
-            {foods.length} {foods.length === 1 ? "item" : "items"}
+            {pageRangeLabel(foods.length, foodTotal)} {foodTotal === 1 ? "item" : "items"}
           </span>
         </div>
         <Button variant="default" size="sm" onClick={() => setAddOpen(true)}>
@@ -191,6 +225,14 @@ export default function Foods() {
           </div>
         </motion.div>
       ))}
+
+      {foods.length < foodTotal && (
+        <div className="flex justify-center">
+          <Button variant="outline" size="sm" onClick={() => void loadMore()} disabled={loadingMore}>
+            {loadingMore ? "Loading…" : `Load ${Math.min(PAGE_LIMIT, foodTotal - foods.length)} more`}
+          </Button>
+        </div>
+      )}
 
       <FoodFormDialog open={addOpen} onOpenChange={setAddOpen} onSaved={load} />
     </div>

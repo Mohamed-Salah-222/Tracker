@@ -6,6 +6,7 @@ import { Card, CardContent } from "../components/ui/card";
 import { ChevronLeft, ChevronRight, TrendingDown, TrendingUp } from "lucide-react";
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid } from "recharts";
 import { api } from "../lib/api";
+import { todayISO } from "../lib/today";
 import { AxiosError } from "axios";
 import { toast } from "sonner";
 
@@ -37,8 +38,6 @@ type Period = "week" | "month";
 
 // ===== Helpers =====
 const fmtEGP = (n: number) => `${Math.round(n).toLocaleString("en-US")} L.E`;
-const todayISO = () => new Date().toISOString().slice(0, 10);
-
 function getApiError(e: unknown): string {
   if (e instanceof AxiosError) {
     return (e.response?.data as { error?: string })?.error ?? e.message;

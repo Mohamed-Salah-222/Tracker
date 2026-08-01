@@ -7,11 +7,8 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Input } from "../components/ui/input";
 import { Checkbox } from "../components/ui/checkbox";
 import {
-  AlarmClock,
   BarChart3,
   Beef,
-  BookOpen,
-  Brain,
   BriefcaseBusiness,
   CalendarCheck,
   Check,
@@ -114,9 +111,9 @@ type AmountEdit = {
   target: number;
 };
 
-const TRACKER_VISIBILITY_KEY = "lifetracker.dashboard.visibleRows.v4";
-const DEFAULT_VISIBLE_IDS = ["wake", "sleep", "gym", "reading", "english", "planning", "tasks", "projects", "projectGym", "projectMedical", "focus", "vitamins", "steps", "work", "calories", "protein", "water"];
-const MIN_MONTH_KEY = "2026-07";
+const TRACKER_VISIBILITY_KEY = "lifetracker.dashboard.visibleRows.v5";
+const DEFAULT_VISIBLE_IDS = ["sleep", "tasks", "projectMedical", "vitamins", "calories", "protein", "water", "projects", "projectGym", "gym", "english", "steps", "work"];
+const MIN_MONTH_KEY = "2026-08";
 
 const fadeUp = {
   initial: { opacity: 0, y: 8 },
@@ -125,15 +122,12 @@ const fadeUp = {
 };
 
 const iconMap = {
-  "alarm-clock": AlarmClock,
   moon: Moon,
   dumbbell: Dumbbell,
-  "book-open": BookOpen,
   languages: Languages,
   "calendar-check": CalendarCheck,
   "list-checks": ListChecks,
   "folder-kanban": FolderKanban,
-  brain: Brain,
   pill: Pill,
   footprints: Footprints,
   "briefcase-business": BriefcaseBusiness,
@@ -146,7 +140,9 @@ const iconMap = {
 const ACCENT_TONE = { base: "#18181b", dark: "#000000", soft: "#d4d4d4", faint: "#f5f5f5", ring: "#a3a3a3" };
 const ROW_CHROME = { base: "#262626", dark: "#171717" };
 
-function trackerTone(_id: string) {
+// Every row currently shares one accent; kept as a function so per-row tones can
+// come back without touching the call sites.
+function trackerTone() {
   return ACCENT_TONE;
 }
 
@@ -179,10 +175,6 @@ function displayNumber(value: number) {
 
 function getCell(row: TrackerRow, date: string) {
   return row.cells.find((cell) => cell.date === date);
-}
-
-function isJulyWarmupDay(day: Day) {
-  return day.iso >= "2026-07-01" && day.iso <= "2026-07-12";
 }
 
 function isAmountCell(cell: DailyCell | AmountCell): cell is AmountCell {
@@ -234,7 +226,9 @@ export default function Dashboard() {
     window.localStorage.setItem(TRACKER_VISIBILITY_KEY, JSON.stringify(visibleIds));
   }, [visibleIds]);
 
-  const rows = data?.rows ?? [];
+  // `data?.rows ?? []` built a fresh array on every render while data was null,
+  // so it never matched as a dependency and every downstream useMemo recomputed.
+  const rows = useMemo(() => data?.rows ?? [], [data]);
   const visibleRows = useMemo(() => {
     const selected = rows.filter((row) => visibleIds.includes(row.id));
     return selected.length ? selected : rows;
@@ -258,14 +252,6 @@ export default function Dashboard() {
     if (!data) return [];
     const checkRows = visibleRows;
     return data.month.days.map((day) => {
-      if (isJulyWarmupDay(day)) {
-        return {
-          date: day.iso,
-          day: day.day,
-          label: day.label,
-          percent: 100,
-        };
-      }
       const done = checkRows.reduce((sum, row) => {
         const cell = getCell(row, day.iso);
         return sum + (cell?.checked ? 1 : 0);
@@ -363,7 +349,7 @@ export default function Dashboard() {
   const isAtMinMonth = monthKeyToNumber(data.month.key) <= monthKeyToNumber(MIN_MONTH_KEY);
 
   return (
-    <div className="w-full max-w-[1680px] md:max-h-[calc(100svh-3rem)] mx-auto flex flex-col gap-3 overflow-visible md:overflow-hidden rounded-[18px] md:rounded-[24px] border border-neutral-200 bg-white p-2.5 pb-24 md:p-4 text-neutral-900 shadow-[0_18px_50px_rgba(15,23,42,0.06)]">
+    <div className="w-full max-w-[1680px] md:max-h-[calc(100svh-3rem)] flex flex-col gap-3 overflow-visible md:overflow-hidden rounded-[18px] md:rounded-[24px] border border-neutral-200 bg-white p-2.5 pb-24 md:p-4 text-neutral-900 shadow-[0_18px_50px_rgba(15,23,42,0.06)]">
       <motion.div {...fadeUp} className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <div className="text-[10px] uppercase tracking-[0.22em] font-semibold text-neutral-500">Habit Tracker</div>
@@ -590,7 +576,7 @@ function TrackerRowView({
 }) {
   const Icon = iconMap[row.icon as keyof typeof iconMap] ?? Target;
   const weekStartDates = new Set(weekGroups.map((group) => group.days[0]?.iso).filter(Boolean));
-  const tone = trackerTone(row.id);
+  const tone = trackerTone();
   return (
     <div className="grid items-center border-b border-neutral-200/70 last:border-b-0 transition-colors hover:brightness-[0.99]" style={{ gridTemplateColumns: monthGridTemplate(days.length) }} title={row.description}>
       <div className="h-full min-h-9 px-3 py-1.5 border-r border-white/10 text-white flex items-center gap-2 min-w-0" style={{ backgroundColor: ROW_CHROME.base }}>
@@ -615,6 +601,38 @@ function TrackerRowView({
   );
 }
 
+// A single click toggles, a double click marks "excused". Distinguishing them means
+// holding the single-click action back until the double-click window closes, so the
+// pending timer lives in a ref and is cleared on unmount — otherwise a cell clicked
+// just before the month changes fires its toggle against an unmounted tree.
+function useSingleOrDoubleClick(delayMs = 220) {
+  const clickTimer = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (clickTimer.current !== null) window.clearTimeout(clickTimer.current);
+    };
+  }, []);
+
+  return useCallback(
+    (singleClick: () => void, doubleClick: () => void) => (event: React.MouseEvent<HTMLButtonElement>) => {
+      if (event.detail === 1) {
+        clickTimer.current = window.setTimeout(() => {
+          clickTimer.current = null;
+          singleClick();
+        }, delayMs);
+        return;
+      }
+      if (event.detail === 2) {
+        if (clickTimer.current !== null) window.clearTimeout(clickTimer.current);
+        clickTimer.current = null;
+        doubleClick();
+      }
+    },
+    [delayMs],
+  );
+}
+
 function TrackerCell({
   row,
   cell,
@@ -626,23 +644,8 @@ function TrackerCell({
   onSetState: (row: TrackerRow, cell: DailyCell | AmountCell, state: TrackerCellState) => void;
   onAmountClick: (row: TrackerRow, cell: DailyCell | AmountCell) => void;
 }) {
-  const tone = trackerTone(row.id);
-  const clickTimer = useRef<number | null>(null);
-
-  const handleCellClick = (singleClick: () => void, doubleClick: () => void) => (event: React.MouseEvent<HTMLButtonElement>) => {
-    if (event.detail === 1) {
-      clickTimer.current = window.setTimeout(() => {
-        singleClick();
-        clickTimer.current = null;
-      }, 220);
-      return;
-    }
-    if (event.detail === 2) {
-      if (clickTimer.current) window.clearTimeout(clickTimer.current);
-      clickTimer.current = null;
-      doubleClick();
-    }
-  };
+  const tone = trackerTone();
+  const handleCellClick = useSingleOrDoubleClick();
 
   const cellStyle = (targetCell: DailyCell | AmountCell) => {
     if (targetCell.state === "excused") return { backgroundColor: "#a3a3a3", borderColor: "#737373", color: "#ffffff" };
@@ -698,7 +701,7 @@ function AnalysisBlock({ rows }: { rows: TrackerRow[] }) {
           ))}
         </div>
         {rows.map((row) => {
-          const tone = trackerTone(row.id);
+          const tone = trackerTone();
           return (
             <div key={row.id} className="grid border-b border-neutral-200/70 last:border-b-0" style={{ gridTemplateColumns: "58px 58px 140px" }}>
               <div className="min-h-9 px-2 py-1.5 border-r border-neutral-200/70 flex items-center justify-end text-[11px] tabular-nums font-semibold text-neutral-900" style={{ backgroundColor: tone.faint }}>

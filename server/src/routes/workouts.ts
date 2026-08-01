@@ -1,9 +1,11 @@
 import { Router } from "express";
 import { WorkoutSession, WORKOUT_TYPES } from "../models/WorkoutSession";
 import { SetLog } from "../models/SetLog";
-import { toDayUTC } from "../lib/dates";
+import { isNonNegativeNumber, isObjectId, isPositiveInteger, objectIdParam, parseDayUTC, trimmedString } from "../lib/validation";
 
 const router = Router();
+
+router.param("id", objectIdParam);
 
 type WorkoutType = (typeof WORKOUT_TYPES)[number];
 function isValidType(t: string): t is WorkoutType {
@@ -43,9 +45,8 @@ router.get("/today", async (_req, res) => {
 // GET /workouts/session?date=YYYY-MM-DD
 // =====================================================================
 router.get("/session", async (req, res) => {
-  const dateStr = req.query.date as string;
-  if (!dateStr) return res.status(400).json({ error: "date required" });
-  const day = toDayUTC(dateStr);
+  const day = parseDayUTC(req.query.date);
+  if (!day) return res.status(400).json({ error: "valid date required" });
   const session = await WorkoutSession.findOne({ date: day });
   res.json(session);
 });
@@ -64,10 +65,16 @@ router.get("/session/:id/sets", async (req, res) => {
 // =====================================================================
 router.post("/session", async (req, res) => {
   const { date, type, warmupMinutes, finisherMinutes } = req.body;
-  if (!date || !type) return res.status(400).json({ error: "date and type required" });
-  if (!isValidType(type)) return res.status(400).json({ error: "invalid type" });
+  const day = parseDayUTC(date);
+  if (!day) return res.status(400).json({ error: "valid date required" });
+  if (typeof type !== "string" || !isValidType(type)) return res.status(400).json({ error: "invalid type" });
+  if (warmupMinutes !== undefined && !isNonNegativeNumber(warmupMinutes)) {
+    return res.status(400).json({ error: "warmupMinutes must be a non-negative number" });
+  }
+  if (finisherMinutes !== undefined && !isNonNegativeNumber(finisherMinutes)) {
+    return res.status(400).json({ error: "finisherMinutes must be a non-negative number" });
+  }
 
-  const day = toDayUTC(date);
   const existing = await WorkoutSession.findOne({ date: day });
   if (existing) return res.status(409).json({ error: "session already exists for this date", session: existing });
 
@@ -85,13 +92,29 @@ router.post("/session", async (req, res) => {
 // Update warmup/finisher/walk/completedAt/note/type
 // =====================================================================
 router.patch("/session/:id", async (req, res) => {
+  const { type, warmupMinutes, warmupDone, finisherMinutes, finisherDone, walkMinutes, walkDistanceKm, completedAt, note } = req.body;
+
+  if (type !== undefined && (typeof type !== "string" || !isValidType(type))) {
+    return res.status(400).json({ error: "invalid type" });
+  }
+  const numericFields = { warmupMinutes, finisherMinutes, walkMinutes, walkDistanceKm };
+  for (const [field, value] of Object.entries(numericFields)) {
+    if (value !== undefined && !isNonNegativeNumber(value)) {
+      return res.status(400).json({ error: `${field} must be a non-negative number` });
+    }
+  }
+  let completedAtDate: Date | null = null;
+  if (completedAt !== undefined && completedAt !== null) {
+    completedAtDate = new Date(completedAt);
+    if (Number.isNaN(completedAtDate.getTime())) {
+      return res.status(400).json({ error: "valid completedAt required" });
+    }
+  }
+
   const session = await WorkoutSession.findById(req.params.id);
   if (!session) return res.status(404).json({ error: "not found" });
 
-  const { type, warmupMinutes, warmupDone, finisherMinutes, finisherDone, walkMinutes, walkDistanceKm, completedAt, note } = req.body;
-
   if (type) {
-    if (!isValidType(type)) return res.status(400).json({ error: "invalid type" });
     session.set("type", type);
     // Clear sets if changing away from a workout type
     if (type === "rest") {
@@ -99,16 +122,16 @@ router.patch("/session/:id", async (req, res) => {
     }
   }
 
-  if (typeof warmupMinutes === "number") session.warmupMinutes = warmupMinutes;
+  if (warmupMinutes !== undefined) session.warmupMinutes = warmupMinutes;
   if (typeof warmupDone === "boolean") session.warmupDone = warmupDone;
-  if (typeof finisherMinutes === "number") session.finisherMinutes = finisherMinutes;
+  if (finisherMinutes !== undefined) session.finisherMinutes = finisherMinutes;
   if (typeof finisherDone === "boolean") session.finisherDone = finisherDone;
-  if (typeof walkMinutes === "number") session.walkMinutes = walkMinutes;
-  if (typeof walkDistanceKm === "number") session.walkDistanceKm = walkDistanceKm;
+  if (walkMinutes !== undefined) session.walkMinutes = walkMinutes;
+  if (walkDistanceKm !== undefined) session.walkDistanceKm = walkDistanceKm;
   if (typeof note === "string") session.note = note;
 
   if (completedAt === null) session.completedAt = null;
-  else if (completedAt) session.completedAt = new Date(completedAt);
+  else if (completedAtDate) session.completedAt = completedAtDate;
 
   await session.save();
   res.json(session);
@@ -132,16 +155,30 @@ router.delete("/session/:id", async (req, res) => {
 // =====================================================================
 router.put("/sets", async (req, res) => {
   const { sessionId, exerciseId, setNumber, weight, done } = req.body;
-  if (!sessionId || !exerciseId || typeof setNumber !== "number") {
-    return res.status(400).json({ error: "sessionId, exerciseId, setNumber required" });
+  if (!isObjectId(sessionId)) return res.status(400).json({ error: "invalid sessionId" });
+
+  const cleanExerciseId = trimmedString(exerciseId);
+  if (!cleanExerciseId) return res.status(400).json({ error: "exerciseId required" });
+  if (!isPositiveInteger(setNumber)) {
+    return res.status(400).json({ error: "setNumber must be a positive integer" });
   }
+  if (weight !== undefined && weight !== null && !isNonNegativeNumber(weight)) {
+    return res.status(400).json({ error: "weight must be a non-negative number" });
+  }
+  if (done !== undefined && typeof done !== "boolean") {
+    return res.status(400).json({ error: "done must be a boolean" });
+  }
+
+  // Upserting without this check would create orphaned sets pointing at a session that never existed.
+  const session = await WorkoutSession.findById(sessionId);
+  if (!session) return res.status(404).json({ error: "session not found" });
 
   const update: Record<string, unknown> = {};
   if (weight !== undefined) update.weight = weight;
   if (typeof done === "boolean") update.done = done;
   // reps is intentionally ignored - reps targets are display-only in the new program
 
-  const set = await SetLog.findOneAndUpdate({ sessionId, exerciseId, setNumber }, { $set: update, $setOnInsert: { sessionId, exerciseId, setNumber } }, { upsert: true, new: true });
+  const set = await SetLog.findOneAndUpdate({ sessionId, exerciseId: cleanExerciseId, setNumber }, { $set: update, $setOnInsert: { sessionId, exerciseId: cleanExerciseId, setNumber } }, { upsert: true, new: true });
   res.json(set);
 });
 
@@ -158,7 +195,7 @@ router.delete("/sets/:id", async (req, res) => {
 // Returns the LAST completed set for this exercise (used for "last session" hint)
 // =====================================================================
 router.get("/exercise-history", async (req, res) => {
-  const exerciseId = req.query.exerciseId as string;
+  const exerciseId = trimmedString(req.query.exerciseId);
   if (!exerciseId) return res.status(400).json({ error: "exerciseId required" });
 
   // Find the most recent SetLog with weight or reps logged
@@ -185,7 +222,7 @@ router.get("/exercise-history", async (req, res) => {
 // Returns last N sessions
 // =====================================================================
 router.get("/recent", async (req, res) => {
-  const limit = Math.min(parseInt(req.query.limit as string) || 7, 30);
+  const limit = Math.min(Math.max(parseInt(req.query.limit as string, 10) || 7, 1), 30);
   const sessions = await WorkoutSession.find().sort({ date: -1 }).limit(limit);
   res.json(sessions);
 });
@@ -218,24 +255,28 @@ router.get("/last-weights", async (_req, res) => {
 });
 
 router.get("/stats", async (req, res) => {
-  const fromStr = req.query.from as string | undefined;
-  const toStr = req.query.to as string | undefined;
+  if (req.query.to !== undefined && !parseDayUTC(req.query.to)) {
+    return res.status(400).json({ error: "valid to date required" });
+  }
+  if (req.query.from !== undefined && !parseDayUTC(req.query.from)) {
+    return res.status(400).json({ error: "valid from date required" });
+  }
 
-  const to = toStr
-    ? toDayUTC(toStr)
-    : (() => {
-        const d = new Date();
-        d.setUTCHours(0, 0, 0, 0);
-        d.setUTCDate(d.getUTCDate() + 1);
-        return d;
-      })();
-  const from = fromStr
-    ? toDayUTC(fromStr)
-    : (() => {
-        const d = new Date(to);
-        d.setUTCDate(d.getUTCDate() - 30);
-        return d;
-      })();
+  const to =
+    parseDayUTC(req.query.to) ??
+    (() => {
+      const d = new Date();
+      d.setUTCHours(0, 0, 0, 0);
+      d.setUTCDate(d.getUTCDate() + 1);
+      return d;
+    })();
+  const from =
+    parseDayUTC(req.query.from) ??
+    (() => {
+      const d = new Date(to);
+      d.setUTCDate(d.getUTCDate() - 30);
+      return d;
+    })();
 
   const sessions = await WorkoutSession.find({
     date: { $gte: from, $lt: to },
@@ -252,10 +293,11 @@ router.get("/stats", async (req, res) => {
     (setsBySession[sid] ||= []).push(s);
   }
 
-  // Totals
-  let totalVolume = 0;
+  // Totals. This is the plain sum of the weights logged, not training volume:
+  // `reps` is display-only in the current program (see the PATCH handler and the
+  // SetLog model note), so weight x reps is not computable from stored data.
+  let totalWeightLogged = 0;
   let totalSetsDone = 0;
-  let totalReps = 0;
   const completedSessions = sessions.filter((s) => s.completedAt).length;
   const sessionsByType = { upperA: 0, lowerA: 0, upperB: 0, lowerB: 0, rest: 0 };
 
@@ -265,7 +307,7 @@ router.get("/stats", async (req, res) => {
     for (const set of sets) {
       if (set.done) totalSetsDone++;
       if (set.weight != null && set.weight > 0) {
-        totalVolume += set.weight;
+        totalWeightLogged += set.weight;
       }
     }
   }
@@ -314,9 +356,8 @@ router.get("/stats", async (req, res) => {
     totalSessions: sessions.length,
     completedSessions,
     sessionsByType,
-    totalVolume,
+    totalWeightLogged,
     totalSetsDone,
-    totalReps,
     days: Object.values(dayMap).sort((a, b) => a.date.localeCompare(b.date)),
     bestByExercise,
   });
@@ -327,9 +368,9 @@ router.get("/stats", async (req, res) => {
 // Returns history for one exercise — best set per session, last N sessions
 // =====================================================================
 router.get("/exercise-progress", async (req, res) => {
-  const exerciseId = req.query.exerciseId as string;
+  const exerciseId = trimmedString(req.query.exerciseId);
   if (!exerciseId) return res.status(400).json({ error: "exerciseId required" });
-  const limit = Math.min(parseInt(req.query.limit as string) || 12, 50);
+  const limit = Math.min(Math.max(parseInt(req.query.limit as string, 10) || 12, 1), 50);
 
   // Find all sets for this exercise that have weight or reps logged
   const sets = await SetLog.find({
