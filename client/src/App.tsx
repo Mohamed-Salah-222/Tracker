@@ -20,6 +20,7 @@ const Goals = lazy(() => import("./pages/Goals"));
 const GoalDetail = lazy(() => import("./pages/GoalDetail"));
 const Projects = lazy(() => import("./pages/Projects"));
 const ProjectDetail = lazy(() => import("./pages/ProjectDetail"));
+const Timeline = lazy(() => import("./pages/Timeline"));
 
 function PageFallback() {
   return <div className="flex min-h-64 items-center justify-center text-sm text-muted-foreground">Loading…</div>;
@@ -67,6 +68,7 @@ function AppContent() {
               <Route path="/goals/:goalId" element={<GoalDetail />} />
               <Route path="/projects" element={<Projects />} />
               <Route path="/projects/:projectId" element={<ProjectDetail />} />
+              <Route path="/timeline" element={<Timeline />} />
               <Route path="/today" element={<Today />} />
               <Route path="/calories" element={<Calories />} />
               <Route path="/fridge" element={<Fridge />} />

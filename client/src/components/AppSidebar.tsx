@@ -1,7 +1,7 @@
 import { Link, useLocation } from "react-router-dom";
 import { motion } from "motion/react";
 import { Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarHeader, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../components/ui/sidebar";
-import { LayoutDashboard, Wallet, CreditCard, CheckSquare, Sun, Apple, Refrigerator, BookOpen, Sprout, Dumbbell, Target, FolderKanban } from "lucide-react";
+import { LayoutDashboard, Wallet, CreditCard, CheckSquare, Sun, Apple, Refrigerator, BookOpen, Sprout, Dumbbell, Target, FolderKanban, Clock3 } from "lucide-react";
 
 type Item = {
   title: string;
@@ -36,6 +36,7 @@ const sections: { label: string; items: Item[] }[] = [
     label: "Planning",
     items: [
       { title: "Tasks", url: "/tasks", icon: CheckSquare },
+      { title: "Time Line", url: "/timeline", icon: Clock3 },
       { title: "Projects", url: "/projects", icon: FolderKanban },
       { title: "Goals", url: "/goals", icon: Target },
       { title: "Workout", url: "/workout", icon: Dumbbell },

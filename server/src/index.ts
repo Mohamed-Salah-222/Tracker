@@ -17,6 +17,7 @@ import dashboardRouter from "./routes/dashboard";
 import workoutsRouter from "./routes/workouts";
 import goalsRouter from "./routes/goals";
 import projectsRouter from "./routes/projects";
+import timelineRouter from "./routes/timeline";
 
 dotenv.config();
 
@@ -72,6 +73,8 @@ app.use("/api/workouts", workoutsRouter);
 app.use("/api/goals", goalsRouter);
 
 app.use("/api/projects", projectsRouter);
+
+app.use("/api/timeline", timelineRouter);
 
 // Unknown /api paths get the same JSON shape as everything else.
 app.use("/api", (_req, res) => {
