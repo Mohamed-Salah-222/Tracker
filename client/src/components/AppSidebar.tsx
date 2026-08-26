@@ -1,105 +1,58 @@
+import { useEffect } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { motion } from "motion/react";
-import { Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarHeader, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../components/ui/sidebar";
-import { LayoutDashboard, Wallet, CreditCard, CheckSquare, Sun, Apple, Refrigerator, BookOpen, Sprout, Dumbbell, Target, FolderKanban, Clock3 } from "lucide-react";
+import { Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarHeader, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../components/ui/sidebar";
+import { useSidebar } from "../components/ui/sidebar-context";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "../components/ui/sheet";
+import { Sprout } from "lucide-react";
+import { isItemActive, navSections } from "../lib/navigation";
 
-type Item = {
-  title: string;
-  url: string;
-  icon: typeof LayoutDashboard;
-};
-
-const sections: { label: string; items: Item[] }[] = [
-  {
-    label: "Overview",
-    items: [
-      { title: "Tracker", url: "/", icon: LayoutDashboard },
-      { title: "Today", url: "/today", icon: Sun },
-    ],
-  },
-  {
-    label: "Money",
-    items: [
-      { title: "Income", url: "/income", icon: Wallet },
-      { title: "Payments", url: "/payments", icon: CreditCard },
-    ],
-  },
-  {
-    label: "Health",
-    items: [
-      { title: "Foods", url: "/foods", icon: BookOpen },
-      { title: "Calories", url: "/calories", icon: Apple },
-      { title: "Fridge", url: "/fridge", icon: Refrigerator },
-    ],
-  },
-  {
-    label: "Planning",
-    items: [
-      { title: "Tasks", url: "/tasks", icon: CheckSquare },
-      { title: "Time Line", url: "/timeline", icon: Clock3 },
-      { title: "Projects", url: "/projects", icon: FolderKanban },
-      { title: "Goals", url: "/goals", icon: Target },
-      { title: "Workout", url: "/workout", icon: Dumbbell },
-    ],
-  },
-];
-
-const navItems = sections.flatMap((section) => section.items);
-
-export function AppSidebar() {
-  const location = useLocation();
-  const isDashboard = location.pathname === "/";
-
+/** The dark nav card. Identical on desktop and inside the mobile drawer. */
+function NavCard({ pathname, onNavigate }: { pathname: string; onNavigate?: () => void }) {
   return (
-    <>
-      <Sidebar collapsible="none" className={`h-svh min-h-0 shrink-0 bg-transparent px-2.5 py-3 md:py-6 ${isDashboard ? "hidden md:flex" : ""}`}>
-        <div className="flex h-full w-full flex-col overflow-hidden rounded-xl border border-white/10 bg-neutral-900 text-white shadow-[0_18px_50px_rgba(0,0,0,0.25)]">
-          <SidebarHeader className="px-3 pb-3 pt-4">
-            <Link to="/" className="flex items-center gap-3 group">
-              <motion.div
-                whileHover={{ rotate: -10, scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
-                transition={{ type: "spring", stiffness: 400, damping: 20 }}
-                className="w-8 h-8 rounded-lg border border-white/25 bg-white/10 flex items-center justify-center flex-shrink-0 text-white shadow-inner"
-              >
-                <Sprout className="h-4.5 w-4.5" strokeWidth={2.35} />
-              </motion.div>
-              <div className="flex flex-col min-w-0">
-                <span className="text-base font-bold tracking-tight leading-none text-white">LifeTracker</span>
-              </div>
-            </Link>
-          </SidebarHeader>
+    <div className="flex h-full w-full flex-col overflow-hidden rounded-xl border border-white/10 bg-neutral-900 text-white shadow-[0_18px_50px_rgba(0,0,0,0.25)]">
+      <SidebarHeader className="px-3 pb-3 pt-4">
+        <Link to="/" onClick={onNavigate} className="group flex items-center gap-3">
+          <motion.div
+            whileHover={{ rotate: -10, scale: 1.05 }}
+            whileTap={{ scale: 0.95 }}
+            transition={{ type: "spring", stiffness: 400, damping: 20 }}
+            className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg border border-white/25 bg-white/10 text-white shadow-inner"
+          >
+            <Sprout className="h-4.5 w-4.5" strokeWidth={2.35} />
+          </motion.div>
+          <div className="flex min-w-0 flex-col">
+            <span className="text-base font-bold leading-none tracking-tight text-white">LifeTracker</span>
+          </div>
+        </Link>
+      </SidebarHeader>
 
-          <SidebarContent className="px-2 pb-3 pt-1">
-            <SidebarGroup className="px-0 py-0">
-              <SidebarGroupContent>
-                <SidebarMenu className="gap-1.5">
-                  {navItems.map((item) => {
-                    const isActive = item.url === "/" ? location.pathname === "/" : location.pathname === item.url || location.pathname.startsWith(item.url + "/");
+      <SidebarContent className="overflow-y-auto px-2 pb-3 pt-1">
+        {navSections.map((section) => (
+          <SidebarGroup key={section.label} className="px-0 py-0">
+            <SidebarGroupLabel className="px-3 text-[10px] font-semibold uppercase tracking-wider text-white/40">{section.label}</SidebarGroupLabel>
+            <SidebarGroupContent>
+              {section.items.length === 0 ? (
+                <p className="px-3 py-1.5 text-[11px] text-white/30">{section.placeholder}</p>
+              ) : (
+                <SidebarMenu className="gap-1">
+                  {section.items.map((item) => {
+                    const isActive = isItemActive(pathname, item.url);
                     return (
-                      <SidebarMenuItem key={item.title}>
-                        <SidebarMenuButton isActive={isActive} className="h-auto rounded-md p-0 data-active:bg-transparent data-active:text-white hover:bg-transparent">
+                      <SidebarMenuItem key={item.url}>
+                        <SidebarMenuButton isActive={isActive} className="h-auto rounded-md p-0 hover:bg-transparent data-active:bg-transparent data-active:text-white">
                           <Link
                             to={item.url}
-                            className={`relative flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm transition-colors ${isActive ? "font-semibold text-white" : "font-semibold text-white/60 hover:text-white"}`}
-                            style={
-                              isActive
-                                ? {
-                                    background: "rgba(255,255,255,0.15)",
-                                    color: "#ffffff",
-                                  }
-                                : undefined
-                            }
+                            onClick={onNavigate}
+                            className={`relative flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-colors ${isActive ? "font-semibold text-white" : "font-semibold text-white/60 hover:text-white"}`}
+                            style={isActive ? { background: "rgba(255,255,255,0.15)", color: "#ffffff" } : undefined}
                           >
                             {isActive && (
                               <motion.span
                                 layoutId="sidebarActivePill"
                                 transition={{ type: "spring", stiffness: 380, damping: 32 }}
                                 className="absolute inset-0 rounded-xl"
-                                style={{
-                                  background: "rgba(255,255,255,0.08)",
-                                  zIndex: 0,
-                                }}
+                                style={{ background: "rgba(255,255,255,0.08)", zIndex: 0 }}
                               />
                             )}
                             <item.icon className="relative z-10 h-4.5 w-4.5 flex-shrink-0" strokeWidth={2.1} />
@@ -110,30 +63,44 @@ export function AppSidebar() {
                     );
                   })}
                 </SidebarMenu>
-              </SidebarGroupContent>
-            </SidebarGroup>
-          </SidebarContent>
-        </div>
-      </Sidebar>
-      {isDashboard && (
-        <nav className="fixed inset-x-2 bottom-2 z-40 rounded-2xl border border-white/10 bg-neutral-900/95 p-1.5 text-white shadow-[0_18px_50px_rgba(0,0,0,0.35)] backdrop-blur md:hidden">
-          <div className="flex gap-1 overflow-x-auto">
-            {navItems.map((item) => {
-              const isActive = item.url === "/" ? location.pathname === "/" : location.pathname === item.url || location.pathname.startsWith(item.url + "/");
-              return (
-                <Link
-                  key={item.title}
-                  to={item.url}
-                  className={`flex min-w-[68px] flex-col items-center justify-center gap-1 rounded-xl px-2 py-2 text-[10px] font-semibold transition-colors ${isActive ? "bg-white/15 text-white" : "text-white/60"}`}
-                >
-                  <item.icon className="h-4 w-4" strokeWidth={2.1} />
-                  <span className="max-w-16 truncate">{item.title}</span>
-                </Link>
-              );
-            })}
-          </div>
-        </nav>
-      )}
-    </>
+              )}
+            </SidebarGroupContent>
+          </SidebarGroup>
+        ))}
+      </SidebarContent>
+    </div>
+  );
+}
+
+export function AppSidebar() {
+  const location = useLocation();
+  const { isMobile, openMobile, setOpenMobile } = useSidebar();
+
+  // Close the drawer whenever navigation happens, including browser back.
+  useEffect(() => {
+    setOpenMobile(false);
+  }, [location.pathname, setOpenMobile]);
+
+  // On phones the nav is a drawer. Rendering it inline (the old behaviour) left a
+  // 15rem column permanently eating most of the screen on every page but the
+  // dashboard, which is what made the content unusable.
+  if (isMobile) {
+    return (
+      <Sheet open={openMobile} onOpenChange={setOpenMobile}>
+        <SheetContent side="left" className="w-[17rem] max-w-[85vw] border-0 bg-transparent p-2.5 shadow-none [&>button]:hidden">
+          <SheetHeader className="sr-only">
+            <SheetTitle>Navigation</SheetTitle>
+            <SheetDescription>Links to every section of LifeTracker.</SheetDescription>
+          </SheetHeader>
+          <NavCard pathname={location.pathname} onNavigate={() => setOpenMobile(false)} />
+        </SheetContent>
+      </Sheet>
+    );
+  }
+
+  return (
+    <Sidebar collapsible="none" className="hidden h-svh min-h-0 shrink-0 bg-transparent px-2.5 py-3 md:flex md:py-6">
+      <NavCard pathname={location.pathname} />
+    </Sidebar>
   );
 }

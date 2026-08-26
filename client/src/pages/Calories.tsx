@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type DragEvent } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { api } from "../lib/api";
 import { todayISO } from "../lib/today";
@@ -7,64 +7,39 @@ import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Card, CardContent } from "../components/ui/card";
+import { Skeleton } from "../components/ui/skeleton";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "../components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
 import { toast } from "sonner";
-import { ChevronLeft, ChevronRight, Plus, Search, Snowflake, Trash2, Droplet, BarChart3, Target, Cake, Flame, Beef, Wheat, Nut, Utensils, GripVertical } from "lucide-react";
-import type { LucideIcon } from "lucide-react";
-import { AxiosError } from "axios";
-import { CalorieRecapModal } from "../components/CalorieRecapModal";
+import { BarChart3, Cake, ChevronLeft, ChevronRight, Droplet, GripVertical, Minus, Plus, Search, ShoppingBasket, Target, Trash2 } from "lucide-react";
+// Recharts is ~320 kB and only the recap needs it. Loading it lazily keeps it off
+// the Calories page itself, which is the screen used several times a day.
+const importRecap = () => import("../components/CalorieRecapModal");
+const CalorieRecapModal = lazy(() => importRecap().then((m) => ({ default: m.CalorieRecapModal })));
+import {
+  MEALS,
+  MEAL_LABELS,
+  dayLabel,
+  entryTotals,
+  foodHeadlineCalories,
+  foodHeadlineUnit,
+  foodMacros,
+  getApiError,
+  mealForNow,
+  quickLogAmount,
+  round,
+  round1,
+  servingLabel,
+  shiftDay,
+  unitWord,
+  type Entry,
+  type Food,
+  type Macros,
+  type Meal,
+} from "../lib/food";
 
-// ===== Types =====
-type Meal = "breakfast" | "lunch" | "dinner" | "snack";
-const MEALS: Meal[] = ["breakfast", "lunch", "dinner", "snack"];
-const MEAL_LABELS: Record<Meal, string> = {
-  breakfast: "Breakfast",
-  lunch: "Lunch",
-  dinner: "Dinner",
-  snack: "Snack",
-};
 const DRAG_FOOD_TYPE = "application/x-lifetracker-food";
-type EntryMode = "perGram" | "perUnit";
-
-type Food = {
-  _id: string;
-  name: string;
-  category: string;
-  entryMode: EntryMode;
-  trackInFridge: boolean;
-  caloriesPerGram: number;
-  proteinPerGram: number;
-  carbsPerGram: number;
-  fatPerGram: number;
-  defaultServingGrams: number | null;
-  caloriesPerUnit: number;
-  proteinPerUnit: number;
-  carbsPerUnit: number;
-  fatPerUnit: number;
-  unitLabel: string;
-};
-
-type Entry = {
-  _id: string;
-  date: string;
-  foodId: string;
-  foodNameSnapshot: string;
-  meal: Meal;
-  entryMode: EntryMode;
-  grams: number | null;
-  units: number | null;
-  caloriesPerGramSnapshot: number;
-  proteinPerGramSnapshot: number;
-  carbsPerGramSnapshot: number;
-  fatPerGramSnapshot: number;
-  caloriesPerUnitSnapshot: number;
-  proteinPerUnitSnapshot: number;
-  carbsPerUnitSnapshot: number;
-  fatPerUnitSnapshot: number;
-  unitLabelSnapshot: string;
-};
+const WATER_STEPS = [200, 300, 600, 1000];
 
 type WaterRow = { _id: string; date: string; ml: number };
 type CheatDay = { _id: string; date: string; note?: string } | null;
@@ -78,74 +53,6 @@ type Goal = {
   waterMax: number;
 };
 
-// ===== Helpers =====
-const round = (n: number) => Math.round(n);
-const round1 = (n: number) => Math.round(n * 10) / 10;
-
-function getApiError(e: unknown): string {
-  if (e instanceof AxiosError) {
-    return (e.response?.data as { error?: string })?.error ?? e.message;
-  }
-  return "Something went wrong";
-}
-
-function shiftDay(iso: string, by: number) {
-  const d = new Date(iso);
-  d.setUTCDate(d.getUTCDate() + by);
-  return d.toISOString().slice(0, 10);
-}
-
-function entryTotals(e: Entry) {
-  if (e.entryMode === "perUnit") {
-    const n = e.units ?? 0;
-    return {
-      cal: n * e.caloriesPerUnitSnapshot,
-      p: n * e.proteinPerUnitSnapshot,
-      c: n * e.carbsPerUnitSnapshot,
-      f: n * e.fatPerUnitSnapshot,
-    };
-  }
-  const g = e.grams ?? 0;
-  return {
-    cal: g * e.caloriesPerGramSnapshot,
-    p: g * e.proteinPerGramSnapshot,
-    c: g * e.carbsPerGramSnapshot,
-    f: g * e.fatPerGramSnapshot,
-  };
-}
-
-function foodCalories(food: Food) {
-  return food.entryMode === "perUnit" ? round1(food.caloriesPerUnit) : round1(food.caloriesPerGram * 100);
-}
-
-function foodUnitDescription(food: Food) {
-  return food.entryMode === "perUnit" ? `/ ${food.unitLabel || "unit"}` : "/ 100g";
-}
-
-function defaultAmountText(food: Food) {
-  if (food.entryMode === "perUnit") return `1 ${food.unitLabel || "unit"}`;
-  if (food.defaultServingGrams) return `${food.defaultServingGrams}g`;
-  return "needs grams";
-}
-
-function mealAccent(meal: Meal) {
-  if (meal === "snack") {
-    return {
-      color: "var(--color-foreground)",
-      background: "var(--color-muted)",
-      borderColor: "var(--color-border-strong)",
-      header: "linear-gradient(135deg, color-mix(in oklch, var(--color-foreground), white 93%), var(--color-card))",
-    };
-  }
-  return {
-    color: `var(--color-meal-${meal})`,
-    background: `var(--color-meal-${meal}-bg)`,
-    borderColor: `color-mix(in oklch, var(--color-meal-${meal}), transparent 70%)`,
-    header: `linear-gradient(135deg, color-mix(in oklch, var(--color-meal-${meal}), white 88%), var(--color-card))`,
-  };
-}
-
-// ===== Motion =====
 const fadeUp = {
   initial: { opacity: 0, y: 8 },
   animate: { opacity: 1, y: 0 },
@@ -153,59 +60,80 @@ const fadeUp = {
 };
 const stagger = (i: number) => ({
   ...fadeUp,
-  transition: { ...fadeUp.transition, delay: i * 0.04 },
+  transition: { ...fadeUp.transition, delay: Math.min(i, 6) * 0.03 },
 });
 
 // =====================================================================
 // MAIN
 // =====================================================================
 export default function Calories() {
-  const [date, setDate] = useState(todayISO());
+  const [date, setDate] = useState(todayISO);
   const [foods, setFoods] = useState<Food[]>([]);
   const [recentIds, setRecentIds] = useState<string[]>([]);
   const [entries, setEntries] = useState<Entry[]>([]);
   const [waters, setWaters] = useState<WaterRow[]>([]);
   const [cheat, setCheat] = useState<CheatDay>(null);
   const [goal, setGoal] = useState<Goal | null>(null);
+  const [loading, setLoading] = useState(true);
+
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pendingMeal, setPendingMeal] = useState<Meal>("breakfast");
-  const [recapOpen, setRecapOpen] = useState(false);
-  const [goalOpen, setGoalOpen] = useState(false);
   const [pendingFood, setPendingFood] = useState<Food | null>(null);
+  const [recapOpen, setRecapOpen] = useState(false);
+  const [recapMounted, setRecapMounted] = useState(false);
+  const [goalOpen, setGoalOpen] = useState(false);
+  const [shelfOpen, setShelfOpen] = useState(false);
   const [foodSearch, setFoodSearch] = useState("");
 
-  // ----- Loaders -----
-  // Picker options, filtered client-side, so this asks for the whole set up to
-  // PICKER_LIMIT rather than paging.
+  const entriesRef = useRef<Entry[]>([]);
+  const writeEntries = useCallback((next: Entry[]) => {
+    entriesRef.current = next;
+    setEntries(next);
+  }, []);
+  const watersRef = useRef<WaterRow[]>([]);
+  const writeWaters = useCallback((next: WaterRow[]) => {
+    watersRef.current = next;
+    setWaters(next);
+  }, []);
+
+  const isToday = date === todayISO();
+
   const loadFoods = useCallback(async () => {
     try {
       const r = await api.get<Page<Food>>("/foods", { params: { limit: PICKER_LIMIT, offset: 0 } });
       setFoods(r.data.items);
-      if (r.data.total > r.data.items.length) {
-        toast.warning(`Showing the first ${r.data.items.length} of ${r.data.total} foods in the picker.`);
-      }
     } catch (e) {
       toast.error(getApiError(e));
     }
   }, []);
+
   const loadRecent = useCallback(async () => {
     try {
       const r = await api.get<{ foodId: string; count: number }[]>("/calories/recent-foods");
       setRecentIds(r.data.map((x) => x.foodId));
-    } catch (e) {
-      toast.error(getApiError(e));
+    } catch {
+      /* recents are a convenience; do not shout if they fail */
     }
   }, []);
-  const loadDayData = useCallback(async () => {
+
+  const loadDay = useCallback(async () => {
+    setLoading(true);
     try {
-      const [e, w, c] = await Promise.all([api.get<Entry[]>("/calories/day", { params: { date } }), api.get<WaterRow[]>("/calories/water/day", { params: { date } }), api.get<CheatDay>("/calories/cheat-day", { params: { date } })]);
-      setEntries(e.data);
-      setWaters(w.data);
+      const [e, w, c] = await Promise.all([
+        api.get<Entry[]>("/calories/day", { params: { date } }),
+        api.get<WaterRow[]>("/calories/water/day", { params: { date } }),
+        api.get<CheatDay>("/calories/cheat-day", { params: { date } }),
+      ]);
+      writeEntries(e.data);
+      writeWaters(w.data);
       setCheat(c.data);
     } catch (err) {
       toast.error(getApiError(err));
+    } finally {
+      setLoading(false);
     }
-  }, [date]);
+  }, [date, writeEntries, writeWaters]);
+
   const loadGoal = useCallback(async () => {
     try {
       const r = await api.get<Goal>("/calories/goal");
@@ -222,377 +150,379 @@ export default function Calories() {
     void loadRecent();
   }, [loadRecent]);
   useEffect(() => {
-    void loadDayData();
-  }, [loadDayData]);
+    void loadDay();
+  }, [loadDay]);
   useEffect(() => {
     void loadGoal();
   }, [loadGoal]);
 
-  const reload = () => {
-    void loadDayData();
-    void loadRecent();
-  };
+  // Warm the recap chunk once the page is idle, so it is cached before it is wanted.
+  useEffect(() => {
+    const w = window as typeof window & { requestIdleCallback?: (cb: () => void) => number; cancelIdleCallback?: (id: number) => void };
+    if (w.requestIdleCallback) {
+      const id = w.requestIdleCallback(() => void importRecap());
+      return () => w.cancelIdleCallback?.(id);
+    }
+    const id = window.setTimeout(() => void importRecap(), 2500);
+    return () => window.clearTimeout(id);
+  }, []);
 
-  // ----- Computed -----
-  const totals = useMemo(() => {
-    return entries.reduce(
-      (acc, e) => {
-        const t = entryTotals(e);
-        acc.cal += t.cal;
-        acc.p += t.p;
-        acc.c += t.c;
-        acc.f += t.f;
-        return acc;
-      },
-      { cal: 0, p: 0, c: 0, f: 0 },
-    );
+  const totals = useMemo<Macros>(
+    () =>
+      entries.reduce<Macros>(
+        (acc, e) => {
+          const t = entryTotals(e);
+          return { cal: acc.cal + t.cal, p: acc.p + t.p, c: acc.c + t.c, f: acc.f + t.f };
+        },
+        { cal: 0, p: 0, c: 0, f: 0 },
+      ),
+    [entries],
+  );
+
+  const waterTotal = useMemo(() => waters.reduce((s, w) => s + w.ml, 0), [waters]);
+
+  const byMeal = useMemo(() => {
+    const map: Record<Meal, Entry[]> = { breakfast: [], lunch: [], dinner: [], snack: [] };
+    for (const e of entries) map[e.meal].push(e);
+    return map;
   }, [entries]);
 
-  const waterTotal = waters.reduce((s, w) => s + w.ml, 0);
-
-  const byMeal: Record<Meal, Entry[]> = { breakfast: [], lunch: [], dinner: [], snack: [] };
-  for (const e of entries) byMeal[e.meal].push(e);
-  const mealTotal = (m: Meal) => byMeal[m].reduce((s, e) => s + entryTotals(e).cal, 0);
-
-  // ----- Cheat day toggle -----
   const toggleCheat = async () => {
+    const before = cheat;
+    setCheat(before ? null : { _id: "pending", date });
     try {
-      await api.put("/calories/cheat-day", { date, on: !cheat });
-      toast.success(cheat ? "Cheat day removed" : "Cheat day on. Logs won't count toward weekly totals.");
-      void loadDayData();
+      await api.put("/calories/cheat-day", { date, on: !before });
+      void loadDay();
     } catch (e) {
       toast.error(getApiError(e));
+      setCheat(before);
     }
   };
-
-  // ----- Navigation -----
-  const isToday = date === todayISO();
-  const dateLabel = useMemo(
-    () =>
-      new Date(date).toLocaleDateString("en-US", {
-        weekday: "long",
-        month: "long",
-        day: "numeric",
-        timeZone: "UTC",
-      }),
-    [date],
-  );
 
   const openPicker = (meal: Meal, food: Food | null = null) => {
     setPendingMeal(meal);
     setPendingFood(food);
     setPickerOpen(true);
+    setShelfOpen(false);
   };
 
-  const quickLogFood = async (food: Food, meal: Meal) => {
+  /** One-tap log; falls back to the picker when the food has no default amount. */
+  const quickLog = async (food: Food, meal: Meal) => {
+    const amount = quickLogAmount(food);
+    if (amount === null) {
+      openPicker(meal, food);
+      return;
+    }
     try {
-      const body: Record<string, unknown> = {
-        date,
-        foodId: food._id,
-        meal,
-      };
-      if (food.entryMode === "perUnit") {
-        body.units = 1;
-      } else if (food.defaultServingGrams && food.defaultServingGrams > 0) {
-        body.grams = food.defaultServingGrams;
-      } else {
-        openPicker(meal, food);
-        toast.info("Add grams to finish logging this food.");
-        return;
-      }
-      await api.post("/calories", body);
-      toast.success(`Logged to ${MEAL_LABELS[meal]}`);
-      reload();
+      const body = food.entryMode === "perUnit" ? { date, foodId: food._id, meal, units: amount } : { date, foodId: food._id, meal, grams: amount };
+      const r = await api.post<Entry>("/calories", body);
+      writeEntries([...entriesRef.current, r.data]);
+      void loadRecent();
     } catch (e) {
       toast.error(getApiError(e));
     }
   };
 
-  return (
-    <div className="w-full max-w-[1700px] space-y-3">
-      {/* ===== Top bar ===== */}
-      <motion.div {...fadeUp} className="flex flex-col gap-2 rounded-2xl border border-border bg-card/80 p-2.5 shadow-sm sm:flex-row sm:items-center sm:justify-between">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <span className="flex h-7 w-7 items-center justify-center rounded-xl bg-foreground text-background">
-              <Utensils className="h-3.5 w-3.5" />
-            </span>
-            <div>
-              <h1 className="text-base font-semibold tracking-tight">Calories</h1>
-              <div className="text-[11px] text-muted-foreground">{dateLabel}</div>
-            </div>
-          </div>
-          {cheat && <CheatBadge />}
-        </div>
-        <div className="flex items-center gap-2 self-end sm:self-auto flex-wrap">
-          <Button variant="ghost" size="sm" onClick={() => setGoalOpen(true)}>
-            <Target className="h-3.5 w-3.5 mr-1.5" />
-            Goals
-          </Button>
-          <Button variant="outline" size="sm" onClick={() => setRecapOpen(true)}>
-            <BarChart3 className="h-3.5 w-3.5 mr-1.5" />
-            Weekly recap
-          </Button>
-          <Button variant={cheat ? "default" : "outline"} size="sm" onClick={toggleCheat}>
-            <Cake className="h-3.5 w-3.5 mr-1.5" />
-            {cheat ? "Cheat day on" : "Cheat day"}
-          </Button>
-        </div>
-      </motion.div>
+  const patchEntry = async (entry: Entry, patch: { grams?: number; units?: number }) => {
+    const before = entriesRef.current;
+    writeEntries(before.map((x) => (x._id === entry._id ? { ...x, ...patch } : x)));
+    try {
+      await api.patch(`/calories/${entry._id}`, patch);
+    } catch (e) {
+      toast.error(getApiError(e));
+      writeEntries(before);
+    }
+  };
 
+  const deleteEntry = async (entry: Entry) => {
+    const before = entriesRef.current;
+    writeEntries(before.filter((x) => x._id !== entry._id));
+    try {
+      await api.delete(`/calories/${entry._id}`);
+    } catch (e) {
+      toast.error(getApiError(e));
+      writeEntries(before);
+    }
+  };
+
+  const addWater = async (ml: number) => {
+    const optimistic: WaterRow = { _id: `pending-${Date.now()}`, date, ml };
+    const before = watersRef.current;
+    writeWaters([...before, optimistic]);
+    try {
+      const r = await api.post<WaterRow>("/calories/water", { date, ml });
+      writeWaters(watersRef.current.map((w) => (w._id === optimistic._id ? r.data : w)));
+    } catch (e) {
+      toast.error(getApiError(e));
+      writeWaters(before);
+    }
+  };
+
+  const removeWater = async (row: WaterRow) => {
+    const before = watersRef.current;
+    writeWaters(before.filter((w) => w._id !== row._id));
+    try {
+      await api.delete(`/calories/water/${row._id}`);
+    } catch (e) {
+      toast.error(getApiError(e));
+      writeWaters(before);
+    }
+  };
+
+  // =====================================================================
+  return (
+    <div className="w-full max-w-[1400px] space-y-3">
       {/* ===== Date nav ===== */}
-      <motion.div {...stagger(1)} className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-1">
-          <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => setDate(shiftDay(date, -1))} aria-label="Previous">
-            <ChevronLeft className="h-4 w-4" />
-          </Button>
-          <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => setDate(shiftDay(date, 1))} aria-label="Next">
-            <ChevronRight className="h-4 w-4" />
-          </Button>
-          <div className="text-sm font-medium ml-2 truncate flex items-center gap-2">
-            {dateLabel}
-            {isToday && <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Today</span>}
-          </div>
-        </div>
-        <Button variant="ghost" size="sm" onClick={() => setDate(todayISO())}>
-          Today
+      <motion.nav {...fadeUp} aria-label="Select day" className="flex items-center gap-1.5">
+        <Button variant="outline" size="icon" className="h-10 w-10 shrink-0" aria-label="Previous day" onClick={() => setDate(shiftDay(date, -1))}>
+          <ChevronLeft className="h-4 w-4" aria-hidden />
+        </Button>
+        <button
+          type="button"
+          onClick={() => setDate(todayISO())}
+          disabled={isToday}
+          aria-label={isToday ? "Showing today" : `Showing ${dayLabel(date)}. Jump to today`}
+          className="flex h-10 min-w-0 flex-1 items-center justify-center gap-2 rounded-lg border border-transparent px-2 text-sm font-medium transition-colors enabled:hover:border-border enabled:hover:bg-muted/60 disabled:cursor-default"
+        >
+          <span className="truncate">{dayLabel(date)}</span>
+          {isToday ? (
+            <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Today</span>
+          ) : (
+            <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Jump to today</span>
+          )}
+        </button>
+        <Button variant="outline" size="icon" className="h-10 w-10 shrink-0" aria-label="Next day" onClick={() => setDate(shiftDay(date, 1))}>
+          <ChevronRight className="h-4 w-4" aria-hidden />
+        </Button>
+      </motion.nav>
+
+      {/* ===== Actions ===== */}
+      <motion.div {...stagger(1)} className="flex flex-wrap items-center gap-2">
+        <Button variant={cheat ? "default" : "outline"} size="sm" className="h-9" onClick={toggleCheat}>
+          <Cake className="h-3.5 w-3.5 mr-1.5" aria-hidden />
+          {cheat ? "Cheat day on" : "Cheat day"}
+        </Button>
+        <Button variant="outline" size="sm" className="h-9" onClick={() => setGoalOpen(true)}>
+          <Target className="h-3.5 w-3.5 mr-1.5" aria-hidden />
+          Targets
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-9"
+          onClick={() => {
+            setRecapMounted(true);
+            setRecapOpen(true);
+          }}
+        >
+          <BarChart3 className="h-3.5 w-3.5 mr-1.5" aria-hidden />
+          Recap
+        </Button>
+        {/* The shelf is a sidebar on desktop; on a phone it opens as a sheet. */}
+        <Button variant="outline" size="sm" className="ml-auto h-9 xl:hidden" onClick={() => setShelfOpen(true)}>
+          <Search className="h-3.5 w-3.5 mr-1.5" aria-hidden />
+          Find food
         </Button>
       </motion.div>
 
-      <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_420px] 2xl:grid-cols-[minmax(0,1fr)_480px]">
-        <div className="min-w-0 space-y-3">
-          {/* ===== Goal cards ===== */}
-          {goal && (
-            <motion.div {...stagger(2)} className="grid gap-2 xl:grid-cols-[minmax(0,1fr)_300px]">
-              <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
-                <MacroCard icon={Flame} label="Calories" value={totals.cal} target={goal.caloriesTarget} unit="cal" system="cap" cheat={!!cheat} decimals={0} />
-                <MacroCard icon={Beef} label="Protein" value={totals.p} target={goal.proteinTarget} unit="g" system="buildup" fromVar="--color-expense" cheat={!!cheat} decimals={1} />
-                <MacroCard icon={Wheat} label="Carbs" value={totals.c} target={goal.carbsTarget} unit="g" system="cap" cheat={!!cheat} decimals={1} />
-                <MacroCard icon={Nut} label="Fat" value={totals.f} target={goal.fatTarget} unit="g" system="cap" cheat={!!cheat} decimals={1} />
-              </div>
-              <WaterBar value={waterTotal} goal={goal} cheat={!!cheat} date={date} onChanged={loadDayData} waters={waters} />
-            </motion.div>
-          )}
+      {loading || !goal ? (
+        <CaloriesSkeleton />
+      ) : (
+        <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_360px]">
+          <div className="min-w-0 space-y-3">
+            {/* ===== Day summary ===== */}
+            <motion.section {...stagger(2)} aria-label="Day summary">
+              <DaySummary totals={totals} goal={goal} cheat={!!cheat} />
+            </motion.section>
 
-          {/* ===== Meals ===== */}
-          <div className="grid auto-rows-fr grid-cols-1 gap-3 lg:grid-cols-2">
-            {MEALS.map((meal, i) => (
-              <motion.div key={meal} {...stagger(i + 4)} className="min-w-0">
-                <MealCard
-                  meal={meal}
-                  entries={byMeal[meal]}
-                  total={mealTotal(meal)}
-                  onAdd={() => openPicker(meal)}
-                  onChanged={reload}
-                  onFoodDrop={(food) => void quickLogFood(food, meal)}
-                />
-              </motion.div>
-            ))}
+            {/* ===== Water ===== */}
+            <motion.section {...stagger(3)} aria-label="Water">
+              <WaterCard total={waterTotal} goal={goal} waters={waters} onAdd={addWater} onRemove={removeWater} />
+            </motion.section>
+
+            {/* ===== Meals ===== */}
+            <div className="grid auto-rows-fr grid-cols-1 gap-3 lg:grid-cols-2">
+              {MEALS.map((meal, i) => (
+                <motion.div key={meal} {...stagger(i + 4)} className="min-w-0">
+                  <MealCard
+                    meal={meal}
+                    entries={byMeal[meal]}
+                    onAdd={() => openPicker(meal)}
+                    onEdit={patchEntry}
+                    onDelete={deleteEntry}
+                    onFoodDrop={(food) => void quickLog(food, meal)}
+                  />
+                </motion.div>
+              ))}
+            </div>
           </div>
+
+          {/* ===== Food shelf (desktop) ===== */}
+          <aside className="hidden min-w-0 xl:block">
+            <div className="sticky top-0">
+              <FoodShelf foods={foods} recentIds={recentIds} search={foodSearch} onSearchChange={setFoodSearch} onQuickLog={(food) => void quickLog(food, mealForNow())} onOpenPicker={(food) => openPicker(mealForNow(), food)} draggable />
+            </div>
+          </aside>
         </div>
+      )}
 
-        <FoodRail
-          foods={foods}
-          recentIds={recentIds}
-          search={foodSearch}
-          onSearchChange={setFoodSearch}
-          onFoodClick={(food) => openPicker("breakfast", food)}
-        />
-      </div>
+      {/* ===== Food shelf (mobile sheet) ===== */}
+      <Dialog open={shelfOpen} onOpenChange={setShelfOpen}>
+        <DialogContent className="!w-[calc(100vw-1rem)] !max-w-[560px] max-h-[88svh] overflow-y-auto p-0">
+          <DialogHeader className="border-b border-border px-4 py-3">
+            <DialogTitle>Food shelf</DialogTitle>
+          </DialogHeader>
+          <div className="p-3">
+            <FoodShelf bare foods={foods} recentIds={recentIds} search={foodSearch} onSearchChange={setFoodSearch} onQuickLog={(food) => void quickLog(food, mealForNow())} onOpenPicker={(food) => openPicker(mealForNow(), food)} />
+          </div>
+        </DialogContent>
+      </Dialog>
 
-      {/* ===== Dialogs ===== */}
-      <FoodPickerDialog open={pickerOpen} onOpenChange={setPickerOpen} foods={foods} recentIds={recentIds} meal={pendingMeal} date={date} initialFood={pendingFood} onSaved={reload} />
+      <FoodPickerDialog open={pickerOpen} onOpenChange={setPickerOpen} foods={foods} recentIds={recentIds} meal={pendingMeal} date={date} initialFood={pendingFood} onLogged={(entry) => writeEntries([...entriesRef.current, entry])} onRecent={loadRecent} />
       <GoalDialog open={goalOpen} onOpenChange={setGoalOpen} goal={goal} onSaved={loadGoal} />
-      <CalorieRecapModal open={recapOpen} onOpenChange={setRecapOpen} />
+      {recapMounted && (
+        <Suspense fallback={null}>
+          <CalorieRecapModal open={recapOpen} onOpenChange={setRecapOpen} />
+        </Suspense>
+      )}
+    </div>
+  );
+}
+
+function CaloriesSkeleton() {
+  return (
+    <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_360px]" aria-busy="true" aria-label="Loading">
+      <div className="space-y-3">
+        <Skeleton className="h-[132px] rounded-xl" />
+        <Skeleton className="h-[104px] rounded-xl" />
+        <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+          {[0, 1, 2, 3].map((i) => (
+            <Skeleton key={i} className="h-[180px] rounded-xl" />
+          ))}
+        </div>
+      </div>
+      <Skeleton className="hidden h-[520px] rounded-xl xl:block" />
     </div>
   );
 }
 
 // =====================================================================
-// CheatBadge
+// DaySummary — the number that actually matters is what is left
 // =====================================================================
-function CheatBadge() {
-  return (
-    <motion.span
-      initial={{ scale: 0.9, opacity: 0 }}
-      animate={{ scale: 1, opacity: 1 }}
-      className="text-[11px] px-2 py-0.5 rounded border font-medium flex items-center gap-1"
-      style={{
-        color: "var(--color-foreground)",
-        background: "var(--color-muted)",
-        borderColor: "var(--color-border-strong)",
-      }}
-    >
-      <Cake className="h-2.5 w-2.5" />
-      Cheat day
-    </motion.span>
-  );
-}
-
-// =====================================================================
-// Macro color systems
-// =====================================================================
-// "cap": the target is a ceiling you can't exceed — green the whole way, red once over.
-function capColor(cheat: boolean, over: boolean) {
-  return cheat ? "var(--color-muted-foreground)" : over ? "var(--color-expense)" : "var(--color-income)";
-}
-// "buildup": no ceiling — color eases from `fromVar` toward green as you approach the target, then stays green.
-function buildupColor(cheat: boolean, pct: number, fromVar: string) {
-  if (cheat) return "var(--color-muted-foreground)";
-  return `color-mix(in oklch, var(--color-income) ${pct}%, var(${fromVar}) ${100 - pct}%)`;
-}
-
-// =====================================================================
-// MacroCard
-// =====================================================================
-function MacroCard({
-  icon: Icon,
-  label,
-  value,
-  target,
-  unit,
-  cheat,
-  decimals,
-  system,
-  fromVar = "--color-expense",
-}: {
-  icon: LucideIcon;
-  label: string;
-  value: number;
-  target: number;
-  unit: string;
-  cheat: boolean;
-  decimals: 0 | 1;
-  system: "cap" | "buildup";
-  fromVar?: string;
-}) {
-  const v = decimals === 0 ? Math.round(value) : round1(value);
-  const pct = target > 0 ? Math.min((v / target) * 100, 100) : 0;
-  const over = v > target;
-  const color = system === "cap" ? capColor(cheat, over) : buildupColor(cheat, pct, fromVar);
-  const fillColor = cheat ? "var(--color-muted)" : over ? "color-mix(in oklch, var(--color-expense), white 84%)" : `color-mix(in oklch, ${color}, white 86%)`;
-  const fillPct = over ? 100 : pct;
+function DaySummary({ totals, goal, cheat }: { totals: Macros; goal: Goal; cheat: boolean }) {
+  const cal = Math.round(totals.cal);
+  const left = goal.caloriesTarget - cal;
+  const over = left < 0;
+  const pct = goal.caloriesTarget > 0 ? Math.min((cal / goal.caloriesTarget) * 100, 100) : 0;
 
   return (
-    <Card className="relative h-full overflow-hidden">
-      <motion.div
-        aria-hidden="true"
-        className="absolute inset-y-0 left-0"
-        initial={{ width: 0 }}
-        animate={{ width: `${fillPct}%` }}
-        transition={{ duration: 0.55, ease: [0.16, 1, 0.3, 1] }}
-        style={{ background: fillColor }}
-      />
-      <CardContent className="relative flex h-full flex-col justify-between p-3">
-        <div className="flex items-baseline justify-between gap-2 mb-1">
-          <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium flex items-center gap-1">
-            <Icon className="h-2.5 w-2.5" style={{ color }} />
-            {label}
-          </span>
-          <span className="text-[10px] font-mono tabular-nums text-muted-foreground">
-            / {target}
-            {unit}
-          </span>
-        </div>
-        <div className="flex items-baseline gap-1.5">
-          <AnimatePresence mode="wait">
-            <motion.span key={v} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }} transition={{ duration: 0.2 }} className="text-xl font-semibold font-mono tabular-nums tracking-tight" style={{ color }}>
-              {v}
-            </motion.span>
-          </AnimatePresence>
-          <span className="text-xs text-muted-foreground font-medium">{unit}</span>
-        </div>
-        {system === "cap" && !cheat && over && (
-          <div className="text-[10px] font-medium mt-0.5" style={{ color: "var(--color-expense)" }}>
-            +{decimals === 0 ? Math.round(v - target) : round1(v - target)}
-            {unit} over
+    <Card>
+      <CardContent className="px-4 py-0">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{cheat ? "Cheat day · not counted" : over ? "Over budget" : "Left today"}</div>
+            <div className="mt-0.5 flex items-baseline gap-1.5">
+              <span className="font-mono text-3xl font-semibold tabular-nums tracking-tight sm:text-4xl">{cheat ? cal : Math.abs(left)}</span>
+              <span className="text-sm text-muted-foreground">cal</span>
+            </div>
+            <div className="mt-0.5 font-mono text-[11px] tabular-nums text-muted-foreground">
+              {cal} of {goal.caloriesTarget} eaten
+            </div>
           </div>
-        )}
-        <div className="mt-4 flex items-center justify-between text-[10px] font-mono tabular-nums text-muted-foreground">
-          <span>{Math.round(pct)}%</span>
-          <span>{over ? "over" : cheat ? "ignored" : "progress"}</span>
+
+          <div className="flex shrink-0 items-center gap-4">
+            <MacroStat label="Protein" value={totals.p} target={goal.proteinTarget} />
+            <MacroStat label="Carbs" value={totals.c} target={goal.carbsTarget} />
+            <MacroStat label="Fat" value={totals.f} target={goal.fatTarget} />
+          </div>
+        </div>
+
+        <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-muted" role="progressbar" aria-valuenow={Math.round(pct)} aria-valuemin={0} aria-valuemax={100}>
+          <motion.div
+            className={`h-full rounded-full ${over && !cheat ? "bg-foreground" : "bg-foreground"}`}
+            initial={false}
+            animate={{ width: `${pct}%` }}
+            transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+            style={over && !cheat ? { backgroundImage: "repeating-linear-gradient(45deg, var(--color-foreground) 0 6px, var(--color-muted-foreground) 6px 12px)" } : undefined}
+          />
         </div>
       </CardContent>
     </Card>
   );
 }
 
-// =====================================================================
-// WaterBar
-// =====================================================================
-function WaterBar({ value, goal, cheat, date, waters, onChanged }: { value: number; goal: Goal; cheat: boolean; date: string; waters: WaterRow[]; onChanged: () => void }) {
-  const v = value;
-  // No cap on water — the bar just eases from blue toward green as you approach the target, then stays green.
-  const pct = goal.waterTarget > 0 ? Math.min((v / goal.waterTarget) * 100, 100) : 0;
-  const color = buildupColor(cheat, pct, "--color-water");
-  const widthPct = pct;
-  const fillColor = cheat ? "var(--color-muted)" : `color-mix(in oklch, ${color}, white 84%)`;
+function MacroStat({ label, value, target }: { label: string; value: number; target: number }) {
+  const v = round1(value);
+  const pct = target > 0 ? Math.min((v / target) * 100, 100) : 0;
+  return (
+    <div className="min-w-[54px]">
+      <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</div>
+      <div className="mt-0.5 font-mono text-base font-semibold tabular-nums">
+        {v}
+        <span className="text-[11px] font-normal text-muted-foreground">/{target}g</span>
+      </div>
+      <div className="mt-1 h-1 w-full overflow-hidden rounded-full bg-muted">
+        <div className="h-full rounded-full bg-foreground transition-[width] duration-300" style={{ width: `${pct}%` }} />
+      </div>
+    </div>
+  );
+}
 
-  const add = async (ml: number) => {
-    try {
-      await api.post("/calories/water", { date, ml });
-      onChanged();
-    } catch (e) {
-      toast.error(getApiError(e));
-    }
-  };
-
-  const removeLast = async () => {
-    if (waters.length === 0) return;
-    const last = waters[waters.length - 1];
-    try {
-      await api.delete(`/calories/water/${last._id}`);
-      onChanged();
-    } catch (e) {
-      toast.error(getApiError(e));
-    }
-  };
+// =====================================================================
+// WaterCard
+// =====================================================================
+function WaterCard({ total, goal, waters, onAdd, onRemove }: { total: number; goal: Goal; waters: WaterRow[]; onAdd: (ml: number) => void; onRemove: (row: WaterRow) => void }) {
+  const pct = goal.waterTarget > 0 ? Math.min((total / goal.waterTarget) * 100, 100) : 0;
+  const hitMin = total >= goal.waterMin;
 
   return (
-    <Card className="relative h-full overflow-hidden border-border/80 bg-card">
-      <motion.div
-        aria-hidden="true"
-        className="absolute inset-y-0 left-0"
-        initial={{ width: 0 }}
-        animate={{ width: `${widthPct}%` }}
-        transition={{ duration: 0.55, ease: [0.16, 1, 0.3, 1] }}
-        style={{ background: fillColor }}
-      />
-      <CardContent className="relative flex h-full flex-col justify-between p-3">
-        <div className="flex items-baseline justify-between gap-2 mb-1">
-          <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium flex items-center gap-1">
-            <Droplet className="h-2.5 w-2.5" style={{ color: "var(--color-water)" }} />
-            Water
-          </span>
-          <span className="text-[10px] font-mono tabular-nums text-muted-foreground">Target {(goal.waterTarget / 1000).toFixed(1)}L</span>
+    <Card>
+      <CardContent className="px-4 py-0">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              <Droplet className="h-3 w-3" aria-hidden />
+              Water
+            </div>
+            <div className="mt-0.5 flex items-baseline gap-1.5">
+              <span className="font-mono text-2xl font-semibold tabular-nums tracking-tight">{(total / 1000).toFixed(2)}</span>
+              <span className="text-sm text-muted-foreground">L</span>
+              <span className="ml-1 font-mono text-[11px] tabular-nums text-muted-foreground">of {(goal.waterTarget / 1000).toFixed(1)}L</span>
+            </div>
+          </div>
+          <div className="font-mono text-[11px] tabular-nums text-muted-foreground">
+            {Math.round(pct)}% · {hitMin ? "minimum met" : `${((goal.waterMin - total) / 1000).toFixed(2)}L to minimum`}
+          </div>
         </div>
-        <div className="flex items-baseline gap-1.5">
-          <AnimatePresence mode="wait">
-            <motion.span key={v} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }} transition={{ duration: 0.2 }} className="text-2xl font-semibold font-mono tabular-nums tracking-tight" style={{ color }}>
-              {(v / 1000).toFixed(1)}
-            </motion.span>
-          </AnimatePresence>
-          <span className="text-xs text-muted-foreground font-medium">L</span>
+
+        <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-muted" role="progressbar" aria-valuenow={Math.round(pct)} aria-valuemin={0} aria-valuemax={100}>
+          <motion.div className="h-full rounded-full bg-foreground" initial={false} animate={{ width: `${pct}%` }} transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }} />
         </div>
-        <div className="mt-2 flex items-center justify-between text-[10px] font-mono tabular-nums text-muted-foreground">
-          <span>{Math.round(pct)}%</span>
-          <span>{waters.length} logs</span>
+
+        <div className="mt-3 flex flex-wrap items-center gap-1.5">
+          {WATER_STEPS.map((ml) => (
+            <Button key={ml} variant="outline" size="sm" className="h-10 flex-1 font-mono text-xs tabular-nums" onClick={() => onAdd(ml)} aria-label={`Add ${ml} millilitres of water`}>
+              +{ml}
+            </Button>
+          ))}
         </div>
-        {/* Quick add */}
-        <div className="grid grid-cols-[1fr_1fr_1fr_auto] items-center gap-1.5 mt-2">
-          <Button variant="outline" size="sm" className="h-7 px-2 text-[11px] font-mono tabular-nums" onClick={() => add(200)}>
-            +200
-          </Button>
-          <Button variant="outline" size="sm" className="h-7 px-2 text-[11px] font-mono tabular-nums" onClick={() => add(300)}>
-            +300
-          </Button>
-          <Button variant="outline" size="sm" className="h-7 px-2 text-[11px] font-mono tabular-nums" onClick={() => add(600)}>
-            +600
-          </Button>
-          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={removeLast} disabled={waters.length === 0} aria-label="Undo last">
-            <Trash2 className="h-3 w-3" />
-          </Button>
-        </div>
+
+        {waters.length > 0 && (
+          <div className="mt-2.5 flex flex-wrap gap-1.5 border-t border-border pt-2.5">
+            {waters.map((w) => (
+              <button
+                key={w._id}
+                type="button"
+                onClick={() => onRemove(w)}
+                aria-label={`Remove the ${w.ml} millilitre entry`}
+                className="group inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 font-mono text-[11px] tabular-nums text-muted-foreground transition-colors hover:border-foreground hover:text-foreground"
+              >
+                {w.ml}
+                <Trash2 className="h-2.5 w-2.5 opacity-0 transition-opacity group-hover:opacity-100" aria-hidden />
+              </button>
+            ))}
+          </div>
+        )}
       </CardContent>
     </Card>
   );
@@ -601,9 +531,23 @@ function WaterBar({ value, goal, cheat, date, waters, onChanged }: { value: numb
 // =====================================================================
 // MealCard
 // =====================================================================
-function MealCard({ meal, entries, total, onAdd, onChanged, onFoodDrop }: { meal: Meal; entries: Entry[]; total: number; onAdd: () => void; onChanged: () => void; onFoodDrop: (food: Food) => void }) {
+function MealCard({
+  meal,
+  entries,
+  onAdd,
+  onEdit,
+  onDelete,
+  onFoodDrop,
+}: {
+  meal: Meal;
+  entries: Entry[];
+  onAdd: () => void;
+  onEdit: (entry: Entry, patch: { grams?: number; units?: number }) => void;
+  onDelete: (entry: Entry) => void;
+  onFoodDrop: (food: Food) => void;
+}) {
   const [isOver, setIsOver] = useState(false);
-  const accent = mealAccent(meal);
+  const total = entries.reduce((s, e) => s + entryTotals(e).cal, 0);
 
   const handleDrop = (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -613,70 +557,63 @@ function MealCard({ meal, entries, total, onAdd, onChanged, onFoodDrop }: { meal
     try {
       onFoodDrop(JSON.parse(raw) as Food);
     } catch {
-      toast.error("Could not read dragged food.");
+      toast.error("Could not read the dragged food.");
     }
   };
 
   return (
-    <Card className={`h-full min-h-[235px] border-border/80 transition-all ${isOver ? "ring-2 ring-foreground/30 bg-muted/40" : "bg-card"}`}>
-      <CardContent className="flex h-full flex-col p-0">
-        <div
-          className="flex items-center justify-between border-b border-border px-3 py-2.5"
-          style={{
-            background: accent.header,
-          }}
-        >
-          <div className="flex items-center gap-2">
-            <span
-              className="text-[11px] font-semibold px-2 py-0.5 rounded border"
-              style={{
-                color: accent.color,
-                background: accent.background,
-                borderColor: accent.borderColor,
-              }}
-            >
-              {MEAL_LABELS[meal]}
-            </span>
-            <span className="text-xs font-mono tabular-nums text-muted-foreground">
+    <Card className={`h-full transition-colors ${isOver ? "ring-2 ring-foreground/40" : ""}`}>
+      <CardContent className="flex h-full flex-col px-0 py-0">
+        <div className="flex items-center justify-between gap-2 border-b border-border px-3 pb-2.5">
+          <div className="flex min-w-0 items-center gap-2">
+            <h2 className="text-sm font-semibold">{MEAL_LABELS[meal]}</h2>
+            <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
               {entries.length} {entries.length === 1 ? "item" : "items"}
             </span>
           </div>
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-semibold font-mono tabular-nums">{round(total)}</span>
-            <span className="text-xs text-muted-foreground">cal</span>
-            <Button variant="outline" size="sm" className="h-7 ml-2" onClick={onAdd}>
-              <Plus className="h-3 w-3 mr-1" />
-              Add
+          <div className="flex shrink-0 items-center gap-2">
+            <span className="font-mono text-sm font-semibold tabular-nums">
+              {round(total)}
+              <span className="ml-1 text-[11px] font-normal text-muted-foreground">cal</span>
+            </span>
+            <Button variant="outline" size="icon" className="h-8 w-8" onClick={onAdd} aria-label={`Add food to ${MEAL_LABELS[meal]}`}>
+              <Plus className="h-4 w-4" aria-hidden />
             </Button>
           </div>
         </div>
 
         <div
-          className="flex flex-1 flex-col p-2.5"
-          onDragEnter={(event) => {
-            event.preventDefault();
+          className="flex flex-1 flex-col px-1.5 pt-1.5"
+          onDragEnter={(e) => {
+            e.preventDefault();
             setIsOver(true);
           }}
-          onDragOver={(event) => {
-            event.preventDefault();
-            event.dataTransfer.dropEffect = "copy";
+          onDragOver={(e) => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = "copy";
             setIsOver(true);
           }}
-          onDragLeave={(event) => {
-            if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setIsOver(false);
+          onDragLeave={(e) => {
+            if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setIsOver(false);
           }}
           onDrop={handleDrop}
         >
           {entries.length === 0 ? (
-            <div className="flex min-h-[140px] flex-1 items-center justify-center rounded-xl border border-dashed border-border bg-muted/25 text-xs font-medium text-muted-foreground">Nothing logged.</div>
+            <button
+              type="button"
+              onClick={onAdd}
+              className="flex min-h-[92px] flex-1 items-center justify-center rounded-lg border border-dashed border-border text-xs font-medium text-muted-foreground transition-colors hover:border-border-strong hover:bg-muted/40"
+            >
+              Nothing logged — tap to add
+            </button>
           ) : (
-            <div className="space-y-1">
-            <AnimatePresence initial={false}>
-              {entries.map((e) => (
-                <EntryRow key={e._id} entry={e} onChanged={onChanged} />
-              ))}
-            </AnimatePresence>
-          </div>
+            <div className="space-y-0.5">
+              <AnimatePresence initial={false}>
+                {entries.map((e) => (
+                  <EntryRow key={e._id} entry={e} onEdit={onEdit} onDelete={onDelete} />
+                ))}
+              </AnimatePresence>
+            </div>
           )}
         </div>
       </CardContent>
@@ -685,199 +622,183 @@ function MealCard({ meal, entries, total, onAdd, onChanged, onFoodDrop }: { meal
 }
 
 // =====================================================================
-// EntryRow
+// EntryRow — adjust in place instead of opening a dialog for a number
 // =====================================================================
-function EntryRow({ entry, onChanged }: { entry: Entry; onChanged: () => void }) {
-  const [editOpen, setEditOpen] = useState(false);
-  const [deleteOpen, setDeleteOpen] = useState(false);
-  const [value, setValue] = useState(entry.entryMode === "perUnit" ? (entry.units ?? 1).toString() : (entry.grams ?? 0).toString());
-
-  const handleEditOpen = (next: boolean) => {
-    if (next) {
-      setValue(entry.entryMode === "perUnit" ? (entry.units ?? 1).toString() : (entry.grams ?? 0).toString());
-    }
-    setEditOpen(next);
-  };
-
-  const save = async () => {
-    const n = parseFloat(value);
-    if (!n || n <= 0) return toast.error("Invalid value");
-    try {
-      const body = entry.entryMode === "perUnit" ? { units: n } : { grams: n };
-      await api.patch(`/calories/${entry._id}`, body);
-      setEditOpen(false);
-      toast.success("Updated");
-      onChanged();
-    } catch (e) {
-      toast.error(getApiError(e));
-    }
-  };
-
-  const del = async () => {
-    try {
-      await api.delete(`/calories/${entry._id}`);
-      toast.success("Deleted");
-      onChanged();
-    } catch (e) {
-      toast.error(getApiError(e));
-    }
-  };
-
+function EntryRow({ entry, onEdit, onDelete }: { entry: Entry; onEdit: (entry: Entry, patch: { grams?: number; units?: number }) => void; onDelete: (entry: Entry) => void }) {
+  const isUnit = entry.entryMode === "perUnit";
+  const amount = isUnit ? (entry.units ?? 0) : (entry.grams ?? 0);
+  const step = isUnit ? 1 : 25;
   const t = entryTotals(entry);
-  const unitText = entry.unitLabelSnapshot || "unit";
-  const amountText = entry.entryMode === "perUnit" ? `${entry.units} ${unitText}${(entry.units ?? 0) > 1 ? "s" : ""}` : `${entry.grams}g`;
+  const label = isUnit ? `${round1(amount)} ${entry.unitLabelSnapshot || "unit"}${amount === 1 ? "" : "s"}` : `${round(amount)}g`;
+
+  const bump = (delta: number) => {
+    const next = round1(Math.max(step, amount + delta));
+    if (next === amount) return;
+    onEdit(entry, isUnit ? { units: next } : { grams: next });
+  };
 
   return (
-    <>
-      <motion.button type="button" layout initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, x: -8 }} transition={{ duration: 0.2 }} onClick={() => handleEditOpen(true)} className="w-full flex items-center justify-between py-2 hover:bg-muted/40 rounded-md transition-colors text-left cursor-pointer">
-        <div className="flex items-center gap-2.5 min-w-0 flex-1">
-          <span className="text-sm font-medium truncate text-foreground">{entry.foodNameSnapshot}</span>
-          <span className="text-[11px] font-mono tabular-nums text-muted-foreground rounded border border-foreground/30 px-1.5 py-0.5 flex-shrink-0">{amountText}</span>
+    <motion.div layout="position" initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, x: -8 }} transition={{ duration: 0.18 }} className="group flex items-center gap-1.5 rounded-lg px-1.5 py-1 transition-colors hover:bg-muted/50">
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-sm font-medium">{entry.foodNameSnapshot}</div>
+        <div className="font-mono text-[11px] tabular-nums text-muted-foreground">
+          {label} · {round(t.cal)} cal · P {round1(t.p)} C {round1(t.c)} F {round1(t.f)}
         </div>
-        <span className="text-sm font-semibold font-mono tabular-nums flex-shrink-0">
-          {round(t.cal)} <span className="text-muted-foreground text-xs font-normal">cal</span>
-        </span>
-      </motion.button>
+      </div>
 
-      <Dialog open={editOpen} onOpenChange={handleEditOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{entry.foodNameSnapshot}</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3">
-            <div className="space-y-1.5">
-              <Label className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">{entry.entryMode === "perUnit" ? `${unitText}s` : "Grams"}</Label>
-              <Input type="number" step="1" value={value} onChange={(e) => setValue(e.target.value)} className="font-mono tabular-nums" />
-            </div>
-            <div className="rounded-md p-3 text-sm" style={{ background: "var(--color-muted)" }}>
-              <div className="font-semibold font-mono tabular-nums">{round(t.cal)} cal</div>
-              <div className="text-xs text-muted-foreground font-mono tabular-nums mt-0.5">
-                P {round1(t.p)}g - C {round1(t.c)}g - F {round1(t.f)}g
-              </div>
-            </div>
-          </div>
-          <DialogFooter className="flex justify-between sm:justify-between">
-            <Button
-              variant="ghost"
-              size="default"
-              onClick={() => {
-                setEditOpen(false);
-                setDeleteOpen(true);
-              }}
-            >
-              <Trash2 className="h-3.5 w-3.5 mr-1.5" />
-              Delete
-            </Button>
-            <Button variant="default" size="default" onClick={save}>
-              Save
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete this entry?</AlertDialogTitle>
-            <AlertDialogDescription>{entry.foodNameSnapshot}</AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel variant="outline" size="default">
-              Cancel
-            </AlertDialogCancel>
-            <AlertDialogAction variant="destructive" size="default" onClick={del}>
-              Delete
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </>
+      <div className="flex shrink-0 items-center gap-0.5 opacity-70 transition-opacity focus-within:opacity-100 group-hover:opacity-100 md:opacity-0">
+        <button type="button" onClick={() => bump(-step)} disabled={amount <= step} aria-label={`Less ${entry.foodNameSnapshot}`} className="grid h-9 w-9 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-30">
+          <Minus className="h-3.5 w-3.5" aria-hidden />
+        </button>
+        <button type="button" onClick={() => bump(step)} aria-label={`More ${entry.foodNameSnapshot}`} className="grid h-9 w-9 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
+          <Plus className="h-3.5 w-3.5" aria-hidden />
+        </button>
+        <button type="button" onClick={() => onDelete(entry)} aria-label={`Remove ${entry.foodNameSnapshot}`} className="grid h-9 w-9 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-destructive">
+          <Trash2 className="h-3.5 w-3.5" aria-hidden />
+        </button>
+      </div>
+    </motion.div>
   );
 }
 
 // =====================================================================
-// FoodRail
+// FoodShelf
 // =====================================================================
-function FoodRail({
+function FoodShelf({
   foods,
   recentIds,
   search,
   onSearchChange,
-  onFoodClick,
+  onQuickLog,
+  onOpenPicker,
+  draggable = false,
+  bare = false,
 }: {
   foods: Food[];
   recentIds: string[];
   search: string;
-  onSearchChange: (value: string) => void;
-  onFoodClick: (food: Food) => void;
+  onSearchChange: (v: string) => void;
+  onQuickLog: (food: Food) => void;
+  onOpenPicker: (food: Food) => void;
+  draggable?: boolean;
+  bare?: boolean;
 }) {
   const recentFoods = useMemo(() => {
     const byId = new Map(foods.map((f) => [f._id, f]));
     return recentIds.map((id) => byId.get(id)).filter((f): f is Food => !!f);
   }, [foods, recentIds]);
 
-  const visibleFoods = useMemo(() => {
+  const visible = useMemo(() => {
     const s = search.trim().toLowerCase();
     if (s) return foods.filter((f) => f.name.toLowerCase().includes(s) || f.category.toLowerCase().includes(s));
-    return recentFoods.length > 0 ? recentFoods : foods.slice(0, 24);
+    return recentFoods.length > 0 ? recentFoods : foods.slice(0, 20);
   }, [foods, recentFoods, search]);
 
-  const label = search.trim() ? "Results" : recentFoods.length > 0 ? "Frequently used" : "Suggested";
+  const heading = search.trim() ? "Results" : recentFoods.length > 0 ? "Frequently used" : "Your foods";
+
+  const body = (
+    <>
+      <div className="relative">
+        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden />
+        <Input className="h-11 pl-9 text-base sm:text-sm" value={search} onChange={(e) => onSearchChange(e.target.value)} placeholder="Search foods…" aria-label="Search foods" />
+      </div>
+
+      <div className="mt-3 flex items-baseline justify-between">
+        <h2 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{heading}</h2>
+        <span className="font-mono text-[10px] tabular-nums text-muted-foreground">{visible.length}</span>
+      </div>
+
+      <div className={`mt-2 space-y-1.5 ${bare ? "" : "max-h-[calc(100svh-230px)] overflow-y-auto pr-1"}`}>
+        {visible.length === 0 ? (
+          <p className="rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted-foreground">No foods match.</p>
+        ) : (
+          visible.map((food) => <FoodTile key={food._id} food={food} draggable={draggable} onQuickLog={() => onQuickLog(food)} onOpenPicker={() => onOpenPicker(food)} />)
+        )}
+      </div>
+    </>
+  );
+
+  if (bare) return <div>{body}</div>;
 
   return (
-    <motion.aside {...stagger(8)} className="min-w-0 xl:sticky xl:top-0 xl:self-start">
-      <Card className="border-border/80 bg-card shadow-sm">
-        <CardContent className="p-3">
-          <div className="mb-3 flex items-start justify-between gap-3">
-            <div>
-              <div className="text-base font-semibold tracking-tight">Food shelf</div>
-              <div className="text-xs text-muted-foreground">Frequent foods and search.</div>
-            </div>
-            <span className="rounded-full border border-border bg-muted px-2 py-1 text-[10px] font-mono tabular-nums text-muted-foreground">{visibleFoods.length}</span>
-          </div>
+    <Card>
+      <CardContent className="px-3 py-0">{body}</CardContent>
+    </Card>
+  );
+}
 
-          <div className="relative mb-3">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <Input className="h-10 rounded-xl pl-9" value={search} onChange={(e) => onSearchChange(e.target.value)} placeholder="Search foods, protein, drinks..." />
-          </div>
+// =====================================================================
+// FoodTile — tap logs one serving, the chevron opens the full picker
+// =====================================================================
+function FoodTile({ food, draggable = false, onQuickLog, onOpenPicker }: { food: Food; draggable?: boolean; onQuickLog: () => void; onOpenPicker: () => void }) {
+  const canQuickLog = quickLogAmount(food) !== null;
 
-          <div className="mb-2 flex items-center justify-between">
-            <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</div>
-            <div className="text-[10px] font-medium text-muted-foreground">Serving</div>
-          </div>
+  return (
+    <div
+      draggable={draggable}
+      onDragStart={(e) => {
+        if (!draggable) return;
+        e.dataTransfer.effectAllowed = "copy";
+        e.dataTransfer.setData(DRAG_FOOD_TYPE, JSON.stringify(food));
+      }}
+      className={`group flex items-center gap-1 rounded-lg border border-border bg-card p-1.5 transition-colors hover:border-border-strong ${draggable ? "cursor-grab active:cursor-grabbing" : ""}`}
+    >
+      {draggable && <GripVertical className="h-4 w-4 shrink-0 text-muted-foreground opacity-30 transition-opacity group-hover:opacity-70" aria-hidden />}
 
-          <div className="grid max-h-[calc(100svh-250px)] min-h-[520px] grid-cols-1 gap-2 overflow-y-auto pr-1 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
-            {visibleFoods.length === 0 ? (
-              <div className="col-span-full rounded-xl border border-dashed border-border bg-muted/30 p-6 text-center text-sm text-muted-foreground">No foods match.</div>
-            ) : (
-              visibleFoods.map((food) => <FoodTile key={food._id} food={food} onClick={() => onFoodClick(food)} draggable />)
-            )}
-          </div>
-        </CardContent>
-      </Card>
-    </motion.aside>
+      <button type="button" onClick={canQuickLog ? onQuickLog : onOpenPicker} className="min-w-0 flex-1 text-left" aria-label={canQuickLog ? `Log ${servingLabel(food)} of ${food.name}` : `Choose an amount for ${food.name}`}>
+        <div className="flex items-center gap-1.5">
+          <span className="truncate text-sm font-medium">{food.name}</span>
+          {food.trackInFridge && <ShoppingBasket className="h-3 w-3 shrink-0 text-muted-foreground" aria-label="Tracked in the Kitchen" />}
+        </div>
+        <div className="font-mono text-[11px] tabular-nums text-muted-foreground">
+          {foodHeadlineCalories(food)} cal {foodHeadlineUnit(food)}
+          {canQuickLog ? <span className="ml-1.5 text-muted-foreground/70">· tap for {servingLabel(food)}</span> : <span className="ml-1.5 text-muted-foreground/70">· pick an amount</span>}
+        </div>
+      </button>
+
+      <button type="button" onClick={onOpenPicker} aria-label={`Choose a custom amount of ${food.name}`} className="grid h-9 w-9 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
+        <ChevronRight className="h-4 w-4" aria-hidden />
+      </button>
+    </div>
   );
 }
 
 // =====================================================================
 // FoodPickerDialog
 // =====================================================================
-function FoodPickerDialog({ open, onOpenChange, foods, recentIds, meal, date, initialFood, onSaved }: { open: boolean; onOpenChange: (b: boolean) => void; foods: Food[]; recentIds: string[]; meal: Meal; date: string; initialFood: Food | null; onSaved: () => void }) {
+function FoodPickerDialog({
+  open,
+  onOpenChange,
+  foods,
+  recentIds,
+  meal,
+  date,
+  initialFood,
+  onLogged,
+  onRecent,
+}: {
+  open: boolean;
+  onOpenChange: (b: boolean) => void;
+  foods: Food[];
+  recentIds: string[];
+  meal: Meal;
+  date: string;
+  initialFood: Food | null;
+  onLogged: (entry: Entry) => void;
+  onRecent: () => void;
+}) {
   const [search, setSearch] = useState("");
   const [picked, setPicked] = useState<Food | null>(null);
-  const [grams, setGrams] = useState("");
-  const [units, setUnits] = useState("1");
-  const [meal2, setMeal2] = useState<Meal>(meal);
+  const [amount, setAmount] = useState("");
+  const [targetMeal, setTargetMeal] = useState<Meal>(meal);
+  const [saving, setSaving] = useState(false);
 
-  // Reset state every time the dialog opens (or the meal changes while opening)
   useEffect(() => {
-    if (open) {
-      setSearch("");
-      setPicked(initialFood);
-      setGrams(initialFood?.entryMode === "perGram" ? initialFood.defaultServingGrams?.toString() ?? "" : "");
-      setUnits("1");
-      setMeal2(meal);
-    }
+    if (!open) return;
+    setSearch("");
+    setPicked(initialFood);
+    setTargetMeal(meal);
+    setAmount(initialFood ? String(quickLogAmount(initialFood) ?? "") : "");
   }, [open, meal, initialFood]);
 
   const recentFoods = useMemo(() => {
@@ -887,127 +808,97 @@ function FoodPickerDialog({ open, onOpenChange, foods, recentIds, meal, date, in
 
   const filtered = useMemo(() => {
     const s = search.trim().toLowerCase();
-    if (!s) return foods;
-    return foods.filter((f) => f.name.toLowerCase().includes(s));
-  }, [foods, search]);
+    if (!s) return recentFoods.length > 0 ? recentFoods : foods;
+    return foods.filter((f) => f.name.toLowerCase().includes(s) || f.category.toLowerCase().includes(s));
+  }, [foods, recentFoods, search]);
 
-  const pickFood = (f: Food) => {
+  const pick = (f: Food) => {
     setPicked(f);
-    if (f.entryMode === "perUnit") setUnits("1");
-    else setGrams(f.defaultServingGrams?.toString() ?? "");
+    setAmount(String(quickLogAmount(f) ?? ""));
   };
+
+  const n = Number(amount);
+  const valid = Number.isFinite(n) && n > 0;
+  const preview = picked && valid ? foodMacros(picked, n) : null;
+  const isUnit = picked?.entryMode === "perUnit";
+  const presets = isUnit ? [1, 2, 3] : [50, 100, 150, 200, 250];
 
   const save = async () => {
-    if (!picked) return;
+    if (!picked || !valid || saving) return;
+    setSaving(true);
     try {
-      const body: Record<string, unknown> = {
-        date,
-        foodId: picked._id,
-        meal: meal2,
-      };
-      if (picked.entryMode === "perUnit") {
-        const n = parseFloat(units);
-        if (!n || n <= 0) return toast.error("Enter units");
-        body.units = n;
-      } else {
-        const g = parseFloat(grams);
-        if (!g || g <= 0) return toast.error("Enter grams");
-        body.grams = g;
-      }
-      await api.post("/calories", body);
-      toast.success("Logged");
+      const body = isUnit ? { date, foodId: picked._id, meal: targetMeal, units: n } : { date, foodId: picked._id, meal: targetMeal, grams: n };
+      const r = await api.post<Entry>("/calories", body);
+      onLogged(r.data);
+      onRecent();
       onOpenChange(false);
-      onSaved();
     } catch (e) {
       toast.error(getApiError(e));
+    } finally {
+      setSaving(false);
     }
   };
-
-  let previewCal = 0,
-    previewP = 0,
-    previewC = 0,
-    previewF = 0;
-  if (picked) {
-    if (picked.entryMode === "perUnit") {
-      const n = parseFloat(units) || 0;
-      previewCal = round(n * picked.caloriesPerUnit);
-      previewP = round1(n * picked.proteinPerUnit);
-      previewC = round1(n * picked.carbsPerUnit);
-      previewF = round1(n * picked.fatPerUnit);
-    } else {
-      const g = parseFloat(grams) || 0;
-      previewCal = round(g * picked.caloriesPerGram);
-      previewP = round1(g * picked.proteinPerGram);
-      previewC = round1(g * picked.carbsPerGram);
-      previewF = round1(g * picked.fatPerGram);
-    }
-  }
-
-  const pickedUnitText = picked?.unitLabel || "unit";
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="!max-w-[680px] max-h-[92vh] overflow-y-auto">
+      <DialogContent className="!w-[calc(100vw-1rem)] !max-w-[560px] max-h-[90svh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>{picked ? picked.name : "Pick a food"}</DialogTitle>
+          <DialogTitle>{picked ? picked.name : `Add to ${MEAL_LABELS[meal]}`}</DialogTitle>
         </DialogHeader>
 
         {!picked ? (
-          <div className="space-y-4">
+          <div className="space-y-3">
             <div className="relative">
-              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
-              <Input className="pl-8" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search foods..." autoFocus />
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden />
+              <Input className="h-11 pl-9 text-base sm:text-sm" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search foods…" aria-label="Search foods" autoFocus />
             </div>
-
-            {!search && recentFoods.length > 0 && (
-              <div className="space-y-2">
-                <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Recent</div>
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                  {recentFoods.map((f) => (
-                    <FoodTile key={f._id} food={f} onClick={() => pickFood(f)} />
-                  ))}
-                </div>
-              </div>
-            )}
-
-            <div className="space-y-2">
-              <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">{search ? "Results" : "All foods"}</div>
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-72 overflow-y-auto pr-1">
-                {filtered.length === 0 && <p className="col-span-full text-muted-foreground text-sm py-2">No foods match.</p>}
-                {filtered.map((f) => (
-                  <FoodTile key={f._id} food={f} onClick={() => pickFood(f)} />
-                ))}
-              </div>
+            <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{search.trim() ? "Results" : recentFoods.length > 0 ? "Frequently used" : "All foods"}</div>
+            <div className="max-h-[46svh] space-y-1.5 overflow-y-auto pr-1">
+              {filtered.length === 0 && <p className="py-4 text-center text-sm text-muted-foreground">No foods match.</p>}
+              {filtered.map((f) => (
+                <button key={f._id} type="button" onClick={() => pick(f)} className="flex w-full items-center justify-between gap-2 rounded-lg border border-border p-2.5 text-left transition-colors hover:border-border-strong hover:bg-muted/50">
+                  <span className="min-w-0">
+                    <span className="block truncate text-sm font-medium">{f.name}</span>
+                    <span className="block font-mono text-[11px] tabular-nums text-muted-foreground">
+                      {foodHeadlineCalories(f)} cal {foodHeadlineUnit(f)}
+                    </span>
+                  </span>
+                  <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+                </button>
+              ))}
             </div>
           </div>
         ) : (
-          <div className="space-y-4">
-            <div className="text-xs text-muted-foreground font-mono tabular-nums">
-              {picked.entryMode === "perUnit" ? `per ${pickedUnitText}: ${round1(picked.caloriesPerUnit)} cal - P ${round1(picked.proteinPerUnit)} - C ${round1(picked.carbsPerUnit)} - F ${round1(picked.fatPerUnit)}` : `per 100g: ${round1(picked.caloriesPerGram * 100)} cal - P ${round1(picked.proteinPerGram * 100)} - C ${round1(picked.carbsPerGram * 100)} - F ${round1(picked.fatPerGram * 100)}`}
+          <div className="space-y-3">
+            <div className="font-mono text-[11px] tabular-nums text-muted-foreground">
+              {isUnit
+                ? `per ${unitWord(picked)}: ${round1(picked.caloriesPerUnit)} cal · P ${round1(picked.proteinPerUnit)} · C ${round1(picked.carbsPerUnit)} · F ${round1(picked.fatPerUnit)}`
+                : `per 100g: ${round1(picked.caloriesPerGram * 100)} cal · P ${round1(picked.proteinPerGram * 100)} · C ${round1(picked.carbsPerGram * 100)} · F ${round1(picked.fatPerGram * 100)}`}
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              {picked.entryMode === "perUnit" ? (
-                <div className="space-y-1.5">
-                  <Label className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">{pickedUnitText}s</Label>
-                  <Input type="number" step="1" min="1" value={units} onChange={(e) => setUnits(e.target.value)} className="font-mono tabular-nums" autoFocus />
-                </div>
-              ) : (
-                <div className="space-y-1.5">
-                  <Label className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Grams</Label>
-                  <Input type="number" step="1" value={grams} onChange={(e) => setGrams(e.target.value)} className="font-mono tabular-nums" autoFocus />
-                  {picked.defaultServingGrams && <p className="text-[10px] text-muted-foreground">Default: {picked.defaultServingGrams}g</p>}
-                </div>
-              )}
+
+            <div className="grid gap-3 sm:grid-cols-2">
               <div className="space-y-1.5">
-                <Label className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Meal</Label>
-                <Select value={meal2} onValueChange={(v) => setMeal2((v ?? "breakfast") as Meal)}>
-                  <SelectTrigger className="w-full !h-8 capitalize">
+                <Label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{isUnit ? unitWord(picked, 2) : "Grams"}</Label>
+                <Input type="number" inputMode="decimal" min="0" step={isUnit ? "1" : "5"} value={amount} onChange={(e) => setAmount(e.target.value)} onFocus={(e) => e.currentTarget.select()} className="h-11 font-mono tabular-nums" autoFocus />
+                <div className="flex flex-wrap gap-1">
+                  {presets.map((p) => (
+                    <button key={p} type="button" onClick={() => setAmount(String(p))} className={`rounded-md border px-2 py-1 font-mono text-[11px] tabular-nums transition-colors ${String(p) === amount ? "border-foreground bg-foreground text-background" : "border-border hover:bg-muted"}`}>
+                      {isUnit ? p : `${p}g`}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Meal</Label>
+                <Select value={targetMeal} onValueChange={(v) => setTargetMeal((v ?? "breakfast") as Meal)}>
+                  <SelectTrigger className="w-full !h-11">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
                     {MEALS.map((m) => (
-                      <SelectItem key={m} value={m} className="capitalize">
-                        {m}
+                      <SelectItem key={m} value={m}>
+                        {MEAL_LABELS[m]}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -1015,27 +906,24 @@ function FoodPickerDialog({ open, onOpenChange, foods, recentIds, meal, date, in
               </div>
             </div>
 
-            {previewCal > 0 && (
-              <div className="rounded-md p-3" style={{ background: "var(--color-muted)" }}>
-                <div className="text-2xl font-semibold font-mono tabular-nums tracking-tight">
-                  {previewCal} <span className="text-sm text-muted-foreground font-normal">cal</span>
-                </div>
-                <div className="text-xs text-muted-foreground font-mono tabular-nums mt-0.5">
-                  P {previewP}g - C {previewC}g - F {previewF}g
-                </div>
+            <div className="rounded-lg bg-muted p-3">
+              <div className="font-mono text-2xl font-semibold tabular-nums tracking-tight">
+                {preview ? round(preview.cal) : 0} <span className="text-sm font-normal text-muted-foreground">cal</span>
               </div>
-            )}
-
-            <Button variant="ghost" size="sm" onClick={() => setPicked(null)}>
-              Back to foods
-            </Button>
+              <div className="mt-0.5 font-mono text-[11px] tabular-nums text-muted-foreground">
+                P {preview ? round1(preview.p) : 0}g · C {preview ? round1(preview.c) : 0}g · F {preview ? round1(preview.f) : 0}g
+              </div>
+            </div>
           </div>
         )}
 
         {picked && (
-          <DialogFooter>
-            <Button variant="default" size="default" onClick={save}>
-              Log
+          <DialogFooter className="flex-row justify-between sm:justify-between">
+            <Button variant="ghost" size="default" onClick={() => setPicked(null)}>
+              Back
+            </Button>
+            <Button variant="default" size="default" onClick={save} disabled={!valid || saving}>
+              Log to {MEAL_LABELS[targetMeal]}
             </Button>
           </DialogFooter>
         )}
@@ -1045,81 +933,45 @@ function FoodPickerDialog({ open, onOpenChange, foods, recentIds, meal, date, in
 }
 
 // =====================================================================
-// FoodTile
-// =====================================================================
-function FoodTile({ food, onClick, draggable = false }: { food: Food; onClick: () => void; draggable?: boolean }) {
-  const cal = foodCalories(food);
-  const unitDesc = foodUnitDescription(food);
-  return (
-    <motion.button
-      whileHover={{ y: -1 }}
-      whileTap={{ scale: 0.98 }}
-      draggable={draggable}
-      onDragStartCapture={(event) => {
-        if (!draggable) return;
-        event.dataTransfer.effectAllowed = "copy";
-        event.dataTransfer.setData(DRAG_FOOD_TYPE, JSON.stringify(food));
-      }}
-      onClick={onClick}
-      className={`group/food text-left border border-border bg-card rounded-xl p-3 hover:border-border-strong hover:bg-muted/30 transition-colors ${draggable ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"}`}
-    >
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <div className="text-sm font-semibold truncate flex items-center gap-1.5 text-foreground">
-            {food.name}
-            {food.trackInFridge && <Snowflake className="h-3 w-3 flex-shrink-0" style={{ color: "var(--color-water)" }} />}
-          </div>
-          <div className="mt-1 text-[10px] uppercase tracking-wider text-muted-foreground">{food.category}</div>
-        </div>
-        {draggable && <GripVertical className="mt-0.5 h-4 w-4 flex-shrink-0 text-muted-foreground opacity-45 transition-opacity group-hover/food:opacity-100" />}
-      </div>
-      <div className="mt-3 flex items-center justify-between gap-2">
-        <div className="text-xs font-mono tabular-nums text-foreground">
-          {cal} cal <span className="text-muted-foreground">{unitDesc}</span>
-        </div>
-        <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">{defaultAmountText(food)}</span>
-      </div>
-    </motion.button>
-  );
-}
-
-// =====================================================================
 // GoalDialog
 // =====================================================================
 function GoalDialog({ open, onOpenChange, goal, onSaved }: { open: boolean; onOpenChange: (b: boolean) => void; goal: Goal | null; onSaved: () => void }) {
-  const [calT, setCalT] = useState("2000");
-  const [pT, setPT] = useState("160");
-  const [cT, setCT] = useState("200");
-  const [fT, setFT] = useState("70");
-  const [wMin, setWMin] = useState("2500");
-  const [wTarget, setWTarget] = useState("3000");
-  const [wMax, setWMax] = useState("3500");
+  const [form, setForm] = useState<Record<keyof Goal, string>>({
+    caloriesTarget: "2000",
+    proteinTarget: "160",
+    carbsTarget: "200",
+    fatTarget: "70",
+    waterMin: "2500",
+    waterTarget: "3000",
+    waterMax: "3500",
+  });
 
-  const handleOpenChange = (next: boolean) => {
-    if (next && goal) {
-      setCalT(goal.caloriesTarget.toString());
-      setPT(goal.proteinTarget.toString());
-      setCT(goal.carbsTarget.toString());
-      setFT(goal.fatTarget.toString());
-      setWMin(goal.waterMin.toString());
-      setWTarget(goal.waterTarget.toString());
-      setWMax(goal.waterMax.toString());
+  useEffect(() => {
+    if (open && goal) {
+      setForm({
+        caloriesTarget: String(goal.caloriesTarget),
+        proteinTarget: String(goal.proteinTarget),
+        carbsTarget: String(goal.carbsTarget),
+        fatTarget: String(goal.fatTarget),
+        waterMin: String(goal.waterMin),
+        waterTarget: String(goal.waterTarget),
+        waterMax: String(goal.waterMax),
+      });
     }
-    onOpenChange(next);
-  };
+  }, [open, goal]);
+
+  const set = (k: keyof Goal, v: string) => setForm((f) => ({ ...f, [k]: v }));
+  const num = (k: keyof Goal) => Number(form[k]);
 
   const save = async () => {
+    const values = Object.fromEntries(Object.keys(form).map((k) => [k, num(k as keyof Goal)])) as Record<keyof Goal, number>;
+    if (Object.values(values).some((v) => !Number.isFinite(v) || v < 0)) return toast.error("Every target must be zero or more");
+    // The server rejects an out-of-order band; catching it here explains why.
+    if (values.waterMin > values.waterTarget || values.waterTarget > values.waterMax) {
+      return toast.error("Water needs min ≤ target ≤ max");
+    }
     try {
-      await api.patch("/calories/goal", {
-        caloriesTarget: parseFloat(calT) || 0,
-        proteinTarget: parseFloat(pT) || 0,
-        carbsTarget: parseFloat(cT) || 0,
-        fatTarget: parseFloat(fT) || 0,
-        waterMin: parseFloat(wMin) || 0,
-        waterTarget: parseFloat(wTarget) || 0,
-        waterMax: parseFloat(wMax) || 0,
-      });
-      toast.success("Goals updated");
+      await api.patch("/calories/goal", values);
       onOpenChange(false);
       onSaved();
     } catch (e) {
@@ -1127,53 +979,50 @@ function GoalDialog({ open, onOpenChange, goal, onSaved }: { open: boolean; onOp
     }
   };
 
+  const field = (k: keyof Goal, label: string, suffix?: string) => (
+    <div className="space-y-1.5">
+      <Label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+        {label}
+        {suffix ? ` (${suffix})` : ""}
+      </Label>
+      <Input type="number" inputMode="numeric" min="0" value={form[k]} onChange={(e) => set(k, e.target.value)} onFocus={(e) => e.currentTarget.select()} className="h-11 font-mono tabular-nums" />
+    </div>
+  );
+
   return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="!max-w-[520px]">
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="!w-[calc(100vw-1rem)] !max-w-[480px] max-h-[90svh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Weekly targets</DialogTitle>
+          <DialogTitle>Daily targets</DialogTitle>
         </DialogHeader>
+
         <div className="space-y-4">
-          <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Macros (daily max)</div>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Calories</Label>
-              <Input type="number" value={calT} onChange={(e) => setCalT(e.target.value)} className="font-mono tabular-nums" />
+          <div>
+            <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Macros</div>
+            <div className="grid grid-cols-2 gap-3">
+              {field("caloriesTarget", "Calories")}
+              {field("proteinTarget", "Protein", "g")}
+              {field("carbsTarget", "Carbs", "g")}
+              {field("fatTarget", "Fat", "g")}
             </div>
-            <div className="space-y-1.5">
-              <Label className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Protein (g)</Label>
-              <Input type="number" value={pT} onChange={(e) => setPT(e.target.value)} className="font-mono tabular-nums" />
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Carbs (g)</Label>
-              <Input type="number" value={cT} onChange={(e) => setCT(e.target.value)} className="font-mono tabular-nums" />
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Fat (g)</Label>
-              <Input type="number" value={fT} onChange={(e) => setFT(e.target.value)} className="font-mono tabular-nums" />
-            </div>
+            <p className="mt-2 text-[11px] text-muted-foreground">Calories, carbs and fat are ceilings. Protein is a goal to reach.</p>
           </div>
-          <div className="text-[10px] text-muted-foreground">Each is a daily ceiling. Going over turns the bar red.</div>
 
-          <div className="border-t border-border" />
-
-          <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Water (ml)</div>
-          <div className="grid grid-cols-3 gap-3">
-            <div className="space-y-1.5">
-              <Label className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Min</Label>
-              <Input type="number" value={wMin} onChange={(e) => setWMin(e.target.value)} className="font-mono tabular-nums" />
+          <div className="border-t border-border pt-4">
+            <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Water (ml)</div>
+            <div className="grid grid-cols-3 gap-3">
+              {field("waterMin", "Min")}
+              {field("waterTarget", "Target")}
+              {field("waterMax", "Max")}
             </div>
-            <div className="space-y-1.5">
-              <Label className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Target</Label>
-              <Input type="number" value={wTarget} onChange={(e) => setWTarget(e.target.value)} className="font-mono tabular-nums" />
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Max</Label>
-              <Input type="number" value={wMax} onChange={(e) => setWMax(e.target.value)} className="font-mono tabular-nums" />
-            </div>
+            <p className="mt-2 text-[11px] text-muted-foreground">Must stay in order: min ≤ target ≤ max.</p>
           </div>
         </div>
+
         <DialogFooter>
+          <Button variant="outline" size="default" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
           <Button variant="default" size="default" onClick={save}>
             Save targets
           </Button>

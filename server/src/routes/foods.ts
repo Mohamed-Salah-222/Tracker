@@ -109,7 +109,7 @@ router.post("/", async (req, res) => {
 
   const tif = !!trackInFridge;
   if (tif && nutrition.mode !== "perUnit") {
-    return res.status(400).json({ error: "fridge tracking only valid for per-unit foods" });
+    return res.status(400).json({ error: "kitchen tracking only valid for per-unit foods" });
   }
 
   type FoodDoc = {
@@ -235,7 +235,7 @@ router.patch("/:id", async (req, res) => {
 
   if (typeof trackInFridge === "boolean") {
     if (trackInFridge && food.entryMode !== "perUnit") {
-      return res.status(400).json({ error: "fridge tracking only valid for per-unit foods" });
+      return res.status(400).json({ error: "kitchen tracking only valid for per-unit foods" });
     }
     food.trackInFridge = trackInFridge;
   }

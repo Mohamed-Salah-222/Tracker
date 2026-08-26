@@ -1,12 +1,12 @@
 import { Schema, model } from "mongoose";
 
-// NOTE: `reps` is no longer user-input. Reps targets are defined in the
-// frontend exercise catalog. The field is kept for historical data and
-// possible future use but should not be set by current flows.
+// `weight` and `reps` are both user-entered per set. The exercise catalog in
+// `client/src/lib/workoutProgram.ts` only supplies *target* sets/reps as a hint;
+// what is stored here is what was actually lifted.
 const setLogSchema = new Schema(
   {
     sessionId: { type: Schema.Types.ObjectId, ref: "WorkoutSession", required: true, index: true },
-    exerciseId: { type: String, required: true, index: true }, // refers to hardcoded id like "lat-pulldown"
+    exerciseId: { type: String, required: true, index: true }, // refers to a catalog id like "lat-pulldown"
     setNumber: { type: Number, required: true, min: 1 },
     weight: { type: Number, default: null }, // kg, null = not logged
     reps: { type: Number, default: null }, // null = not logged

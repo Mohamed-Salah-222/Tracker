@@ -12,12 +12,9 @@ import paymentsRouter from "./routes/payments";
 import tasksRouter from "./routes/tasks";
 import foodsRouter from "./routes/foods";
 import caloriesRouter from "./routes/calories";
-import fridgeRouter from "./routes/fridge";
+import kitchenRouter from "./routes/kitchen";
 import dashboardRouter from "./routes/dashboard";
 import workoutsRouter from "./routes/workouts";
-import goalsRouter from "./routes/goals";
-import projectsRouter from "./routes/projects";
-import timelineRouter from "./routes/timeline";
 
 dotenv.config();
 
@@ -64,17 +61,11 @@ app.use("/api/foods", foodsRouter);
 
 app.use("/api/calories", caloriesRouter);
 
-app.use("/api/fridge", fridgeRouter);
+app.use("/api/kitchen", kitchenRouter);
 
 app.use("/api/dashboard", dashboardRouter);
 
 app.use("/api/workouts", workoutsRouter);
-
-app.use("/api/goals", goalsRouter);
-
-app.use("/api/projects", projectsRouter);
-
-app.use("/api/timeline", timelineRouter);
 
 // Unknown /api paths get the same JSON shape as everything else.
 app.use("/api", (_req, res) => {

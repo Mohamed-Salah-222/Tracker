@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { motion } from "motion/react";
 import { api } from "../lib/api";
 import { Card, CardContent } from "../components/ui/card";
@@ -6,9 +7,13 @@ import { Button } from "../components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../components/ui/dialog";
 import { Input } from "../components/ui/input";
 import { Checkbox } from "../components/ui/checkbox";
+import { Skeleton } from "../components/ui/skeleton";
+import { toast } from "sonner";
+import { getApiError } from "../lib/food";
 import {
   BarChart3,
   Beef,
+  BookOpen,
   BriefcaseBusiness,
   CalendarCheck,
   Check,
@@ -18,6 +23,7 @@ import {
   Droplets,
   Dumbbell,
   Flame,
+  HandHeart,
   FolderKanban,
   Footprints,
   Languages,
@@ -99,6 +105,12 @@ type DashboardResponse = {
     topHabits: { id: string; label: string; percent: number; actual: number; goal: number }[];
     dayProgress: { date: string; day: number; label: string; percent: number }[];
   };
+  kitchen?: {
+    tracked: number;
+    out: number;
+    low: number;
+    items: { id: string; name: string; count: number; lowThreshold: number; status: "out" | "low" | "ok" }[];
+  };
   rows: TrackerRow[];
 };
 
@@ -124,6 +136,8 @@ const fadeUp = {
 const iconMap = {
   moon: Moon,
   dumbbell: Dumbbell,
+  "book-open": BookOpen,
+  hands: HandHeart,
   languages: Languages,
   "calendar-check": CalendarCheck,
   "list-checks": ListChecks,
@@ -210,6 +224,7 @@ export default function Dashboard() {
   const [amountEdit, setAmountEdit] = useState<AmountEdit | null>(null);
   const [amountValue, setAmountValue] = useState("");
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [goalsOpen, setGoalsOpen] = useState(false);
   const [visibleIds, setVisibleIds] = useState<string[]>(readVisibleRows);
 
   const load = useCallback(async () => {
@@ -349,7 +364,7 @@ export default function Dashboard() {
   const isAtMinMonth = monthKeyToNumber(data.month.key) <= monthKeyToNumber(MIN_MONTH_KEY);
 
   return (
-    <div className="w-full max-w-[1680px] md:max-h-[calc(100svh-3rem)] flex flex-col gap-3 overflow-visible md:overflow-hidden rounded-[18px] md:rounded-[24px] border border-neutral-200 bg-white p-2.5 pb-24 md:p-4 text-neutral-900 shadow-[0_18px_50px_rgba(15,23,42,0.06)]">
+    <div className="w-full max-w-[1680px] md:max-h-[calc(100svh-3rem)] flex flex-col gap-3 overflow-visible md:overflow-hidden rounded-[18px] md:rounded-[24px] border border-neutral-200 bg-white p-2.5 md:p-4 text-neutral-900 shadow-[0_18px_50px_rgba(15,23,42,0.06)]">
       <motion.div {...fadeUp} className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <div className="text-[10px] uppercase tracking-[0.22em] font-semibold text-neutral-500">Habit Tracker</div>
@@ -363,6 +378,10 @@ export default function Dashboard() {
           <Button variant="outline" size="icon" className="h-8 w-8 rounded-md border-neutral-200 bg-white text-neutral-700 shadow-sm hover:bg-neutral-50" onClick={() => setMonthKey(shiftMonth(data.month.key, 1))} aria-label="Next month">
             <ChevronRight className="h-4 w-4" />
           </Button>
+          <Button variant="outline" className="h-8 rounded-md border-neutral-200 bg-white px-3 text-xs text-neutral-700 shadow-sm hover:bg-neutral-50" onClick={() => setGoalsOpen(true)}>
+            <Target className="h-3.5 w-3.5" />
+            Goals
+          </Button>
           <Button variant="outline" className="h-8 rounded-md border-neutral-200 bg-white px-3 text-xs text-neutral-700 shadow-sm hover:bg-neutral-50" onClick={() => setPickerOpen(true)}>
             <SlidersHorizontal className="h-3.5 w-3.5" />
             Trackers
@@ -370,7 +389,7 @@ export default function Dashboard() {
         </div>
       </motion.div>
 
-      <motion.div {...fadeUp} className="grid grid-cols-1 xl:grid-cols-[1.25fr_0.85fr_260px] gap-3 items-stretch">
+      <motion.div {...fadeUp} className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-[1.15fr_0.8fr_230px_230px] gap-3 items-stretch">
         <ChartPanel title="Daily Progress" icon={BarChart3}>
           <DailyProgressChart items={dayProgress} />
         </ChartPanel>
@@ -378,6 +397,7 @@ export default function Dashboard() {
           <WeekStrip days={data.month.days} progress={dayProgress} />
         </ChartPanel>
         <ProgressDonut percent={visibleStats.overallPercent} completed={dailyStats.completed} total={dailyStats.total} />
+        <KitchenRing kitchen={data.kitchen} />
       </motion.div>
 
       <motion.div {...fadeUp} className="grid grid-cols-1 2xl:grid-cols-[minmax(0,1fr)_256px] gap-3 items-start">
@@ -431,11 +451,16 @@ export default function Dashboard() {
         </DialogContent>
       </Dialog>
 
+      <GoalsDialog open={goalsOpen} onOpenChange={setGoalsOpen} onSaved={load} />
+
       <Dialog open={pickerOpen} onOpenChange={setPickerOpen}>
         <DialogContent className="sm:max-w-[520px]">
           <DialogHeader>
             <DialogTitle>Pick Trackers</DialogTitle>
           </DialogHeader>
+          {/* Spelled out because a bare checkbox next to a habit name reads as
+              "mark this done" rather than "show this row". */}
+          <p className="-mt-1 text-xs text-muted-foreground">Choose which rows appear in the grid. This only changes what you see — it does not tick anything off.</p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             {rows.map((row) => (
               <button key={row.id} type="button" onClick={() => toggleVisible(row.id)} className="flex items-center gap-3 rounded-md border border-border px-3 py-2 text-left hover:bg-muted/50 transition-colors">
@@ -455,6 +480,165 @@ export default function Dashboard() {
     </div>
   );
 }
+
+// =====================================================================
+// GoalsDialog — edit the targets every row is measured against
+// =====================================================================
+type GoalsResponse = {
+  caloriesTarget: number;
+  proteinTarget: number;
+  waterTargetMl: number;
+  stepsTarget: number;
+  workDayMoney: number;
+  monthlyByKind: Record<string, number>;
+  editableKinds: { kind: string; label: string; monthly: number | null }[];
+};
+
+const DAILY_FIELDS: { key: keyof GoalsResponse & string; label: string; suffix: string }[] = [
+  { key: "caloriesTarget", label: "Calories", suffix: "cal / day" },
+  { key: "proteinTarget", label: "Protein", suffix: "g / day" },
+  { key: "waterTargetMl", label: "Water", suffix: "ml / day" },
+  { key: "stepsTarget", label: "Steps", suffix: "steps / day" },
+  { key: "workDayMoney", label: "Work", suffix: "$ / weekday" },
+];
+
+function GoalsDialog({ open, onOpenChange, onSaved }: { open: boolean; onOpenChange: (b: boolean) => void; onSaved: () => void }) {
+  const [goals, setGoals] = useState<GoalsResponse | null>(null);
+  const [daily, setDaily] = useState<Record<string, string>>({});
+  const [monthly, setMonthly] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const r = await api.get<GoalsResponse>("/dashboard/goals");
+        if (cancelled) return;
+        setGoals(r.data);
+        setDaily(Object.fromEntries(DAILY_FIELDS.map((f) => [f.key, String(r.data[f.key] ?? 0)])));
+        // Blank means "every day of the month" rather than zero.
+        setMonthly(Object.fromEntries(r.data.editableKinds.map((k) => [k.kind, k.monthly === null ? "" : String(k.monthly)])));
+      } catch (e) {
+        toast.error(getApiError(e));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  const save = async () => {
+    if (!goals || saving) return;
+    const body: Record<string, unknown> = {};
+
+    for (const f of DAILY_FIELDS) {
+      const n = Number(daily[f.key]);
+      if (!Number.isFinite(n) || n < 0) return toast.error(`${f.label} must be zero or more`);
+      body[f.key] = n;
+    }
+
+    const byKind: Record<string, number | null> = {};
+    for (const k of goals.editableKinds) {
+      const raw = (monthly[k.kind] ?? "").trim();
+      if (raw === "") {
+        byKind[k.kind] = null;
+        continue;
+      }
+      const n = Number(raw);
+      if (!Number.isFinite(n) || n < 0) return toast.error(`${k.label} must be zero or more`);
+      byKind[k.kind] = n;
+    }
+    body.monthlyByKind = byKind;
+
+    setSaving(true);
+    try {
+      await api.patch("/dashboard/goals", body);
+      onOpenChange(false);
+      onSaved();
+    } catch (e) {
+      toast.error(getApiError(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="!w-[calc(100vw-1rem)] !max-w-[560px] max-h-[90svh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>Goals</DialogTitle>
+        </DialogHeader>
+
+        {!goals ? (
+          <div className="space-y-2 py-2">
+            {[0, 1, 2, 3, 4].map((i) => (
+              <Skeleton key={i} className="h-11 rounded-lg" />
+            ))}
+          </div>
+        ) : (
+          <div className="space-y-5">
+            <section>
+              <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Daily amounts</h3>
+              <p className="mb-2.5 text-[11px] text-muted-foreground">What counts as hitting it on a given day.</p>
+              <div className="space-y-2">
+                {DAILY_FIELDS.map((f) => (
+                  <div key={f.key} className="flex items-center gap-3">
+                    <span className="w-20 shrink-0 text-sm font-medium">{f.label}</span>
+                    <Input
+                      type="number"
+                      inputMode="numeric"
+                      min="0"
+                      value={daily[f.key] ?? ""}
+                      onChange={(e) => setDaily((d) => ({ ...d, [f.key]: e.target.value }))}
+                      onFocus={(e) => e.currentTarget.select()}
+                      aria-label={`${f.label} target`}
+                      className="h-11 flex-1 font-mono tabular-nums"
+                    />
+                    <span className="w-24 shrink-0 text-[11px] text-muted-foreground">{f.suffix}</span>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="border-t border-border pt-4">
+              <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Days per month</h3>
+              <p className="mb-2.5 text-[11px] text-muted-foreground">How many days this month you mean to do it. Leave blank for every day.</p>
+              <div className="space-y-2">
+                {goals.editableKinds.map((k) => (
+                  <div key={k.kind} className="flex items-center gap-3">
+                    <span className="min-w-0 flex-1 truncate text-sm font-medium">{k.label}</span>
+                    <Input
+                      type="number"
+                      inputMode="numeric"
+                      min="0"
+                      placeholder="every day"
+                      value={monthly[k.kind] ?? ""}
+                      onChange={(e) => setMonthly((m) => ({ ...m, [k.kind]: e.target.value }))}
+                      onFocus={(e) => e.currentTarget.select()}
+                      aria-label={`${k.label} days per month`}
+                      className="h-11 w-32 shrink-0 text-right font-mono tabular-nums"
+                    />
+                  </div>
+                ))}
+              </div>
+            </section>
+          </div>
+        )}
+
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button onClick={save} disabled={!goals || saving}>
+            Save goals
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 
 function ChartPanel({ title, icon: Icon, children }: { title: string; icon: React.ElementType; children: React.ReactNode }) {
   return (
@@ -560,6 +744,83 @@ function ProgressDonut({ percent, completed, total }: { percent: number; complet
     </Card>
   );
 }
+
+/**
+ * Restock ring: how much of what you keep at home is at or below its restock line.
+ * A full ring means the shopping list is long, not that things are going well —
+ * the number in the middle is "how many to buy".
+ */
+function KitchenRing({ kitchen }: { kitchen?: DashboardResponse["kitchen"] }) {
+  const tracked = kitchen?.tracked ?? 0;
+  const need = (kitchen?.out ?? 0) + (kitchen?.low ?? 0);
+  const items = kitchen?.items ?? [];
+  const size = 88;
+  const stroke = 10;
+  const radius = (size - stroke) / 2;
+  const circumference = 2 * Math.PI * radius;
+  const dash = circumference * (tracked > 0 ? Math.min(need / tracked, 1) : 0);
+
+  return (
+    <Card className="py-0 rounded-xl h-full border-neutral-200 bg-white shadow-[0_14px_36px_rgba(15,23,42,0.06)]">
+      <CardContent className="p-2.5 h-full">
+        <div className="flex items-center justify-between gap-2">
+          <h3 className="text-xs font-semibold text-neutral-800">Restock</h3>
+          <Link to="/kitchen" className="text-[10px] font-semibold uppercase tracking-wide text-neutral-500 hover:text-neutral-900">
+            Kitchen
+          </Link>
+        </div>
+
+        {tracked === 0 ? (
+          <p className="mt-3 text-[11px] leading-relaxed text-neutral-500">
+            Nothing tracked yet.{" "}
+            <Link to="/kitchen" className="underline underline-offset-2 hover:text-neutral-900">
+              Add the foods you keep at home
+            </Link>{" "}
+            to get restock reminders here.
+          </p>
+        ) : (
+          <div className="mt-1.5 flex items-center gap-3">
+            <div className="relative shrink-0" style={{ width: size, height: size }}>
+              <svg width={size} height={size} className="-rotate-90">
+                <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke="#e5e5e5" strokeWidth={stroke} />
+                <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke="#18181b" strokeWidth={stroke} strokeDasharray={`${dash} ${circumference}`} strokeLinecap="round" />
+              </svg>
+              <div className="absolute inset-0 flex flex-col items-center justify-center leading-none">
+                <span className="text-lg font-semibold tabular-nums tracking-tight text-neutral-900">{need}</span>
+                <span className="mt-0.5 text-[9px] font-semibold uppercase tracking-wide text-neutral-500">to buy</span>
+              </div>
+            </div>
+
+            <div className="min-w-0 flex-1">
+              {need === 0 ? (
+                <p className="text-[11px] text-neutral-500">All {tracked} stocked.</p>
+              ) : (
+                <>
+                  <div className="flex flex-wrap gap-1">
+                    {items.slice(0, 5).map((i) => (
+                      <span
+                        key={i.id}
+                        title={`${i.count} left · restock at ${i.lowThreshold}`}
+                        className={`inline-flex max-w-full items-center gap-1 rounded-full border px-1.5 py-px text-[10px] font-medium ${
+                          i.status === "out" ? "border-neutral-900 bg-neutral-900 text-white" : "border-neutral-300 text-neutral-700"
+                        }`}
+                      >
+                        <span className="truncate">{i.name}</span>
+                        <span className="tabular-nums opacity-70">{i.count}</span>
+                      </span>
+                    ))}
+                  </div>
+                  {items.length > 5 && <div className="mt-1 text-[10px] text-neutral-500">+{need - 5} more</div>}
+                </>
+              )}
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 
 function TrackerRowView({
   row,

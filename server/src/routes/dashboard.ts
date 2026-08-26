@@ -1,20 +1,16 @@
 import { Router } from "express";
-import { DashboardTracker, DASHBOARD_TRACKER_KINDS } from "../models/DashboardTracker";
+import { DashboardTracker, DASHBOARD_TRACKER_KINDS, HABIT_PAGE_KINDS } from "../models/DashboardTracker";
+import { WorkoutSession, normalizeWorkoutType } from "../models/WorkoutSession";
+import { Task } from "../models/Task";
+import { KitchenItem, kitchenStatus } from "../models/KitchenItem";
+import { DEFAULT_MONTHLY, TrackerGoals, loadTrackerGoals, type TrackerGoalValues } from "../models/TrackerGoals";
 import { monthRange, toDayUTC } from "../lib/dates";
-import { parseDayUTC } from "../lib/validation";
+import { isNonNegativeNumber, parseDayUTC } from "../lib/validation";
 
 const router = Router();
 
-const CALORIES_TARGET = 2000;
-const PROTEIN_TARGET = 160;
-const WATER_TARGET_ML = 3500;
-const STEPS_TARGET = 7000;
-const WORK_WEEKLY_MONEY_TARGET = 200;
-const WORK_DAY_MONEY_TARGET = 40;
-const GYM_MONTHLY_TARGET = 20;
-const ENGLISH_MONTHLY_TARGET = 20;
-const NUTRITION_MONTHLY_TARGET = 26;
-const PROJECT_MONTHLY_TARGET = 25;
+// Targets now live in the TrackerGoals singleton so they can be edited from the
+// dashboard. WORK_WEEKLY_MONEY_TARGET is derived from the daily figure.
 const MIN_TRACKER_YEAR = 2026;
 const MIN_TRACKER_MONTH = 8;
 
@@ -37,6 +33,8 @@ type DailyCell = {
   editable: boolean;
   state?: "done" | "excused" | null;
   detail?: string | null;
+  /** What the user wrote about that day, from the Habits page or the grid. */
+  note?: string;
   value?: number;
   target?: number;
 };
@@ -115,23 +113,17 @@ function dailySatisfied(state: "done" | "excused" | null) {
   return state === "done" || state === "excused";
 }
 
-function gymTargetForMonth() {
-  return GYM_MONTHLY_TARGET;
-}
-
 function habitKindsForMonth() {
   return standardHabitKinds;
 }
 
-function checkRowTarget(kind: HabitKind, activeDayCount: number) {
-  if (kind === "gym") return gymTargetForMonth();
-  if (kind === "english") return ENGLISH_MONTHLY_TARGET;
-  if (kind === "projects" || kind === "projectGym") return PROJECT_MONTHLY_TARGET;
-  if (kind === "water" || kind === "protein" || kind === "calories") return NUTRITION_MONTHLY_TARGET;
-  return activeDayCount;
+/** A kind with no configured monthly count means "every day of the month". */
+function checkRowTarget(kind: HabitKind, activeDayCount: number, goals: TrackerGoalValues) {
+  const configured = goals.monthlyByKind[kind];
+  return typeof configured === "number" ? configured : activeDayCount;
 }
 
-function habitLabel(kind: HabitKind) {
+function habitLabel(kind: HabitKind, goals: TrackerGoalValues) {
   const labels: Record<HabitKind, string> = {
     sleep: "Sleep 6-8h",
     gym: "GYM",
@@ -141,11 +133,12 @@ function habitLabel(kind: HabitKind) {
     projectGym: "Books",
     projectMedical: "Prayer",
     vitamins: "Vitamins",
-    steps: "7k Steps",
+    steps: `${goals.stepsTarget / 1000}k Steps`,
     work: "Work",
     calories: "Calories Target",
-    protein: "Protein 160g+",
-    water: "Water 3.5L",
+    // Derived from the saved goals so the label and the target cannot drift apart.
+    protein: `Protein ${goals.proteinTarget}g+`,
+    water: `Water ${goals.waterTargetMl % 1000 === 0 ? goals.waterTargetMl / 1000 : (goals.waterTargetMl / 1000).toFixed(1)}L`,
   };
   return labels[kind];
 }
@@ -155,10 +148,10 @@ function habitDescription(kind: HabitKind) {
     sleep: "Hit the 6-8 hour sleep range",
     gym: "Training days logged from workouts or manually checked",
     english: "English study or practice",
-    tasks: "Finish the daily task list",
+    tasks: "Days where every planned task was finished",
     projects: "Move at least one meaningful project forward",
-    projectGym: "Read or work on books",
-    projectMedical: "Prayer tracking",
+    projectGym: "Read something today",
+    projectMedical: "Prayers kept up for the day",
     vitamins: "Take the daily stack",
     steps: "Monthly movement target, counted against 7k times active days",
     work: "Money made toward the monthly weekday target",
@@ -176,8 +169,8 @@ function habitIcon(kind: HabitKind) {
     english: "languages",
     tasks: "list-checks",
     projects: "folder-kanban",
-    projectGym: "dumbbell",
-    projectMedical: "folder-kanban",
+    projectGym: "book-open",
+    projectMedical: "hands",
     vitamins: "pill",
     steps: "footprints",
     work: "briefcase-business",
@@ -188,11 +181,11 @@ function habitIcon(kind: HabitKind) {
   return icons[kind];
 }
 
-function makeCheckRow(kind: HabitKind, days: Day[], cells: DailyCell[], monthlyGoal = days.length, allowOverGoal = false): TrackerRow {
+function makeCheckRow(kind: HabitKind, days: Day[], cells: DailyCell[], goals: TrackerGoalValues, monthlyGoal = days.length, allowOverGoal = false): TrackerRow {
   const doneCount = cells.filter((cell) => cell.editable && cell.completed).length;
   return {
     id: kind,
-    label: habitLabel(kind),
+    label: habitLabel(kind, goals),
     description: habitDescription(kind),
     icon: habitIcon(kind),
     kind: kind === "gym" ? "target-count" : "daily-check",
@@ -223,10 +216,52 @@ router.get("/", async (req, res) => {
   });
   const activeDays = days.filter((day) => day.active);
 
+  const goals = await loadTrackerGoals();
+
   const trackerDocs = await DashboardTracker.find({ date: { $gte: rangeStart, $lt: monthEnd } });
 
   const trackerByKindDay = new Map<string, (typeof trackerDocs)[number]>();
   for (const doc of trackerDocs) trackerByKindDay.set(`${doc.kind}:${iso(doc.date)}`, doc);
+
+  // The GYM row mirrors the workout log: a finished session fills the cell in, a
+  // rest day greys it out. A manual tracker doc still wins, so tapping the cell
+  // yourself keeps working on days you trained without logging a session.
+  const workoutSessions = await WorkoutSession.find({ date: { $gte: rangeStart, $lt: monthEnd } });
+  const workoutByDay = new Map<string, (typeof workoutSessions)[number]>();
+  for (const session of workoutSessions) workoutByDay.set(iso(session.date), session);
+
+  // The TASKS row mirrors the task list the same way GYM mirrors the workout log:
+  // clear every task on a day and the cell fills in by itself.
+  const monthTasks = await Task.find({ date: { $gte: rangeStart, $lt: monthEnd } });
+  const tasksByDay = new Map<string, { total: number; done: number }>();
+  for (const task of monthTasks) {
+    const key = iso(task.date);
+    const entry = tasksByDay.get(key) ?? { total: 0, done: 0 };
+    entry.total += 1;
+    if (task.done) entry.done += 1;
+    tasksByDay.set(key, entry);
+  }
+
+  function tasksCellFromList(dayIso: string): { state: "done" | "excused" | null; detail: string } | null {
+    const entry = tasksByDay.get(dayIso);
+    if (!entry || entry.total === 0) return null; // nothing planned; leave it to the user
+    if (entry.done === entry.total) {
+      return { state: "done", detail: `All ${entry.total} task${entry.total === 1 ? "" : "s"} done` };
+    }
+    return { state: null, detail: `${entry.done}/${entry.total} tasks done` };
+  }
+
+  function gymCellFromWorkout(dayIso: string): { state: "done" | "excused" | null; detail: string } | null {
+    const session = workoutByDay.get(dayIso);
+    if (!session) return null;
+    if (normalizeWorkoutType(session.type) === "rest") {
+      return { state: "excused", detail: "Rest day from the workout log" };
+    }
+    if (session.completedAt) {
+      return { state: "done", detail: "Session completed in the workout log" };
+    }
+    return { state: null, detail: "Session started but not finished" };
+  }
 
   const manualRows = habitKindsForMonth().map((kind) => {
     if (kind === "steps") {
@@ -241,16 +276,16 @@ router.get("/", async (req, res) => {
           editable: day.active,
           state,
           value,
-          target: STEPS_TARGET,
+          target: goals.stepsTarget,
           detail: day.active ? (state === "excused" ? "Intentional skip" : value ? `${Math.round(value).toLocaleString("en-US")} steps` : "Log steps") : "Prefilled warm-up day",
         };
       });
       const actual = Math.round(cells.reduce((sum, cell) => sum + (cell.editable ? cell.value ?? 0 : 0), 0));
-      const goal = activeDays.length * STEPS_TARGET;
+      const goal = activeDays.length * goals.stepsTarget;
       const doneCount = cells.filter((cell) => cell.editable && cell.checked).length;
       return {
         id: kind,
-        label: habitLabel(kind),
+        label: habitLabel(kind, goals),
         description: habitDescription(kind),
         icon: habitIcon(kind),
         kind: "steps-count" as const,
@@ -264,7 +299,7 @@ router.get("/", async (req, res) => {
     }
 
     if (kind === "work") {
-      const workGoal = activeDays.filter((day) => !day.weekend).length * WORK_DAY_MONEY_TARGET;
+      const workGoal = activeDays.filter((day) => !day.weekend).length * goals.workDayMoney;
       const cells: AmountCell[] = days.map((day) => {
         const doc = trackerByKindDay.get(`${kind}:${day.iso}`);
         const amount = doc?.amount ?? 0;
@@ -276,7 +311,7 @@ router.get("/", async (req, res) => {
           checked,
           completed: day.active ? amount > 0 : true,
           editable: day.active,
-          target: WORK_DAY_MONEY_TARGET,
+          target: goals.workDayMoney,
           weekend: day.weekend,
           state,
           detail: day.active ? (state === "excused" ? "Intentional skip. Add money if you worked." : amount ? `$${amount}` : day.weekend ? "Weekend auto-checked. Add money if you worked." : "Log money") : "Prefilled warm-up day",
@@ -285,7 +320,7 @@ router.get("/", async (req, res) => {
       const actual = Math.round(cells.reduce((sum, cell) => sum + (cell.editable ? cell.amount : 0), 0) * 100) / 100;
       return {
         id: kind,
-        label: habitLabel(kind),
+        label: habitLabel(kind, goals),
         description: habitDescription(kind),
         icon: habitIcon(kind),
         kind: "work-money" as const,
@@ -299,18 +334,65 @@ router.get("/", async (req, res) => {
 
     const cells: DailyCell[] = days.map((day) => {
       const doc = trackerByKindDay.get(`${kind}:${day.iso}`);
-      const state = day.active ? trackerState(doc, Boolean(doc?.checked)) : "done";
+      let state: "done" | "excused" | null = day.active ? trackerState(doc, Boolean(doc?.checked)) : "done";
+      let detail: string | null = day.active ? (state === "excused" ? "Intentional skip" : null) : "Prefilled warm-up day";
+
+      // A deliberate manual mark wins; a blank or cleared cell falls through to the
+      // workout log. Checking only for the doc's existence was wrong: the tracker
+      // upserts a row on every click, including clearing one, so days the user had
+      // merely touched at some point could never be filled in by finishing a session.
+      const manuallyMarked = Boolean(doc && (doc.state === "done" || doc.state === "excused" || doc.checked));
+
+      if (day.active) {
+        if (kind === "tasks") {
+          // The task list is authoritative whenever the day has any tasks. Unlike GYM,
+          // this binding has to stay live in both directions: finishing everything
+          // ticks the day, and adding a task afterwards unticks it again. Honouring a
+          // stale manual tick here would pin the cell permanently and break that.
+          // Days with no tasks at all still fall back to manual marking.
+          const derived = tasksCellFromList(day.iso);
+          if (derived) {
+            state = derived.state;
+            detail = derived.detail;
+          }
+        } else if (kind === "gym" && !manuallyMarked) {
+          const derived = gymCellFromWorkout(day.iso);
+          if (derived) {
+            state = derived.state;
+            detail = derived.detail;
+          }
+        }
+      }
+
       return {
         date: day.iso,
         checked: dailySatisfied(state),
         completed: day.active ? state === "done" : true,
         editable: day.active,
         state,
-        detail: day.active ? (state === "excused" ? "Intentional skip" : null) : "Prefilled warm-up day",
+        detail,
+        note: doc?.note ?? "",
       };
     });
-    return makeCheckRow(kind, days, cells, checkRowTarget(kind, activeDays.length), kind === "gym");
+    return makeCheckRow(kind, days, cells, goals, checkRowTarget(kind, activeDays.length, goals), kind === "gym");
   });
+
+  // Shopping ring: what is at or below its restock line right now. Not month-scoped
+  // like the habit rows — stock is a present-tense fact, not a daily history.
+  const kitchenItems = await KitchenItem.find().sort({ count: 1, foodNameSnapshot: 1 });
+  const needsRestock = kitchenItems.filter((i) => kitchenStatus(i.count, i.lowThreshold) !== "ok");
+  const kitchen = {
+    tracked: kitchenItems.length,
+    out: needsRestock.filter((i) => i.count <= 0).length,
+    low: needsRestock.filter((i) => i.count > 0).length,
+    items: needsRestock.slice(0, 12).map((i) => ({
+      id: String(i._id),
+      name: i.foodNameSnapshot,
+      count: i.count,
+      lowThreshold: i.lowThreshold,
+      status: kitchenStatus(i.count, i.lowThreshold),
+    })),
+  };
 
   const rows = manualRows;
   const primaryRows = rows;
@@ -353,15 +435,15 @@ router.get("/", async (req, res) => {
       days,
     },
     targets: {
-      calories: CALORIES_TARGET,
-      protein: PROTEIN_TARGET,
-      waterMl: WATER_TARGET_ML,
-      steps: STEPS_TARGET,
-      workWeeklyMoney: WORK_WEEKLY_MONEY_TARGET,
-      workDayMoney: WORK_DAY_MONEY_TARGET,
-      gymMonthlyDays: gymTargetForMonth(),
-      englishMonthlyDays: ENGLISH_MONTHLY_TARGET,
-      projectMonthlyDays: PROJECT_MONTHLY_TARGET,
+      calories: goals.caloriesTarget,
+      protein: goals.proteinTarget,
+      waterMl: goals.waterTargetMl,
+      steps: goals.stepsTarget,
+      workWeeklyMoney: goals.workDayMoney * 5,
+      workDayMoney: goals.workDayMoney,
+      gymMonthlyDays: checkRowTarget("gym", activeDays.length, goals),
+      englishMonthlyDays: checkRowTarget("english", activeDays.length, goals),
+      projectMonthlyDays: checkRowTarget("projects", activeDays.length, goals),
     },
     metrics: {
       overallPercent,
@@ -376,7 +458,107 @@ router.get("/", async (req, res) => {
       topHabits,
       dayProgress,
     },
+    kitchen,
     rows,
+  });
+});
+
+// =====================================================================
+// GET /dashboard/goals   —   PATCH /dashboard/goals
+// The targets every row is measured against. `monthlyByKind` holds "how many days
+// this month"; a kind absent from it is measured against every day of the month.
+// =====================================================================
+const DAILY_GOAL_FIELDS = ["caloriesTarget", "proteinTarget", "waterTargetMl", "stepsTarget", "workDayMoney"] as const;
+
+router.get("/goals", async (_req, res) => {
+  const goals = await loadTrackerGoals();
+  res.json({
+    ...goals,
+    // So the editor can list every row, not only the ones already customised.
+    editableKinds: standardHabitKinds.filter((k) => k !== "steps" && k !== "work").map((kind) => ({
+      kind,
+      label: habitLabel(kind, goals),
+      monthly: goals.monthlyByKind[kind] ?? null,
+    })),
+    defaults: DEFAULT_MONTHLY,
+  });
+});
+
+router.patch("/goals", async (req, res) => {
+  const doc = (await TrackerGoals.findOne()) ?? (await TrackerGoals.create({}));
+
+  for (const field of DAILY_GOAL_FIELDS) {
+    const value = req.body?.[field];
+    if (value === undefined) continue;
+    if (!isNonNegativeNumber(value)) return res.status(400).json({ error: `${field} must be a non-negative number` });
+    doc.set(field, value);
+  }
+
+  const monthly = req.body?.monthlyByKind;
+  if (monthly !== undefined) {
+    if (typeof monthly !== "object" || monthly === null || Array.isArray(monthly)) {
+      return res.status(400).json({ error: "monthlyByKind must be an object" });
+    }
+    for (const [kind, value] of Object.entries(monthly)) {
+      if (!DASHBOARD_TRACKER_KINDS.includes(kind as (typeof DASHBOARD_TRACKER_KINDS)[number])) {
+        return res.status(400).json({ error: `unknown tracker kind: ${kind}` });
+      }
+      // null clears the override, putting that row back to "every day of the month".
+      if (value === null) {
+        doc.monthlyByKind.delete(kind);
+        continue;
+      }
+      if (typeof value !== "number" || !isNonNegativeNumber(value)) return res.status(400).json({ error: `${kind} must be a non-negative number` });
+      doc.monthlyByKind.set(kind, value);
+    }
+  }
+
+  await doc.save();
+  res.json(await loadTrackerGoals());
+});
+
+// =====================================================================
+// GET /dashboard/habits?date=YYYY-MM-DD
+// The Habits page's day view. Reads the same DashboardTracker rows the monthly
+// grid does, so a tick made here shows up there and the other way round.
+// =====================================================================
+router.get("/habits", async (req, res) => {
+  const day = parseDayUTC(req.query.date);
+  if (!day) return res.status(400).json({ error: "valid date required" });
+
+  const goals = await loadTrackerGoals();
+  const docs = await DashboardTracker.find({ kind: { $in: HABIT_PAGE_KINDS }, date: day });
+  const byKind = new Map(docs.map((d) => [d.kind, d]));
+
+  const items = HABIT_PAGE_KINDS.map((kind) => {
+    const doc = byKind.get(kind);
+    // Steps is a number you record, not a box you tick, so it reports its amount and
+    // target and counts as done once the target is reached — same rule as the grid.
+    const isCount = kind === "steps";
+    const amount = doc?.amount ?? 0;
+    const target = isCount ? goals.stepsTarget : 0;
+    const state = isCount ? (doc?.state === "excused" ? "excused" : amount >= target && target > 0 ? "done" : null) : trackerState(doc, Boolean(doc?.checked));
+
+    return {
+      kind,
+      label: habitLabel(kind, goals),
+      description: habitDescription(kind),
+      icon: habitIcon(kind),
+      input: isCount ? ("count" as const) : ("check" as const),
+      amount: isCount ? amount : null,
+      target: isCount ? target : null,
+      state,
+      checked: dailySatisfied(state),
+      note: doc?.note ?? "",
+    };
+  });
+
+  res.json({
+    date: iso(day),
+    done: items.filter((i) => i.state === "done").length,
+    skipped: items.filter((i) => i.state === "excused").length,
+    total: items.length,
+    items,
   });
 });
 
@@ -392,6 +574,10 @@ router.put("/tracker/:kind/:date", async (req, res) => {
   const checked = Boolean(req.body.checked);
   const stateInput = req.body.state;
   const state = stateInput === "done" || stateInput === "excused" ? stateInput : checked ? "done" : null;
+  const noteInput = req.body.note;
+  if (noteInput !== undefined && typeof noteInput !== "string") {
+    return res.status(400).json({ error: "note must be a string" });
+  }
   const amount = req.body.amount === null || req.body.amount === undefined || req.body.amount === "" ? null : Number(req.body.amount);
   if (amount !== null && (!Number.isFinite(amount) || amount < 0)) {
     return res.status(400).json({ error: "Amount must be a positive number" });
@@ -404,6 +590,8 @@ router.put("/tracker/:kind/:date", async (req, res) => {
         checked: state === "done" || state === "excused",
         amount,
         state,
+        // Only touched when supplied, so ticking a cell never wipes its note.
+        ...(noteInput !== undefined ? { note: noteInput } : {}),
       },
     },
     { upsert: true, new: true, setDefaultsOnInsert: true },

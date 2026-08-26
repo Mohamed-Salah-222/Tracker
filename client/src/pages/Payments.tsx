@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useState } from "react";
 import { motion } from "motion/react";
 import { api } from "../lib/api";
 import { todayISO } from "../lib/today";
@@ -7,16 +7,20 @@ import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Card, CardContent } from "../components/ui/card";
+import { Skeleton } from "../components/ui/skeleton";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "../components/ui/dialog";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue } from "../components/ui/select";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
 import { toast } from "sonner";
 import { Trash2, Plus, Search, BarChart3, Calendar, Wallet as WalletIcon, Check, Landmark, Users, ChevronDown, ArrowLeftRight, Repeat, ShoppingBag } from "lucide-react";
 import { AxiosError } from "axios";
-import { RecapModal } from "../components/RecapModal";
-import { MovementsModal } from "../components/MovementsModal";
-import { SubscriptionsModal } from "../components/SubscriptionsModal";
-import { WishlistModal } from "../components/WishlistModal";
+// These four are only reachable behind a button, and the recap drags ~320 kB of
+// charting with it. Loading them on demand keeps the page itself light.
+const importRecap = () => import("../components/RecapModal");
+const RecapModal = lazy(() => importRecap().then((m) => ({ default: m.RecapModal })));
+const MovementsModal = lazy(() => import("../components/MovementsModal").then((m) => ({ default: m.MovementsModal })));
+const SubscriptionsModal = lazy(() => import("../components/SubscriptionsModal").then((m) => ({ default: m.SubscriptionsModal })));
+const WishlistModal = lazy(() => import("../components/WishlistModal").then((m) => ({ default: m.WishlistModal })));
 
 // ===== Types =====
 type BankCurrency = "EGP" | "USD";
@@ -218,6 +222,7 @@ function SourcePicker({
 // =====================================================================
 export default function Payments() {
   const [wallets, setWallets] = useState<Wallet[]>([]);
+  const [loading, setLoading] = useState(true);
   const [banks, setBanks] = useState<Bank[]>([]);
   const [externalSources, setExternalSources] = useState<ExternalSource[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
@@ -236,9 +241,11 @@ export default function Payments() {
   const [wishlistOpen, setWishlistOpen] = useState(false);
 
   const loadWallets = useCallback(async () => {
+    setLoading(true);
     try {
       const r = await api.get<Wallet[]>("/payments/wallets");
       setWallets(r.data);
+      setLoading(false);
     } catch (e) {
       toast.error(getApiError(e));
     }
@@ -344,11 +351,11 @@ export default function Payments() {
   };
 
   return (
-    <div className="w-full max-w-[1100px] space-y-5">
+    <div className="w-full max-w-[1100px] space-y-4">
       {/* ===== Top bar ===== */}
       <motion.div {...fadeUp} className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-3">
-          <h1 className="text-[15px] font-semibold tracking-tight">Payments</h1>
+          <h1 className="text-xl font-semibold tracking-tight">Payments</h1>
         </div>
         <div className="flex items-center gap-2 self-end sm:self-auto">
           <Button variant="outline" size="sm" onClick={() => setMovementsOpen(true)}>
@@ -399,7 +406,14 @@ export default function Payments() {
       </motion.div>
 
       {/* ===== Wallets grid ===== */}
-      <motion.div {...stagger(2)} className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+      {loading && (
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4" aria-busy="true" aria-label="Loading wallets">
+          {[0, 1, 2, 3].map((i) => (
+            <Skeleton key={i} className="h-[128px] rounded-xl" />
+          ))}
+        </div>
+      )}
+      <motion.div {...stagger(2)} className={`grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 ${loading ? "hidden" : ""}`}>
         {wallets.map((w, i) => (
           <WalletCard key={w._id} wallet={w} onChanged={reloadAll} index={i} />
         ))}
@@ -605,16 +619,32 @@ export default function Payments() {
       </div>
 
       {/* ===== Recap modal ===== */}
-      <RecapModal open={recapPeriod !== null} onOpenChange={(o) => !o && setRecapPeriod(null)} period={recapPeriod ?? "week"} />
+      {recapPeriod !== null && (
+        <Suspense fallback={null}>
+          <RecapModal open onOpenChange={(o) => !o && setRecapPeriod(null)} period={recapPeriod} />
+        </Suspense>
+      )}
 
       {/* ===== Movements modal ===== */}
-      <MovementsModal open={movementsOpen} onOpenChange={setMovementsOpen} wallets={wallets} banks={banks} externalSources={externalSources} onChanged={reloadAll} />
+      {movementsOpen && (
+        <Suspense fallback={null}>
+          <MovementsModal open onOpenChange={setMovementsOpen} wallets={wallets} banks={banks} externalSources={externalSources} onChanged={reloadAll} />
+        </Suspense>
+      )}
 
       {/* ===== Subscriptions modal ===== */}
-      <SubscriptionsModal open={subscriptionsOpen} onOpenChange={setSubscriptionsOpen} wallets={wallets} banks={banks} externalSources={externalSources} onChanged={reloadAll} />
+      {subscriptionsOpen && (
+        <Suspense fallback={null}>
+          <SubscriptionsModal open onOpenChange={setSubscriptionsOpen} wallets={wallets} banks={banks} externalSources={externalSources} onChanged={reloadAll} />
+        </Suspense>
+      )}
 
       {/* ===== Wishlist modal ===== */}
-      <WishlistModal open={wishlistOpen} onOpenChange={setWishlistOpen} onChanged={reloadAll} />
+      {wishlistOpen && (
+        <Suspense fallback={null}>
+          <WishlistModal open onOpenChange={setWishlistOpen} onChanged={reloadAll} />
+        </Suspense>
+      )}
     </div>
   );
 }

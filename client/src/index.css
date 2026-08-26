@@ -31,47 +31,49 @@
   --color-input: #e4e4e7;
   --color-ring: #18181b;
 
-  /* Semantic colors */
-  --color-income: #16a34a;
-  --color-income-bg: #f0fdf4;
-  --color-income-border: #bbf7d0;
+  /* Semantic colors — monochrome, like the rest of the app. Money in vs money out
+     and the day statuses are told apart by weight and by their own labels, not hue. */
+  --color-income: #18181b;
+  --color-income-bg: #f4f4f5;
+  --color-income-border: #d4d4d8;
 
-  --color-off-vacation: #2563eb;
-  --color-off-vacation-bg: #eff6ff;
-  --color-off-sick: #dc2626;
-  --color-off-sick-bg: #fef2f2;
-  --color-off-holiday: #9333ea;
-  --color-off-holiday-bg: #faf5ff;
-  --color-off-weekend: #71717a;
-  --color-off-weekend-bg: #f4f4f5;
+  --color-off-vacation: #3f3f46;
+  --color-off-vacation-bg: #f4f4f5;
+  --color-off-sick: #18181b;
+  --color-off-sick-bg: #e4e4e7;
+  --color-off-holiday: #71717a;
+  --color-off-holiday-bg: #f4f4f5;
+  --color-off-weekend: #a1a1aa;
+  --color-off-weekend-bg: #fafafa;
 
-  --color-success: #16a34a;
-  --color-warning: #ea580c;
+  --color-success: #18181b;
+  --color-warning: #71717a;
 
   --color-sidebar: #fafafa;
   --color-sidebar-foreground: #09090b;
   --color-sidebar-border: #e4e4e7;
 
-  /* Expense category colors */
-  --color-cat-food: #c2410c;
-  --color-cat-food-bg: #fff7ed;
-  --color-cat-transport: #1d4ed8;
-  --color-cat-transport-bg: #eff6ff;
-  --color-cat-bills: #b91c1c;
-  --color-cat-bills-bg: #fef2f2;
-  --color-cat-shopping: #be185d;
-  --color-cat-shopping-bg: #fdf2f8;
-  --color-cat-entertainment: #7e22ce;
-  --color-cat-entertainment-bg: #faf5ff;
-  --color-cat-health: #15803d;
-  --color-cat-health-bg: #f0fdf4;
-  --color-cat-education: #4338ca;
-  --color-cat-education-bg: #eef2ff;
-  --color-cat-other: #52525b;
+  /* Expense categories — a grey ladder. Every tag carries its own name, so the
+     shade is only there to separate rows and chart slices, never to encode meaning. */
+  --color-cat-food: #18181b;
+  --color-cat-food-bg: #f4f4f5;
+  --color-cat-transport: #3f3f46;
+  --color-cat-transport-bg: #f4f4f5;
+  --color-cat-bills: #52525b;
+  --color-cat-bills-bg: #f4f4f5;
+  --color-cat-shopping: #63636b;
+  --color-cat-shopping-bg: #f4f4f5;
+  --color-cat-entertainment: #71717a;
+  --color-cat-entertainment-bg: #f4f4f5;
+  --color-cat-health: #8b8b93;
+  --color-cat-health-bg: #f4f4f5;
+  --color-cat-education: #a1a1aa;
+  --color-cat-education-bg: #f4f4f5;
+  --color-cat-other: #c4c4cc;
   --color-cat-other-bg: #f4f4f5;
   /* Expense semantic */
-  --color-expense: #dc2626;
-  --color-expense-bg: #fef2f2;
+  --color-expense: #52525b;
+  --color-expense-bg: #f4f4f5;
 
   --radius: 0.625rem;
 
@@ -112,13 +114,17 @@
   --color-water: #0284c7;
   --color-water-bg: #f0f9ff;
 
-  /* Workout colors /
---color-workout-a: #1d4ed8;          / Upper - blue /
---color-workout-a-bg: #eff6ff;
---color-workout-b: #15803d;          / Lower - green */
-  --color-workout-b-bg: #f0fdf4;
-  --color-workout-rest: #71717a;
+  /* Workout — deliberately monochrome. The three session types are told apart by
+     weight (filled / outlined / ghost), not by hue. */
+  --color-workout-upper: #18181b;
+  --color-workout-upper-bg: #18181b;
+  --color-workout-upper-fg: #fafafa;
+  --color-workout-lower: #52525b;
+  --color-workout-lower-bg: #ffffff;
+  --color-workout-lower-fg: #18181b;
+  --color-workout-rest: #a1a1aa;
   --color-workout-rest-bg: #f4f4f5;
+  --color-workout-rest-fg: #71717a;
 
   /* Fonts */
   --font-sans: "Geist", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -154,6 +160,17 @@ body {
   transition-duration: 150ms;
 }
 
+/* A chart is hundreds of SVG nodes, and the blanket rule above put a 150ms
+   fill/stroke transition on every one of them. Recharts then animates the same
+   properties itself, so bars, gridlines and tooltip hovers all fought the CSS
+   transition and the whole chart felt like it was dragging. Charts opt out. */
+.recharts-wrapper,
+.recharts-wrapper *,
+.recharts-wrapper *::before,
+.recharts-wrapper *::after {
+  transition: none !important;
+}
+
 /* Custom scrollbar */
 ::-webkit-scrollbar {
   width: 8px;
@@ -168,4 +185,26 @@ body {
 }
 ::-webkit-scrollbar-thumb:hover {
   background: var(--color-border-strong);
+}
+
+/* Numeric fields: hide the native spinners. They crowd short inputs like the
+   per-set weight/reps boxes, and the value is always typed, never stepped. */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

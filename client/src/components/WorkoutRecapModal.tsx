@@ -1,56 +1,29 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Dialog, DialogContent, DialogTitle } from "../components/ui/dialog";
 import { Card, CardContent } from "../components/ui/card";
+import { Skeleton } from "../components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
-import { TrendingUp, Trophy, BarChart3, Dumbbell, Flame, Calendar } from "lucide-react";
-import { ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, PieChart, Pie, Cell } from "recharts";
+import { TrendingUp, Trophy, BarChart3, Dumbbell, Flame, Calendar, StickyNote } from "lucide-react";
+import { BarSeries, LineSeries } from "./MiniChart";
 import { api } from "../lib/api";
 import { AxiosError } from "axios";
 import { toast } from "sonner";
-
-const UPPER_A_EXERCISES = [
-  { id: "chest-press-machine", name: "Chest Press Machine" },
-  { id: "chest-fly-machine", name: "Chest Fly Machine" },
-  { id: "shoulder-press-machine", name: "Shoulder Press Machine" },
-  { id: "lateral-raises", name: "Lateral Raises" },
-  { id: "hammer-strength-close", name: "Hammer Strength Close Grip" },
-  { id: "hammer-strength-wide", name: "Hammer Strength Wide Grip" },
-  { id: "high-pulley-curl", name: "High Pulley Curl" },
-  { id: "skull-crushers", name: "Skull Crushers" },
-];
-const LOWER_EXERCISES = [
-  { id: "leg-press", name: "Leg Press" },
-  { id: "hack-squats", name: "Hack Squats" },
-  { id: "leg-extension", name: "Leg Extension" },
-  { id: "romanian-deadlift", name: "Romanian Deadlift" },
-  { id: "calf-raise-hack", name: "Calf Raise on Hack" },
-];
-const UPPER_B_EXERCISES = [
-  { id: "bar-bench-press", name: "Bar Bench Press" },
-  { id: "low-cable-crossover", name: "Low Cable Crossover" },
-  { id: "dumbbell-lateral-raise", name: "Dumbbell Lateral Raise" },
-  { id: "cable-raise", name: "Cable Raise" },
-  { id: "bar-machine", name: "Bar Machine" },
-  { id: "pull-over", name: "Pull Over" },
-  { id: "barbell-bicep-curl", name: "Barbell Bicep Curl" },
-  { id: "rope-overhead", name: "Rope Overhead" },
-];
-const ALL_EXERCISES = [...UPPER_A_EXERCISES, ...LOWER_EXERCISES, ...UPPER_B_EXERCISES];
-const EXERCISE_NAME_BY_ID: Record<string, string> = Object.fromEntries(ALL_EXERCISES.map((e) => [e.id, e.name]));
+import { ALL_EXERCISES, EXERCISE_NAME_BY_ID, LOWER_EXERCISES, UPPER_EXERCISES, WORKOUT_TYPE_CHART, workoutLabel, type WorkoutType } from "../lib/workoutProgram";
 
 // ===== Types =====
-type WorkoutType = "upperA" | "lowerA" | "upperB" | "lowerB" | "rest";
 
 type StatsResp = {
   from: string;
   to: string;
   totalSessions: number;
   completedSessions: number;
-  sessionsByType: { upperA: number; lowerA: number; upperB: number; lowerB: number; rest: number };
+  trainingSessions: number;
+  completedTrainingSessions: number;
+  sessionsByType: { upper: number; lower: number; rest: number };
   totalWeightLogged: number;
   totalSetsDone: number;
-  days: { date: string; type: WorkoutType; volume: number; setsDone: number; completed: boolean }[];
+  days: { date: string; type: WorkoutType; volume: number; setsDone: number; completed: boolean; note: string }[];
   bestByExercise: Record<string, { weight: number; reps: number; date: string }>;
 };
 
@@ -60,6 +33,12 @@ type ProgressResp = {
 };
 
 const round = (n: number) => Math.round(n);
+
+/** 12,480 kg is noise on a stat tile; 12.5k reads at a glance. */
+function compactKg(n: number): string {
+  if (n >= 10_000) return `${(n / 1000).toFixed(1)}k`;
+  return Math.round(n).toLocaleString("en-US");
+}
 
 function getApiError(e: unknown): string {
   if (e instanceof AxiosError) {
@@ -71,18 +50,24 @@ function getApiError(e: unknown): string {
 const dayShort = (iso: string) => new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
 const dayLong = (iso: string) => new Date(iso).toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric", timeZone: "UTC" });
 
-function workoutLabel(type: WorkoutType) {
-  if (type === "upperA") return "Upper A";
-  if (type === "lowerA") return "Lower A";
-  if (type === "upperB") return "Upper B";
-  if (type === "lowerB") return "Lower B";
-  return "Rest";
+function workoutColor(type: WorkoutType) {
+  return WORKOUT_TYPE_CHART[type] ?? "var(--color-workout-rest)";
 }
 
-function workoutColor(type: WorkoutType) {
-  if (type === "upperA" || type === "upperB") return "var(--color-workout-a)";
-  if (type === "lowerA" || type === "lowerB") return "var(--color-workout-b)";
-  return "var(--color-workout-rest)";
+// ===== Range =====
+type Range = "week" | "month";
+
+const RANGE_DAYS: Record<Range, number> = { week: 7, month: 30 };
+const RANGE_LABEL: Record<Range, string> = { week: "This week", month: "Last 30 days" };
+
+/** Inclusive `from`, exclusive `to`, both as plain YYYY-MM-DD days. */
+function rangeParams(range: Range): { from: string; to: string } {
+  const to = new Date();
+  to.setUTCHours(0, 0, 0, 0);
+  to.setUTCDate(to.getUTCDate() + 1); // exclusive upper bound = end of today
+  const from = new Date(to);
+  from.setUTCDate(from.getUTCDate() - RANGE_DAYS[range]);
+  return { from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10) };
 }
 
 // =====================================================================
@@ -91,32 +76,44 @@ function workoutColor(type: WorkoutType) {
 export function WorkoutRecapModal({ open, onOpenChange }: { open: boolean; onOpenChange: (next: boolean) => void }) {
   const [stats, setStats] = useState<StatsResp | null>(null);
   const [loading, setLoading] = useState(false);
-  const [pickedExercise, setPickedExercise] = useState<string>("chest-press-machine");
+  const [range, setRange] = useState<Range>("week");
+  const [pickedExercise, setPickedExercise] = useState<string>(ALL_EXERCISES[0].id);
   const [progress, setProgress] = useState<ProgressResp | null>(null);
   const [progressLoading, setProgressLoading] = useState(false);
+  const progressCache = useRef<Record<string, ProgressResp>>({});
 
   // ----- Load stats when opened -----
+  // Toggling week/month used to refetch every time. Serving the previous answer
+  // instantly and revalidating behind it makes the switch feel immediate.
+  const statsCache = useRef<Partial<Record<Range, StatsResp>>>({});
+
   const loadStats = useCallback(async () => {
     if (!open) return;
+    const cached = statsCache.current[range];
+    if (cached) setStats(cached);
     setLoading(true);
     try {
-      const r = await api.get<StatsResp>("/workouts/stats");
+      const r = await api.get<StatsResp>("/workouts/stats", { params: rangeParams(range) });
+      statsCache.current[range] = r.data;
       setStats(r.data);
     } catch (e) {
       toast.error(getApiError(e));
     } finally {
       setLoading(false);
     }
-  }, [open]);
+  }, [open, range]);
 
   // ----- Load exercise progress when picked -----
   const loadProgress = useCallback(async () => {
     if (!open || !pickedExercise) return;
+    const cached = progressCache.current[pickedExercise];
+    if (cached) setProgress(cached);
     setProgressLoading(true);
     try {
       const r = await api.get<ProgressResp>("/workouts/exercise-progress", {
         params: { exerciseId: pickedExercise, limit: 12 },
       });
+      progressCache.current[pickedExercise] = r.data;
       setProgress(r.data);
     } catch (e) {
       toast.error(getApiError(e));
@@ -140,82 +137,102 @@ export function WorkoutRecapModal({ open, onOpenChange }: { open: boolean; onOpe
 
   const noData = !stats || stats.totalSessions === 0;
 
+  const trainingSessions = stats ? stats.sessionsByType.upper + stats.sessionsByType.lower : 0;
+  const avgVolume = trainingSessions > 0 ? Math.round(stats!.totalWeightLogged / trainingSessions) : 0;
+
+  // Rest days are real sessions but carry no volume, so charting them adds a run of
+  // empty columns that squeezes the days that actually have data.
+  const volumeBars = useMemo(
+    () =>
+      (stats ? stats.days.filter((d) => d.type !== "rest") : []).map((d) => ({
+        key: d.date,
+        label: dayShort(d.date),
+        value: d.volume,
+        color: workoutColor(d.type),
+        tooltip: [dayLong(d.date), `${Math.round(d.volume).toLocaleString("en-US")} kg · ${d.setsDone} sets`, workoutLabel(d.type)],
+      })),
+    [stats],
+  );
+
+  const progressPoints = useMemo(() => {
+    if (!progress) return [];
+    return progress.history
+      .filter((h) => h.weight != null)
+      .map((h, i) => ({
+        key: `${h.sessionId}-${h.setNumber}-${i}`,
+        label: dayShort(h.date),
+        value: h.weight as number,
+        tooltip: [dayLong(h.date), `${h.weight} kg${h.reps ? ` × ${h.reps}` : ""}`, `Set ${h.setNumber}`],
+      }));
+  }, [progress]);
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="!max-w-[860px] max-h-[92vh] overflow-y-auto p-0 gap-0">
+      <DialogContent className="!max-w-[860px] !w-[calc(100vw-1rem)] sm:!w-[calc(100vw-3rem)] max-h-[92svh] overflow-y-auto p-0 gap-0">
         <DialogTitle className="sr-only">Workout history</DialogTitle>
 
         {/* Header */}
-        <div className="sticky top-0 z-10 bg-card/95 backdrop-blur-md border-b border-border px-6 py-4">
-          <div className="flex items-center justify-between gap-3">
-            <div>
+        {/* Solid, not blurred: a backdrop-filter on a sticky element repaints the
+            layer on every scroll frame, which made the modal judder while scrolling. */}
+        <div className="sticky top-0 z-10 bg-card border-b border-border px-4 py-3 sm:px-6 sm:py-4">
+          <div className="flex items-center justify-between gap-2 sm:gap-3">
+            <div className="min-w-0">
               <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Workout history</div>
-              <div className="text-base font-semibold tracking-tight mt-0.5">Last 30 days · {rangeLabel}</div>
+              <div className="mt-0.5 flex items-center gap-2">
+                <span className="truncate text-base font-semibold tracking-tight">
+                  {RANGE_LABEL[range]} · {rangeLabel}
+                </span>
+                {loading && stats && <span className="h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-muted border-t-muted-foreground" aria-label="Refreshing" />}
+              </div>
+            </div>
+
+            <div className="flex shrink-0 items-center gap-0.5 rounded-lg border border-border p-0.5">
+              {(Object.keys(RANGE_DAYS) as Range[]).map((r) => (
+                <button
+                  key={r}
+                  type="button"
+                  onClick={() => setRange(r)}
+                  aria-pressed={range === r}
+                  className={`rounded-md px-2.5 py-1 text-xs font-medium capitalize transition-colors ${range === r ? "bg-foreground text-background" : "text-muted-foreground hover:bg-muted"}`}
+                >
+                  {r}
+                </button>
+              ))}
             </div>
           </div>
         </div>
 
-        <div className="px-6 py-5 space-y-5">
-          <AnimatePresence mode="wait">
+        <div className="px-3 py-4 space-y-4 sm:px-6 sm:py-5 sm:space-y-5">
+          <AnimatePresence>
             {loading && !stats ? (
               <LoadingState />
             ) : noData ? (
-              <EmptyState />
+              <EmptyState range={range} />
             ) : (
               <motion.div key="content" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} transition={{ duration: 0.2 }} className="space-y-5">
                 {/* ===== Top stats ===== */}
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                  <StatCard label="Sessions" value={`${stats!.completedSessions}/${stats!.totalSessions}`} sub="completed" icon={<Calendar className="h-3 w-3" />} />
-                  <StatCard label="Weight logged" value={`${stats!.totalWeightLogged.toLocaleString("en-US")}`} sub="kg" icon={<Dumbbell className="h-3 w-3" />} />
-                  <StatCard label="Sets done" value={`${stats!.totalSetsDone}`} icon={<TrendingUp className="h-3 w-3" />} />
-                  <StatCard label="Split" value={`${stats!.sessionsByType.upperA + stats!.sessionsByType.upperB} upper`} sub={`${stats!.sessionsByType.lowerA + stats!.sessionsByType.lowerB} lower - ${stats!.sessionsByType.rest} rest`} icon={<Flame className="h-3 w-3" />} />
+                <div className="grid grid-cols-2 gap-2 sm:gap-3 md:grid-cols-4">
+                  <StatCard label="Training" value={`${stats!.completedTrainingSessions}/${stats!.trainingSessions}`} sub={stats!.sessionsByType.rest > 0 ? `finished · ${stats!.sessionsByType.rest} rest` : "sessions finished"} icon={<Calendar className="h-3 w-3" />} />
+                  <StatCard label="Volume" value={compactKg(stats!.totalWeightLogged)} sub="kg lifted" icon={<Dumbbell className="h-3 w-3" />} />
+                  <StatCard label="Sets done" value={`${stats!.totalSetsDone}`} sub={`${trainingSessions} training days`} icon={<TrendingUp className="h-3 w-3" />} />
+                  <StatCard label="Avg / session" value={compactKg(avgVolume)} sub="kg per session" icon={<Flame className="h-3 w-3" />} />
                 </div>
 
                 {/* ===== Daily volume chart ===== */}
                 <Card>
-                  <CardContent className="p-5">
+                  <CardContent className="p-3 sm:p-5">
                     <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-4 flex items-center gap-1.5">
                       <BarChart3 className="h-3 w-3" />
                       Volume by session
                     </div>
-                    <div className="h-52">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <BarChart data={stats!.days} margin={{ top: 10, right: 5, left: 0, bottom: 0 }}>
-                          <CartesianGrid stroke="var(--color-border)" strokeDasharray="3 3" vertical={false} />
-                          <XAxis dataKey="date" tick={{ fontSize: 10, fill: "var(--color-muted-foreground)" }} tickFormatter={dayShort} stroke="var(--color-border)" />
-                          <YAxis tick={{ fontSize: 10, fill: "var(--color-muted-foreground)" }} stroke="var(--color-border)" width={48} />
-                          <Tooltip
-                            cursor={{ fill: "color-mix(in oklch, var(--color-muted-foreground), transparent 90%)" }}
-                            contentStyle={{
-                              background: "var(--color-card)",
-                              border: "1px solid var(--color-border)",
-                              borderRadius: "8px",
-                              fontSize: "12px",
-                            }}
-                            labelFormatter={(label) => dayLong(label as string)}
-                            formatter={(v, _name, p) => {
-                              const payload = (p as { payload?: { type?: string; setsDone?: number } }).payload;
-                              const type = payload?.type ?? "";
-                              const setsDone = payload?.setsDone ?? 0;
-                              const t = workoutLabel(type as WorkoutType);
-                              return [`${Number(v).toLocaleString()} - ${setsDone} sets - ${t}`, "Volume"];
-                            }}
-                          />
-                          <Bar dataKey="volume" radius={[4, 4, 0, 0]} animationDuration={500}>
-                            {stats!.days.map((d, i) => {
-                              return <Cell key={i} fill={workoutColor(d.type)} />;
-                            })}
-                          </Bar>
-                        </BarChart>
-                      </ResponsiveContainer>
-                    </div>
+                    <BarSeries points={volumeBars} height={208} emptyLabel="No training sessions in this period." />
                     <div className="flex items-center gap-3 mt-3 text-[10px] text-muted-foreground flex-wrap">
                       <span className="flex items-center gap-1">
-                        <span className="w-2 h-2 rounded-sm" style={{ background: "var(--color-workout-a)" }} />
+                        <span className="w-2 h-2 rounded-sm" style={{ background: "var(--color-workout-upper)" }} />
                         Upper
                       </span>
                       <span className="flex items-center gap-1">
-                        <span className="w-2 h-2 rounded-sm" style={{ background: "var(--color-workout-b)" }} />
+                        <span className="w-2 h-2 rounded-sm" style={{ background: "var(--color-workout-lower)" }} />
                         Lower
                       </span>
                       <span className="flex items-center gap-1">
@@ -228,29 +245,21 @@ export function WorkoutRecapModal({ open, onOpenChange }: { open: boolean; onOpe
 
                 {/* ===== Per-exercise progress ===== */}
                 <Card>
-                  <CardContent className="p-5">
-                    <div className="flex items-baseline justify-between gap-3 mb-4 flex-wrap">
+                  <CardContent className="p-3 sm:p-5">
+                    <div className="flex flex-col gap-2 mb-4 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
                       <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium flex items-center gap-1.5">
                         <TrendingUp className="h-3 w-3" />
                         Exercise progression
                       </div>
-                      <Select value={pickedExercise} onValueChange={(v) => setPickedExercise(v ?? "chest-press-machine")}>
-                        <SelectTrigger className="!h-7 w-[220px] text-xs">
+                      <Select value={pickedExercise} onValueChange={(v) => setPickedExercise(v ?? ALL_EXERCISES[0].id)}>
+                        <SelectTrigger className="!h-9 w-full text-xs sm:w-[220px]">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="section-upper-a" disabled className="text-[10px] uppercase tracking-wider font-medium text-muted-foreground">
-                            Upper A
+                          <SelectItem value="section-upper" disabled className="text-[10px] uppercase tracking-wider font-medium text-muted-foreground">
+                            Upper
                           </SelectItem>
-                          {UPPER_A_EXERCISES.map((e) => (
-                            <SelectItem key={e.id} value={e.id}>
-                              {e.name}
-                            </SelectItem>
-                          ))}
-                          <SelectItem value="section-upper-b" disabled className="text-[10px] uppercase tracking-wider font-medium text-muted-foreground">
-                            Upper B
-                          </SelectItem>
-                          {UPPER_B_EXERCISES.map((e) => (
+                          {UPPER_EXERCISES.map((e) => (
                             <SelectItem key={e.id} value={e.id}>
                               {e.name}
                             </SelectItem>
@@ -268,11 +277,9 @@ export function WorkoutRecapModal({ open, onOpenChange }: { open: boolean; onOpe
                     </div>
 
                     {progressLoading && !progress ? (
-                      <div className="h-44 flex items-center justify-center text-xs text-muted-foreground">Loading…</div>
-                    ) : !progress || progress.history.length === 0 ? (
-                      <div className="h-44 flex items-center justify-center text-xs text-muted-foreground">No logged data for {EXERCISE_NAME_BY_ID[pickedExercise] ?? pickedExercise} yet.</div>
+                      <Skeleton className="h-44 w-full rounded-lg" />
                     ) : (
-                      <ExerciseProgressChart history={progress.history} />
+                      <LineSeries points={progressPoints} height={176} emptyLabel={`No logged data for ${EXERCISE_NAME_BY_ID[pickedExercise] ?? pickedExercise} yet.`} />
                     )}
 
                     {/* Compact history table */}
@@ -292,7 +299,7 @@ export function WorkoutRecapModal({ open, onOpenChange }: { open: boolean; onOpe
                                     <span className="text-muted-foreground"> kg</span>
                                   </span>
                                   {delta !== null && delta !== 0 && (
-                                    <span className="text-[10px] font-mono tabular-nums font-medium" style={{ color: delta > 0 ? "var(--color-income)" : "var(--color-expense)" }}>
+                                    <span className={`text-[10px] font-mono tabular-nums font-medium ${delta > 0 ? "text-foreground" : "text-muted-foreground"}`}>
                                       {delta > 0 ? "+" : ""}
                                       {delta}kg
                                     </span>
@@ -310,21 +317,22 @@ export function WorkoutRecapModal({ open, onOpenChange }: { open: boolean; onOpe
                 {/* ===== Best lifts ===== */}
                 {Object.keys(stats!.bestByExercise).length > 0 && (
                   <Card>
-                    <CardContent className="p-5">
+                    <CardContent className="p-3 sm:p-5">
                       <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-4 flex items-center gap-1.5">
                         <Trophy className="h-3 w-3" />
-                        Best lifts (this period)
+                        Heaviest set per exercise
                       </div>
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                         {ALL_EXERCISES.filter((e) => stats!.bestByExercise[e.id]).map((ex) => {
                           const best = stats!.bestByExercise[ex.id];
                           return (
-                            <div key={ex.id} className="flex items-center justify-between text-sm border-b border-border py-2">
-                              <span className="truncate">{ex.name}</span>
-                              <div className="font-mono tabular-nums flex items-baseline gap-1.5 flex-shrink-0 ml-2">
+                            <div key={ex.id} className="flex items-center justify-between gap-2 border-b border-border py-2 text-sm last:border-b-0 md:last:border-b md:[&:nth-last-child(-n+2)]:border-b-0">
+                              <span className="min-w-0 truncate">{ex.name}</span>
+                              <div className="flex flex-shrink-0 items-baseline gap-1 font-mono tabular-nums">
                                 <span className="text-sm font-semibold">{best.weight}</span>
                                 <span className="text-xs text-muted-foreground">kg</span>
-                                <span className="text-[10px] text-muted-foreground ml-1">- {dayShort(best.date)}</span>
+                                {best.reps > 0 && <span className="text-xs text-muted-foreground">× {best.reps}</span>}
+                                <span className="ml-1.5 text-[10px] text-muted-foreground/80">{dayShort(best.date)}</span>
                               </div>
                             </div>
                           );
@@ -336,11 +344,14 @@ export function WorkoutRecapModal({ open, onOpenChange }: { open: boolean; onOpe
 
                 {/* ===== Split distribution ===== */}
                 <Card>
-                  <CardContent className="p-5">
+                  <CardContent className="p-3 sm:p-5">
                     <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-3">Session split</div>
-                    <SplitDonut counts={stats!.sessionsByType} />
+                    <SplitBar counts={stats!.sessionsByType} />
                   </CardContent>
                 </Card>
+
+                {/* ===== Session notes ===== */}
+                <SessionNotes days={stats!.days} />
               </motion.div>
             )}
           </AnimatePresence>
@@ -369,114 +380,100 @@ function StatCard({ label, value, sub, icon }: { label: string; value: string; s
   );
 }
 
-function ExerciseProgressChart({ history }: { history: ProgressResp["history"] }) {
-  const data = history.map((h) => ({
-    date: h.date,
-    weight: h.weight ?? 0,
-  }));
-
-  return (
-    <div className="h-52">
-      <ResponsiveContainer width="100%" height="100%">
-        <LineChart data={data} margin={{ top: 10, right: 5, left: 0, bottom: 0 }}>
-          <CartesianGrid stroke="var(--color-border)" strokeDasharray="3 3" vertical={false} />
-          <XAxis dataKey="date" tick={{ fontSize: 10, fill: "var(--color-muted-foreground)" }} tickFormatter={dayShort} stroke="var(--color-border)" />
-          <YAxis tick={{ fontSize: 10, fill: "var(--color-muted-foreground)" }} stroke="var(--color-border)" width={36} />
-          <Tooltip
-            contentStyle={{
-              background: "var(--color-card)",
-              border: "1px solid var(--color-border)",
-              borderRadius: "8px",
-              fontSize: "12px",
-            }}
-            labelFormatter={(label) => dayLong(label as string)}
-            formatter={(v) => [`${Number(v)} kg`, "Weight"]}
-          />
-          <Line type="monotone" dataKey="weight" stroke="var(--color-workout-a)" strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} animationDuration={500} />
-        </LineChart>
-      </ResponsiveContainer>
-      <div className="flex items-center gap-3 mt-2 text-[10px] text-muted-foreground">
-        <span className="flex items-center gap-1">
-          <span className="w-3 h-[2px]" style={{ background: "var(--color-workout-a)" }} />
-          Weight (kg)
-        </span>
-      </div>
-    </div>
-  );
-}
-
-function SplitDonut({ counts }: { counts: { upperA: number; lowerA: number; upperB: number; lowerB: number; rest: number } }) {
-  const total = counts.upperA + counts.lowerA + counts.upperB + counts.lowerB + counts.rest;
+function SplitBar({ counts }: { counts: { upper: number; lower: number; rest: number } }) {
+  const total = counts.upper + counts.lower + counts.rest;
   if (total === 0) {
-    return <div className="h-40 flex items-center justify-center text-xs text-muted-foreground">No data</div>;
+    return <div className="py-6 text-center text-xs text-muted-foreground">No sessions in this period.</div>;
   }
-  const data = [
-    { name: "Upper A", value: counts.upperA, color: "var(--color-workout-a)" },
-    { name: "Lower A", value: counts.lowerA, color: "var(--color-workout-b)" },
-    { name: "Upper B", value: counts.upperB, color: "var(--color-workout-a)" },
-    { name: "Lower B", value: counts.lowerB, color: "var(--color-workout-b)" },
-    { name: "Rest", value: counts.rest, color: "var(--color-workout-rest)" },
-  ];
+
+  const parts = [
+    { key: "upper", label: "Upper", value: counts.upper, color: "var(--color-workout-upper)" },
+    { key: "lower", label: "Lower", value: counts.lower, color: "var(--color-workout-lower)" },
+    { key: "rest", label: "Rest", value: counts.rest, color: "var(--color-workout-rest)" },
+  ].filter((p) => p.value > 0);
+
   return (
-    <div className="h-44 relative">
-      <ResponsiveContainer width="100%" height="100%">
-        <PieChart>
-          <Pie data={data} dataKey="value" innerRadius={42} outerRadius={66} paddingAngle={2} animationDuration={500}>
-            {data.map((d, i) => (
-              <Cell key={i} fill={d.color} />
-            ))}
-          </Pie>
-          <Tooltip
-            contentStyle={{
-              background: "var(--color-card)",
-              border: "1px solid var(--color-border)",
-              borderRadius: "8px",
-              fontSize: "12px",
-            }}
-            formatter={(v, name) => [`${Number(v)} (${round((Number(v) / total) * 100)}%)`, String(name)]}
-          />
-        </PieChart>
-      </ResponsiveContainer>
-      <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-        <div className="text-center">
-          <div className="text-[9px] uppercase tracking-wider text-muted-foreground font-medium">Sessions</div>
-          <div className="text-sm font-semibold font-mono tabular-nums">{total}</div>
-        </div>
+    <div>
+      <div className="flex h-3 w-full overflow-hidden rounded-full bg-muted" role="img" aria-label={parts.map((p) => `${p.value} ${p.label}`).join(", ")}>
+        {parts.map((p) => (
+          <div key={p.key} style={{ width: `${(p.value / total) * 100}%`, background: p.color }} title={`${p.label}: ${p.value}`} />
+        ))}
       </div>
-      <div className="absolute bottom-1 left-0 right-0 flex justify-center gap-3 text-[10px]">
-        <span className="flex items-center gap-1" style={{ color: "var(--color-workout-a)" }}>
-          <span className="w-1.5 h-1.5 rounded-sm" style={{ background: "var(--color-workout-a)" }} />
-          {counts.upperA + counts.upperB} upper
-        </span>
-        <span className="flex items-center gap-1" style={{ color: "var(--color-workout-b)" }}>
-          <span className="w-1.5 h-1.5 rounded-sm" style={{ background: "var(--color-workout-b)" }} />
-          {counts.lowerA + counts.lowerB} lower
-        </span>
-        <span className="flex items-center gap-1" style={{ color: "var(--color-workout-rest)" }}>
-          <span className="w-1.5 h-1.5 rounded-sm" style={{ background: "var(--color-workout-rest)" }} />
-          {counts.rest} rest
-        </span>
+      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5">
+        {parts.map((p) => (
+          <span key={p.key} className="flex items-center gap-1.5 text-xs">
+            <span className="h-2 w-2 shrink-0 rounded-sm" style={{ background: p.color }} />
+            <span className="font-medium">{p.label}</span>
+            <span className="font-mono tabular-nums text-muted-foreground">
+              {p.value} · {round((p.value / total) * 100)}%
+            </span>
+          </span>
+        ))}
       </div>
     </div>
   );
 }
 
+/** Mirrors the real layout so the content does not jump when it lands. */
 function LoadingState() {
   return (
-    <div className="py-16 text-center">
-      <motion.div animate={{ opacity: [0.4, 1, 0.4] }} transition={{ duration: 1.5, repeat: Infinity }} className="text-sm text-muted-foreground">
-        Loading workout history…
-      </motion.div>
-    </div>
+    <motion.div key="loading" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="space-y-4 sm:space-y-5" aria-busy="true" aria-label="Loading workout history">
+      <div className="grid grid-cols-2 gap-2 sm:gap-3 md:grid-cols-4">
+        {[0, 1, 2, 3].map((i) => (
+          <Skeleton key={i} className="h-[68px] rounded-xl" />
+        ))}
+      </div>
+      <Skeleton className="h-64 rounded-xl" />
+      <Skeleton className="h-56 rounded-xl" />
+      <Skeleton className="h-28 rounded-xl" />
+    </motion.div>
   );
 }
 
-function EmptyState() {
+function EmptyState({ range }: { range: Range }) {
   return (
-    <div className="py-16 text-center">
-      <Dumbbell className="h-8 w-8 mx-auto mb-3 text-muted-foreground/50" />
-      <div className="text-base font-medium mb-1">No workout data yet.</div>
-      <div className="text-sm text-muted-foreground">Log a few sessions with weight and come back here.</div>
-    </div>
+    <motion.div key="empty" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="py-16 text-center">
+      <div className="mx-auto mb-3 grid h-12 w-12 place-items-center rounded-full bg-muted">
+        <Dumbbell className="h-5 w-5 text-muted-foreground" />
+      </div>
+      <div className="mb-1 text-base font-semibold">Nothing logged {range === "week" ? "this week" : "in the last 30 days"}</div>
+      <div className="text-sm text-muted-foreground">{range === "week" ? "Try the Month view, or finish a session to see it here." : "Finish a session with weight and reps to see it here."}</div>
+    </motion.div>
+  );
+}
+
+// =====================================================================
+// Session notes — the only place the per-day notes are readable back
+// =====================================================================
+function SessionNotes({ days }: { days: StatsResp["days"] }) {
+  const withNotes = useMemo(() => days.filter((d) => d.note.trim().length > 0).sort((a, b) => b.date.localeCompare(a.date)), [days]);
+
+  return (
+    <Card>
+      <CardContent className="p-3 sm:p-5">
+        <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-3 flex items-center gap-1.5">
+          <StickyNote className="h-3 w-3" />
+          Notes
+        </div>
+
+        {withNotes.length === 0 ? (
+          <p className="text-xs text-muted-foreground">
+            No notes in this period. Anything you type in the Notes box on a workout day shows up here.
+          </p>
+        ) : (
+          <div className="space-y-3">
+            {withNotes.map((d) => (
+              <div key={d.date} className="border-l-2 border-border pl-3">
+                <div className="flex items-baseline gap-2">
+                  <span className="text-xs font-medium">{dayLong(d.date)}</span>
+                  <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">{workoutLabel(d.type)}</span>
+                </div>
+                <p className="mt-1 whitespace-pre-wrap text-xs leading-relaxed text-muted-foreground">{d.note}</p>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }

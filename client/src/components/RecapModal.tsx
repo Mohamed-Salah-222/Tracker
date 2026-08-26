@@ -4,7 +4,7 @@ import { Dialog, DialogContent, DialogTitle } from "../components/ui/dialog";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
 import { ChevronLeft, ChevronRight, TrendingDown, TrendingUp } from "lucide-react";
-import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid } from "recharts";
+import { LineSeries } from "./MiniChart";
 import { api } from "../lib/api";
 import { todayISO } from "../lib/today";
 import { AxiosError } from "axios";
@@ -235,49 +235,16 @@ export function RecapModal({ open, onOpenChange, period }: { open: boolean; onOp
                   <Card>
                     <CardContent className="p-5">
                       <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-3">Spending over time</div>
-                      <div className="h-48">
-                        <ResponsiveContainer width="100%" height="100%">
-                          <AreaChart data={data.byDay} margin={{ top: 10, right: 5, left: 0, bottom: 0 }}>
-                            <defs>
-                              <linearGradient id="expenseGrad" x1="0" y1="0" x2="0" y2="1">
-                                <stop offset="0%" stopColor="var(--color-expense)" stopOpacity={0.25} />
-                                <stop offset="100%" stopColor="var(--color-expense)" stopOpacity={0} />
-                              </linearGradient>
-                            </defs>
-                            <CartesianGrid stroke="var(--color-border)" strokeDasharray="3 3" vertical={false} />
-                            <XAxis
-                              dataKey="date"
-                              tick={{ fontSize: 10, fill: "var(--color-muted-foreground)" }}
-                              tickFormatter={(v: string) => {
-                                const d = new Date(v);
-                                return period === "week" ? d.toLocaleDateString("en-US", { weekday: "short", timeZone: "UTC" }) : d.getUTCDate().toString();
-                              }}
-                              stroke="var(--color-border)"
-                            />
-                            <YAxis tick={{ fontSize: 10, fill: "var(--color-muted-foreground)" }} tickFormatter={(v: number) => v.toString()} stroke="var(--color-border)" width={40} />
-                            <Tooltip
-                              cursor={{ fill: "color-mix(in oklch, var(--color-muted-foreground), transparent 90%)" }}
-                              contentStyle={{
-                                background: "var(--color-card)",
-                                border: "1px solid var(--color-border)",
-                                borderRadius: "8px",
-                                fontSize: "12px",
-                              }}
-                              labelFormatter={(label) => {
-                                const d = new Date(label as string);
-                                return d.toLocaleDateString("en-US", {
-                                  weekday: "long",
-                                  month: "short",
-                                  day: "numeric",
-                                  timeZone: "UTC",
-                                });
-                              }}
-                              formatter={(v) => [fmtEGP(Number(v)), "Spent"]}
-                            />
-                            <Area type="monotone" dataKey="amount" stroke="var(--color-expense)" strokeWidth={2} fill="url(#expenseGrad)" animationDuration={500} />
-                          </AreaChart>
-                        </ResponsiveContainer>
-                      </div>
+                      <LineSeries
+                        height={192}
+                        points={data.byDay.map((d) => ({
+                          key: d.date,
+                          label: period === "week" ? new Date(d.date).toLocaleDateString("en-US", { weekday: "short", timeZone: "UTC" }) : String(new Date(d.date).getUTCDate()),
+                          value: d.amount,
+                          tooltip: [new Date(d.date).toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric", timeZone: "UTC" }), fmtEGP(d.amount) + " spent"],
+                        }))}
+                        emptyLabel="Nothing spent in this period."
+                      />
                     </CardContent>
                   </Card>
 

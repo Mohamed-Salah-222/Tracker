@@ -6,6 +6,7 @@ import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Card, CardContent } from "../components/ui/card";
+import { Skeleton } from "../components/ui/skeleton";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "../components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
 import { toast } from "sonner";
@@ -122,6 +123,7 @@ export default function Income() {
   const [markOffOpen, setMarkOffOpen] = useState(false);
   const [logDate, setLogDate] = useState(todayISO());
   const [minutes, setMinutes] = useState<string>("");
+  const [loading, setLoading] = useState(true);
 
   // ----- Range computation -----
   const range = useMemo(() => {
@@ -147,6 +149,7 @@ export default function Income() {
 
   // ----- Data loading -----
   const loadAll = useCallback(async () => {
+    setLoading(true);
     try {
       const rateReq = api.get<{ ratePerMinute: number } | null>("/income/rate");
 
@@ -168,6 +171,8 @@ export default function Income() {
       setSparklineData(spark.data);
     } catch (e) {
       toast.error(getApiError(e));
+    } finally {
+      setLoading(false);
     }
   }, [view, anchor, range, sparklineRange]);
 
@@ -297,7 +302,7 @@ export default function Income() {
       {/* ===== Top bar ===== */}
       <motion.div {...fadeUp} className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-3">
-          <h1 className="text-[15px] font-semibold tracking-tight">Income</h1>
+          <h1 className="text-xl font-semibold tracking-tight">Income</h1>
           <ViewSwitcher view={view} onChange={switchView} />
         </div>
         <div className="flex items-center gap-2 self-end sm:self-auto">
@@ -330,9 +335,18 @@ export default function Income() {
       </motion.div>
 
       {/* ===== Body: two columns ===== */}
-      <div className="grid grid-cols-1 lg:grid-cols-[minmax(818px,1fr)_262px] xl:grid-cols-[minmax(818px,1fr)_300px] gap-4">
+      {/* The old track was minmax(818px,1fr)_262px, which needs 1096px of room but
+          switched on at the 1024px lg breakpoint — a guaranteed horizontal overflow
+          on any screen between the two. */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_262px] xl:grid-cols-[minmax(0,1fr)_300px]">
         {/* Main column */}
         <div className="space-y-4 min-w-0">
+          {loading ? (
+            <div className="space-y-3" aria-busy="true" aria-label="Loading income">
+              <Skeleton className="h-[220px] rounded-xl" />
+              <Skeleton className="h-[120px] rounded-xl" />
+            </div>
+          ) : (
           <AnimatePresence mode="wait">
             <motion.div key={view + anchor} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}>
               {view === "today" && <TodayView dayKey={anchor} entry={entriesByDate[anchor]} status={statusByDate[anchor]} onChanged={loadAll} />}
@@ -350,6 +364,7 @@ export default function Income() {
               )}
             </motion.div>
           </AnimatePresence>
+          )}
 
           {/* Sparkline */}
           <Sparkline sparkByDate={sparkByDate} todayIso={todayISO()} />

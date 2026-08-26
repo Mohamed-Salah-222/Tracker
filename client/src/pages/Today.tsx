@@ -1,32 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
+import { Link } from "react-router-dom";
 import { api } from "../lib/api";
 import { todayISO } from "../lib/today";
 import { Card, CardContent } from "../components/ui/card";
-import { Checkbox } from "../components/ui/checkbox";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
-import { Label } from "../components/ui/label";
-import { Trash2, Plus, Sparkles, ArrowRight } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Skeleton } from "../components/ui/skeleton";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
+import { TaskRow } from "../components/TaskRow";
+import { CalendarDays, Check, ChevronLeft, ChevronRight, ListChecks, Plus, Sparkles, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
-import { AxiosError } from "axios";
-
-// ===== Types =====
-type Task = {
-  _id: string;
-  title: string;
-  date: string;
-  done: boolean;
-};
-
-// ===== Helpers =====
-function getApiError(e: unknown): string {
-  if (e instanceof AxiosError) {
-    return (e.response?.data as { error?: string })?.error ?? e.message;
-  }
-  return "Something went wrong";
-}
+import { fullDate, getApiError, relativeDay, shiftDay, taskDay, weekdayLong, type Task } from "../lib/tasks";
 
 // ===== Motion =====
 const fadeUp = {
@@ -36,37 +21,24 @@ const fadeUp = {
 };
 const stagger = (i: number) => ({
   ...fadeUp,
-  transition: { ...fadeUp.transition, delay: i * 0.04 },
+  transition: { ...fadeUp.transition, delay: Math.min(i, 6) * 0.03 },
 });
 
-// ===== Confetti (reused pattern from Income) =====
+/** Monochrome burst — the palette is black and white, so the confetti is too. */
 function spawnConfetti(originEl: HTMLElement) {
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
   const rect = originEl.getBoundingClientRect();
   const cx = rect.left + rect.width / 2;
   const cy = rect.top + rect.height / 2;
-  const colors = ["var(--color-income)", "#22c55e", "#86efac"];
+  const shades = ["#18181b", "#52525b", "#a1a1aa", "#d4d4d8"];
   for (let i = 0; i < 18; i++) {
     const el = document.createElement("div");
     const angle = (Math.PI * 2 * i) / 18 + Math.random() * 0.3;
     const dist = 50 + Math.random() * 40;
-    const tx = Math.cos(angle) * dist;
-    const ty = Math.sin(angle) * dist;
-    el.style.cssText = `
-      position: fixed;
-      left: ${cx}px;
-      top: ${cy}px;
-      width: 6px;
-      height: 6px;
-      border-radius: 1px;
-      background: ${colors[i % colors.length]};
-      pointer-events: none;
-      z-index: 9999;
-      transform: translate(-50%, -50%);
-      transition: transform 800ms cubic-bezier(0.4, 0, 0.6, 1), opacity 800ms ease-out;
-    `;
+    el.style.cssText = `position:fixed;left:${cx}px;top:${cy}px;width:6px;height:6px;border-radius:1px;background:${shades[i % shades.length]};pointer-events:none;z-index:9999;transform:translate(-50%,-50%);transition:transform 800ms cubic-bezier(0.4,0,0.6,1),opacity 800ms ease-out;`;
     document.body.appendChild(el);
     requestAnimationFrame(() => {
-      el.style.transform = `translate(calc(-50% + ${tx}px), calc(-50% + ${ty}px)) scale(0)`;
+      el.style.transform = `translate(calc(-50% + ${Math.cos(angle) * dist}px), calc(-50% + ${Math.sin(angle) * dist}px)) scale(0)`;
       el.style.opacity = "0";
     });
     setTimeout(() => el.remove(), 850);
@@ -77,71 +49,124 @@ function spawnConfetti(originEl: HTMLElement) {
 // MAIN
 // =====================================================================
 export default function Today() {
+  const [selectedDate, setSelectedDate] = useState(todayISO);
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [overdue, setOverdue] = useState<Task[]>([]);
+  const [loading, setLoading] = useState(true);
   const [title, setTitle] = useState("");
   const [adding, setAdding] = useState(false);
-  const allDoneFiredRef = useRef(false);
-  const celebrationAnchorRef = useRef<HTMLDivElement>(null);
+  const [pendingDelete, setPendingDelete] = useState<Task | null>(null);
+  const [movingAll, setMovingAll] = useState(false);
 
-  const today = todayISO();
+  const celebrationAnchor = useRef<HTMLDivElement>(null);
+  const allDoneFired = useRef(false);
 
+  // Mirrors `tasks` so optimistic edits can read the current value synchronously.
+  const tasksRef = useRef<Task[]>([]);
+  const writeTasks = useCallback((next: Task[]) => {
+    tasksRef.current = next;
+    setTasks(next);
+  }, []);
+
+  const isToday = selectedDate === todayISO();
+
+  // ----- Load -----
   const load = useCallback(async () => {
+    setLoading(true);
     try {
-      const r = await api.get<Task[]>("/tasks/day", { params: { date: today } });
-      setTasks(r.data);
+      // Viewing today seeds that day's anchor task first, so the habit tracker
+      // always has something to measure. The date comes from the browser because
+      // "today" means the user's local calendar day, not the server's UTC one.
+      const isCurrentDay = selectedDate === todayISO();
+      const r = isCurrentDay ? await api.post<Task[]>("/tasks/ensure-daily", { date: selectedDate }) : await api.get<Task[]>("/tasks/day", { params: { date: selectedDate } });
+      writeTasks(r.data);
+    } catch (e) {
+      toast.error(getApiError(e));
+    } finally {
+      setLoading(false);
+    }
+  }, [selectedDate, writeTasks]);
+
+  const loadOverdue = useCallback(async () => {
+    try {
+      const r = await api.get<Task[]>("/tasks/overdue");
+      setOverdue(r.data);
     } catch (e) {
       toast.error(getApiError(e));
     }
-  }, [today]);
+  }, []);
 
   useEffect(() => {
     void load();
   }, [load]);
+  useEffect(() => {
+    void loadOverdue();
+  }, [loadOverdue]);
 
-  const todayLabel = useMemo(
-    () =>
-      new Date(today).toLocaleDateString("en-US", {
-        weekday: "long",
-        timeZone: "UTC",
-      }),
-    [today],
-  );
-  const todayDateLabel = useMemo(
-    () =>
-      new Date(today).toLocaleDateString("en-US", {
-        month: "long",
-        day: "numeric",
-        year: "numeric",
-        timeZone: "UTC",
-      }),
-    [today],
-  );
-
-  const incomplete = tasks.filter((t) => !t.done);
-  const completed = tasks.filter((t) => t.done);
-  const doneCount = completed.length;
+  // ----- Derived -----
+  const incomplete = useMemo(() => tasks.filter((t) => !t.done), [tasks]);
+  const completed = useMemo(() => tasks.filter((t) => t.done), [tasks]);
   const total = tasks.length;
+  const doneCount = completed.length;
   const pct = total > 0 ? Math.round((doneCount / total) * 100) : 0;
   const allDone = total > 0 && doneCount === total;
 
-  // Trigger celebration when transitioning to all-done
   useEffect(() => {
-    if (allDone && !allDoneFiredRef.current) {
-      allDoneFiredRef.current = true;
-      if (celebrationAnchorRef.current) spawnConfetti(celebrationAnchorRef.current);
+    if (allDone && !allDoneFired.current) {
+      allDoneFired.current = true;
+      if (celebrationAnchor.current) spawnConfetti(celebrationAnchor.current);
     }
-    if (!allDone) {
-      allDoneFiredRef.current = false;
-    }
+    if (!allDone) allDoneFired.current = false;
   }, [allDone]);
 
+  // ----- Mutations (optimistic) -----
+  const patchTask = useCallback(
+    async (task: Task, patch: Partial<Pick<Task, "title" | "done" | "date">>, opts?: { removeFromDay?: boolean }) => {
+      const before = tasksRef.current;
+      writeTasks(opts?.removeFromDay ? before.filter((t) => t._id !== task._id) : before.map((t) => (t._id === task._id ? { ...t, ...patch } : t)));
+      try {
+        await api.patch(`/tasks/${task._id}`, patch);
+      } catch (e) {
+        toast.error(getApiError(e));
+        writeTasks(before);
+      }
+    },
+    [writeTasks],
+  );
+
+  const toggle = useCallback((task: Task) => void patchTask(task, { done: !task.done }), [patchTask]);
+  const rename = useCallback((task: Task, newTitle: string) => void patchTask(task, { title: newTitle }), [patchTask]);
+
+  const move = useCallback(
+    (task: Task) => {
+      const target = shiftDay(selectedDate, 1);
+      void patchTask(task, { date: target }, { removeFromDay: true });
+    },
+    [patchTask, selectedDate],
+  );
+
+  const confirmDelete = useCallback(async () => {
+    const task = pendingDelete;
+    setPendingDelete(null);
+    if (!task) return;
+    const before = tasksRef.current;
+    writeTasks(before.filter((t) => t._id !== task._id));
+    try {
+      await api.delete(`/tasks/${task._id}`);
+    } catch (e) {
+      toast.error(getApiError(e));
+      writeTasks(before);
+    }
+  }, [pendingDelete, writeTasks]);
+
   const add = async () => {
-    if (!title.trim() || adding) return;
+    const clean = title.trim();
+    if (!clean || adding) return;
     setAdding(true);
     try {
-      await api.post("/tasks", { title: title.trim(), date: today });
+      const r = await api.post<Task>("/tasks", { title: clean, date: selectedDate });
+      writeTasks([...tasksRef.current, r.data]);
       setTitle("");
-      void load();
     } catch (e) {
       toast.error(getApiError(e));
     } finally {
@@ -149,192 +174,270 @@ export default function Today() {
     }
   };
 
-  const toggle = async (t: Task) => {
+  // ----- Overdue -----
+  const overdueVisible = isToday ? overdue : [];
+
+  const pullOverdueTask = async (task: Task) => {
+    setOverdue((list) => list.filter((t) => t._id !== task._id));
     try {
-      await api.patch(`/tasks/${t._id}`, { done: !t.done });
-      void load();
+      await api.patch(`/tasks/${task._id}`, { date: selectedDate });
+      writeTasks([...tasksRef.current, { ...task, date: selectedDate }]);
     } catch (e) {
       toast.error(getApiError(e));
+      void loadOverdue();
     }
   };
 
-  const moveToTomorrow = async (t: Task) => {
+  const pullAllOverdue = async () => {
+    if (overdueVisible.length === 0 || movingAll) return;
+    setMovingAll(true);
+    const ids = overdueVisible.map((t) => t._id);
+    const snapshot = overdueVisible;
+    setOverdue([]);
     try {
-      const tomorrow = new Date(today);
-      tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
-      const tomorrowISO = tomorrow.toISOString().slice(0, 10);
-      await api.patch(`/tasks/${t._id}`, { date: tomorrowISO });
-      toast.success(`Moved "${t.title}" to tomorrow`);
-      void load();
+      await api.post("/tasks/bulk-move", { ids, date: selectedDate });
+      writeTasks([...tasksRef.current, ...snapshot.map((t) => ({ ...t, date: selectedDate }))]);
+      toast.success(`Moved ${ids.length} task${ids.length === 1 ? "" : "s"} to today`);
     } catch (e) {
       toast.error(getApiError(e));
+      void loadOverdue();
+    } finally {
+      setMovingAll(false);
     }
   };
 
-  const del = async (id: string) => {
-    try {
-      await api.delete(`/tasks/${id}`);
-      void load();
-    } catch (e) {
-      toast.error(getApiError(e));
-    }
-  };
-
+  // =====================================================================
   return (
-    <div className="w-full max-w-[720px] space-y-5">
-      {/* ===== Hero day card ===== */}
-      <motion.div {...fadeUp}>
+    <div className="w-full max-w-[720px] space-y-4">
+      {/* ===== Date navigation ===== */}
+      <motion.nav {...fadeUp} aria-label="Select day" className="flex items-center gap-1.5">
+        <Button variant="outline" size="icon" className="h-10 w-10 shrink-0" aria-label="Previous day" onClick={() => setSelectedDate(shiftDay(selectedDate, -1))}>
+          <ChevronLeft className="h-4 w-4" aria-hidden />
+        </Button>
+        <button
+          type="button"
+          onClick={() => setSelectedDate(todayISO())}
+          disabled={isToday}
+          aria-label={isToday ? "Showing today" : `Showing ${fullDate(selectedDate)}. Jump to today`}
+          className="flex h-10 min-w-0 flex-1 items-center justify-center gap-2 rounded-lg border border-transparent px-2 text-sm font-medium transition-colors enabled:hover:border-border enabled:hover:bg-muted/60 disabled:cursor-default"
+        >
+          <span className="truncate">{fullDate(selectedDate)}</span>
+          {!isToday && <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Jump to today</span>}
+        </button>
+        <Button variant="outline" size="icon" className="h-10 w-10 shrink-0" aria-label="Next day" onClick={() => setSelectedDate(shiftDay(selectedDate, 1))}>
+          <ChevronRight className="h-4 w-4" aria-hidden />
+        </Button>
+      </motion.nav>
+
+      {/* ===== Hero ===== */}
+      <motion.section {...stagger(1)} aria-label="Day summary">
         <Card>
-          <CardContent className="p-6 md:p-8">
-            <div className="flex items-end justify-between gap-3 flex-wrap">
-              <div className="flex flex-col min-w-0">
-                <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Today</div>
-                <h1 className="text-3xl md:text-4xl font-semibold tracking-tight mt-1">{todayLabel}</h1>
-                <div className="text-sm text-muted-foreground mt-1">{todayDateLabel}</div>
+          <CardContent className="px-4 py-0 sm:px-5">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{isToday ? "Today" : relativeDay(selectedDate)}</div>
+                <h1 className="mt-0.5 truncate text-2xl font-semibold tracking-tight sm:text-3xl">{weekdayLong(selectedDate)}</h1>
+                <div className="mt-0.5 text-sm text-muted-foreground">{fullDate(selectedDate)}</div>
               </div>
-              <div className="text-right flex-shrink-0" ref={celebrationAnchorRef}>
-                <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Progress</div>
-                <AnimatePresence mode="wait">
-                  <motion.div key={`${doneCount}-${total}`} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }} transition={{ duration: 0.2 }} className="text-3xl md:text-4xl font-semibold font-mono tracking-tight tabular-nums mt-1" style={{ color: allDone ? "var(--color-income)" : "var(--color-foreground)" }}>
-                    {total > 0 ? (
-                      <>
-                        {doneCount}
-                        <span className="text-muted-foreground">/{total}</span>
-                      </>
-                    ) : (
-                      "0"
-                    )}
-                  </motion.div>
-                </AnimatePresence>
+              <div className="shrink-0 text-right" ref={celebrationAnchor}>
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Done</div>
+                <div className="mt-0.5 font-mono text-2xl font-semibold tabular-nums tracking-tight sm:text-3xl">
+                  {doneCount}
+                  <span className="text-muted-foreground">/{total}</span>
+                </div>
               </div>
             </div>
 
-            {/* Progress bar */}
             {total > 0 && (
-              <div className="mt-5">
-                <div className="h-1.5 rounded-full overflow-hidden" style={{ background: "var(--color-muted)" }}>
-                  <motion.div initial={{ width: 0 }} animate={{ width: `${pct}%` }} transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }} style={{ background: "var(--color-income)", height: "100%" }} />
+              <div className="mt-4">
+                <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
+                  <motion.div className="h-full rounded-full bg-foreground" initial={false} animate={{ width: `${pct}%` }} transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }} />
                 </div>
-                <AnimatePresence mode="wait">
+                <div className="mt-2 flex items-center gap-1.5 text-xs">
                   {allDone ? (
-                    <motion.div key="all-done" initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }} transition={{ duration: 0.25 }} className="text-xs mt-2 font-medium flex items-center gap-1.5" style={{ color: "var(--color-income)" }}>
-                      <Sparkles className="h-3 w-3" />
-                      All done for today.
-                    </motion.div>
+                    <>
+                      <Sparkles className="h-3 w-3" aria-hidden />
+                      <span className="font-medium">All done{isToday ? " for today" : ""}.</span>
+                    </>
                   ) : (
-                    <motion.div key="progress" initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }} transition={{ duration: 0.25 }} className="text-xs mt-2 text-muted-foreground font-mono tabular-nums">
-                      {pct}% · {incomplete.length} {incomplete.length === 1 ? "task" : "tasks"} left
-                    </motion.div>
+                    <span className="font-mono tabular-nums text-muted-foreground">
+                      {pct}% · {incomplete.length} left
+                    </span>
                   )}
-                </AnimatePresence>
+                </div>
               </div>
             )}
           </CardContent>
         </Card>
-      </motion.div>
+      </motion.section>
 
-      {/* ===== Add task ===== */}
-      <motion.div {...stagger(1)}>
+      {/* ===== Overdue ===== */}
+      <AnimatePresence>
+        {overdueVisible.length > 0 && (
+          <motion.section {...stagger(2)} exit={{ opacity: 0, height: 0 }} aria-label="Overdue tasks">
+            <Card style={{ boxShadow: "inset 3px 0 0 0 var(--color-foreground)" }}>
+              <CardContent className="px-4 py-0 sm:px-5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h2 className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider">
+                    <TriangleAlert className="h-3 w-3" aria-hidden />
+                    Overdue · {overdueVisible.length}
+                  </h2>
+                  <Button variant="default" size="sm" className="h-8" disabled={movingAll} onClick={() => void pullAllOverdue()}>
+                    Move all to today
+                  </Button>
+                </div>
+                <p className="mt-1 text-[11px] text-muted-foreground">Left unfinished on earlier days.</p>
+                <div className="mt-2 space-y-0.5">
+                  <AnimatePresence initial={false}>
+                    {overdueVisible.map((t) => (
+                      <TaskRow
+                        key={t._id}
+                        task={t}
+                        showDate
+                        moveLabel="Move to today"
+                        onToggle={(task) => {
+                          setOverdue((l) => l.filter((x) => x._id !== task._id));
+                          void api.patch(`/tasks/${task._id}`, { done: true }).catch((e) => {
+                            toast.error(getApiError(e));
+                            void loadOverdue();
+                          });
+                        }}
+                        onRename={(task, newTitle) => {
+                          setOverdue((l) => l.map((x) => (x._id === task._id ? { ...x, title: newTitle } : x)));
+                          void api.patch(`/tasks/${task._id}`, { title: newTitle }).catch((e) => {
+                            toast.error(getApiError(e));
+                            void loadOverdue();
+                          });
+                        }}
+                        onMove={(task) => void pullOverdueTask(task)}
+                        onDelete={(task) => {
+                          setOverdue((l) => l.filter((x) => x._id !== task._id));
+                          void api.delete(`/tasks/${task._id}`).catch((e) => {
+                            toast.error(getApiError(e));
+                            void loadOverdue();
+                          });
+                        }}
+                      />
+                    ))}
+                  </AnimatePresence>
+                </div>
+              </CardContent>
+            </Card>
+          </motion.section>
+        )}
+      </AnimatePresence>
+
+      {/* ===== Add ===== */}
+      <motion.section {...stagger(3)} aria-label="Add a task">
         <Card>
-          <CardContent className="p-4">
-            <div className="space-y-1.5">
-              <Label className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium flex items-center gap-1.5">
-                <Plus className="h-3 w-3" />
-                Add task
-              </Label>
-              <div className="flex gap-2">
-                <Input
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
-                  placeholder="What needs doing today?"
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") void add();
-                  }}
-                />
-                <Button variant="default" size="default" onClick={add} disabled={!title.trim() || adding}>
-                  <Plus className="h-3.5 w-3.5" />
-                </Button>
-              </div>
+          <CardContent className="px-4 py-0 sm:px-5">
+            <div className="flex gap-2">
+              <Input
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder={isToday ? "What needs doing today?" : `Add to ${relativeDay(selectedDate)}…`}
+                aria-label="New task title"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void add();
+                }}
+                className="h-11 text-base sm:text-sm"
+              />
+              <Button variant="default" size="default" className="h-11 shrink-0 px-4" onClick={add} disabled={!title.trim() || adding} aria-label="Add task">
+                <Plus className="h-4 w-4" aria-hidden />
+              </Button>
             </div>
           </CardContent>
         </Card>
-      </motion.div>
+      </motion.section>
 
-      {/* ===== Tasks ===== */}
-      {total === 0 ? (
-        <motion.div {...stagger(2)}>
+      {/* ===== List ===== */}
+      {loading ? (
+        <div className="space-y-2" aria-busy="true" aria-label="Loading tasks">
+          <Skeleton className="h-12 w-full rounded-xl" />
+          <Skeleton className="h-12 w-full rounded-xl" />
+          <Skeleton className="h-12 w-full rounded-xl" />
+        </div>
+      ) : total === 0 ? (
+        <motion.div {...stagger(4)}>
           <Card>
-            <CardContent className="p-12 text-center">
-              <div className="text-sm font-medium mb-1">Nothing planned for today.</div>
-              <div className="text-sm text-muted-foreground">
-                Add a task above or{" "}
-                <Link to="/tasks" className="underline hover:text-foreground transition-colors">
-                  plan from the Tasks page
+            <CardContent className="px-6 py-6 text-center">
+              <div className="mx-auto mb-3 grid h-12 w-12 place-items-center rounded-full bg-muted">
+                <ListChecks className="h-5 w-5 text-muted-foreground" aria-hidden />
+              </div>
+              <div className="text-base font-semibold">{isToday ? "Nothing planned for today" : `Nothing planned for ${relativeDay(selectedDate)}`}</div>
+              <p className="mx-auto mt-1 max-w-sm text-sm text-muted-foreground">
+                Add one above, or{" "}
+                <Link to="/tasks" className="underline underline-offset-2 hover:text-foreground">
+                  plan the month
                 </Link>
                 .
-              </div>
+              </p>
             </CardContent>
           </Card>
         </motion.div>
       ) : (
         <>
-          {/* Up next */}
           {incomplete.length > 0 && (
-            <motion.div {...stagger(2)} className="space-y-2">
-              <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium px-1">Up next · {incomplete.length}</div>
+            <motion.section {...stagger(4)} className="space-y-1.5" aria-label="Remaining tasks">
+              <h2 className="px-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Up next · {incomplete.length}</h2>
               <Card>
-                <CardContent className="p-2">
+                <CardContent className="px-2 py-0">
                   <AnimatePresence initial={false}>
                     {incomplete.map((t) => (
-                      <TaskRow key={t._id} task={t} onToggle={toggle} onDelete={del} onMoveToTomorrow={moveToTomorrow} />
+                      <TaskRow key={t._id} task={t} onToggle={toggle} onRename={rename} onMove={move} onDelete={setPendingDelete} moveLabel={isToday ? "Move to tomorrow" : "Move to next day"} />
                     ))}
                   </AnimatePresence>
                 </CardContent>
               </Card>
-            </motion.div>
+            </motion.section>
           )}
 
-          {/* Done */}
           {completed.length > 0 && (
-            <motion.div {...stagger(3)} className="space-y-2">
-              <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium px-1 flex items-center gap-2">
-                <span>Done · {completed.length}</span>
-              </div>
-              <Card className="opacity-70">
-                <CardContent className="p-2">
+            <motion.section {...stagger(5)} className="space-y-1.5" aria-label="Completed tasks">
+              <h2 className="flex items-center gap-1.5 px-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                <Check className="h-3 w-3" aria-hidden />
+                Done · {completed.length}
+              </h2>
+              <Card>
+                <CardContent className="px-2 py-0">
                   <AnimatePresence initial={false}>
                     {completed.map((t) => (
-                      <TaskRow key={t._id} task={t} onToggle={toggle} onDelete={del} onMoveToTomorrow={moveToTomorrow} />
+                      <TaskRow key={t._id} task={t} onToggle={toggle} onRename={rename} onDelete={setPendingDelete} />
                     ))}
                   </AnimatePresence>
                 </CardContent>
               </Card>
-            </motion.div>
+            </motion.section>
           )}
         </>
       )}
-    </div>
-  );
-}
 
-// =====================================================================
-// TaskRow
-// =====================================================================
-function TaskRow({ task, onToggle, onDelete, onMoveToTomorrow }: { task: Task; onToggle: (t: Task) => void; onDelete: (id: string) => void; onMoveToTomorrow: (t: Task) => void }) {
-  return (
-    <motion.div layout initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, x: -8 }} transition={{ duration: 0.2 }} className="flex items-center gap-3 py-2 px-2 group rounded-md hover:bg-muted/40 transition-colors">
-      <Checkbox checked={task.done} onCheckedChange={() => onToggle(task)} />
-      <motion.span animate={task.done ? { opacity: 0.5 } : { opacity: 1 }} className={`flex-1 text-sm transition-all ${task.done ? "line-through text-muted-foreground" : "text-foreground"}`}>
-        {task.title}
-      </motion.span>
-      {!task.done && (
-        <Button variant="ghost" size="icon" className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => onMoveToTomorrow(task)} title="Move to tomorrow">
-          <ArrowRight className="h-3 w-3" />
-        </Button>
-      )}
-      <Button variant="ghost" size="icon" className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => onDelete(task._id)} title="Delete">
-        <Trash2 className="h-3 w-3" />
-      </Button>
-    </motion.div>
+      {/* ===== Link out ===== */}
+      <div className="flex justify-center pt-1">
+        <Link to="/tasks" className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
+          <CalendarDays className="h-3.5 w-3.5" aria-hidden />
+          Open the month calendar
+        </Link>
+      </div>
+
+      <AlertDialog open={!!pendingDelete} onOpenChange={(o) => !o && setPendingDelete(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this task?</AlertDialogTitle>
+            <AlertDialogDescription>
+              “{pendingDelete?.title}” on {pendingDelete ? fullDate(taskDay(pendingDelete)) : ""}. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel variant="outline" size="default">
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction variant="destructive" size="default" onClick={() => void confirmDelete()}>
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
   );
 }

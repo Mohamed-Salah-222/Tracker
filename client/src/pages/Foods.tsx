@@ -6,12 +6,13 @@ import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Card, CardContent } from "../components/ui/card";
+import { Skeleton } from "../components/ui/skeleton";
 import { Checkbox } from "../components/ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "../components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
 import { toast } from "sonner";
-import { Plus, Search, Snowflake, Trash2 } from "lucide-react";
+import { Plus, Search, ShoppingBasket, Trash2 } from "lucide-react";
 import { AxiosError } from "axios";
 
 // ===== Types =====
@@ -79,6 +80,7 @@ export default function Foods() {
   const [foods, setFoods] = useState<Food[]>([]);
   const [foodTotal, setFoodTotal] = useState(0);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [filterCat, setFilterCat] = useState<string>("all");
@@ -100,6 +102,7 @@ export default function Foods() {
 
   // First page; a search or category change re-runs this from offset 0.
   const load = useCallback(async () => {
+    setLoading(true);
     try {
       const r = await api.get<Page<Food>>("/foods", {
         params: { ...foodFilters(), limit: PAGE_LIMIT, offset: 0 },
@@ -108,6 +111,8 @@ export default function Foods() {
       setFoodTotal(r.data.total);
     } catch (e) {
       toast.error(getApiError(e));
+    } finally {
+      setLoading(false);
     }
   }, [foodFilters]);
 
@@ -140,16 +145,17 @@ export default function Foods() {
   const hasFilters = !!search || filterCat !== "all";
 
   return (
-    <div className="w-full max-w-[1100px] space-y-5">
+    <div className="w-full max-w-[1100px] space-y-4">
       {/* ===== Top bar ===== */}
-      <motion.div {...fadeUp} className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-3">
-          <h1 className="text-[15px] font-semibold tracking-tight">Food library</h1>
-          <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium font-mono tabular-nums">
+      <motion.div {...fadeUp} className="flex items-center justify-between gap-3">
+        <div className="hidden items-center gap-3 md:flex">
+          <h1 className="text-xl font-semibold tracking-tight">Foods</h1>
+          <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
             {pageRangeLabel(foods.length, foodTotal)} {foodTotal === 1 ? "item" : "items"}
           </span>
         </div>
-        <Button variant="default" size="sm" onClick={() => setAddOpen(true)}>
+        <h1 className="sr-only md:hidden">Foods</h1>
+        <Button variant="default" size="sm" className="ml-auto h-9" onClick={() => setAddOpen(true)}>
           <Plus className="h-3.5 w-3.5 mr-1.5" />
           Add food
         </Button>
@@ -188,20 +194,32 @@ export default function Foods() {
         </Card>
       </motion.div>
 
+      {/* ===== Loading ===== */}
+      {loading && (
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4" aria-busy="true" aria-label="Loading foods">
+          {Array.from({ length: 8 }, (_, i) => (
+            <Skeleton key={i} className="h-[132px] rounded-xl" />
+          ))}
+        </div>
+      )}
+
       {/* ===== Empty state ===== */}
-      {groupOrder.length === 0 && (
+      {!loading && groupOrder.length === 0 && (
         <motion.div {...stagger(2)}>
           <Card>
-            <CardContent className="p-12 text-center">
+            <CardContent className="px-6 py-6 text-center">
+              <div className="mx-auto mb-3 grid h-12 w-12 place-items-center rounded-full bg-muted">
+                <Search className="h-5 w-5 text-muted-foreground" aria-hidden />
+              </div>
               {hasFilters ? (
                 <>
-                  <div className="text-sm font-medium mb-1">No foods match.</div>
-                  <div className="text-sm text-muted-foreground">Try clearing your filters.</div>
+                  <div className="text-base font-semibold">No foods match</div>
+                  <p className="mt-1 text-sm text-muted-foreground">Try a different search or category.</p>
                 </>
               ) : (
                 <>
-                  <div className="text-sm font-medium mb-1">No foods yet.</div>
-                  <div className="text-sm text-muted-foreground">Add your first food to get started.</div>
+                  <div className="text-base font-semibold">No foods yet</div>
+                  <p className="mt-1 text-sm text-muted-foreground">Add one to start logging meals on the Calories page.</p>
                 </>
               )}
             </CardContent>
@@ -210,7 +228,8 @@ export default function Foods() {
       )}
 
       {/* ===== Category sections ===== */}
-      {groupOrder.map((cat, ci) => (
+      {!loading &&
+        groupOrder.map((cat, ci) => (
         <motion.div key={cat} {...stagger(ci + 2)} className="space-y-2">
           <div className="flex items-baseline justify-between px-1">
             <div className="flex items-baseline gap-2">
@@ -222,11 +241,11 @@ export default function Foods() {
             {grouped[cat].map((f, i) => (
               <FoodCard key={f._id} food={f} onChanged={load} index={i} />
             ))}
-          </div>
-        </motion.div>
-      ))}
+            </div>
+          </motion.div>
+        ))}
 
-      {foods.length < foodTotal && (
+      {!loading && foods.length < foodTotal && (
         <div className="flex justify-center">
           <Button variant="outline" size="sm" onClick={() => void loadMore()} disabled={loadingMore}>
             {loadingMore ? "Loading…" : `Load ${Math.min(PAGE_LIMIT, foodTotal - foods.length)} more`}
@@ -258,6 +277,13 @@ function FoodCard({ food, onChanged, index }: { food: Food; onChanged: () => voi
 
   const cal = caloriesDisplay(food);
   const unit = caloriesUnit(food);
+  const per = food.entryMode === "perUnit" ? 1 : 100;
+  const macros = {
+    p: Math.round((food.entryMode === "perUnit" ? food.proteinPerUnit : food.proteinPerGram * per) * 10) / 10,
+    c: Math.round((food.entryMode === "perUnit" ? food.carbsPerUnit : food.carbsPerGram * per) * 10) / 10,
+    f: Math.round((food.entryMode === "perUnit" ? food.fatPerUnit : food.fatPerGram * per) * 10) / 10,
+  };
+  const needsServing = food.entryMode === "perGram" && !food.defaultServingGrams;
 
   return (
     <>
@@ -269,25 +295,35 @@ function FoodCard({ food, onChanged, index }: { food: Food; onChanged: () => voi
         whileHover={{ y: -2 }}
         whileTap={{ scale: 0.98 }}
         onClick={() => setEditOpen(true)}
-        className="text-left rounded-[10px] border border-border bg-card p-4 hover:border-border-strong hover:shadow-md transition-all relative group flex flex-col min-h-[120px]"
+        className="group relative flex min-h-[132px] flex-col rounded-xl border border-border bg-card p-3 text-left transition-colors hover:border-border-strong"
+        aria-label={`Edit ${food.name}`}
       >
-        {/* Top: name + fridge */}
-        <div className="flex items-start justify-between gap-2 mb-3">
-          <div className="text-sm font-semibold text-foreground line-clamp-2 leading-snug">{food.name}</div>
-          {food.trackInFridge && <Snowflake className="h-3 w-3 flex-shrink-0" style={{ color: "var(--color-food-drinks)" }} />}
+        <div className="mb-2 flex items-start justify-between gap-2">
+          <div className="line-clamp-2 text-sm font-semibold leading-snug text-foreground">{food.name}</div>
+          {food.trackInFridge && <ShoppingBasket className="h-3 w-3 flex-shrink-0 text-muted-foreground" aria-label="Tracked in the Kitchen" />}
         </div>
 
-        {/* Calories headline */}
         <div className="mt-auto">
           <div className="flex items-baseline gap-1.5">
-            <span className="text-2xl font-semibold font-mono tracking-tight tabular-nums text-foreground">{cal}</span>
-            <span className="text-xs text-muted-foreground font-medium">cal</span>
+            <span className="font-mono text-2xl font-semibold tabular-nums tracking-tight text-foreground">{cal}</span>
+            <span className="text-xs font-medium text-muted-foreground">cal</span>
+            <span className="ml-auto font-mono text-[10px] tabular-nums text-muted-foreground">{unit}</span>
           </div>
-          <div className="text-[10px] text-muted-foreground font-mono tabular-nums mt-0.5">{unit}</div>
-        </div>
 
-        {/* Category tag */}
-        <div className="absolute top-3 right-3 opacity-0 group-hover:opacity-0 transition-opacity">{/* hidden when hovering, visible by default */}</div>
+          {/* Macros were only visible by opening the food; the card had room. */}
+          <div className="mt-1.5 flex items-center gap-2 font-mono text-[10px] tabular-nums text-muted-foreground">
+            <span>P {macros.p}</span>
+            <span>C {macros.c}</span>
+            <span>F {macros.f}</span>
+          </div>
+
+          {/* A per-gram food with no default serving cannot be logged in one tap. */}
+          {needsServing && (
+            <div className="mt-1.5 inline-flex items-center rounded-full border border-border-strong px-1.5 py-px text-[9px] font-semibold uppercase tracking-wider text-muted-foreground" title="Set a default serving so this can be logged in one tap">
+              No serving set
+            </div>
+          )}
+        </div>
       </motion.button>
 
       <FoodFormDialog
@@ -511,13 +547,13 @@ function FoodFormDialog({ open, onOpenChange, onSaved, existing, onDelete }: { o
                   <Input value={unitLabel} onChange={(e) => setUnitLabel(e.target.value)} placeholder="piece, bar, scoop... (optional, defaults to 'unit')" />
                 </div>
                 <label className="flex items-start gap-3 cursor-pointer group">
-                  <Checkbox checked={trackInFridge} onCheckedChange={(v) => setTrackInFridge(!!v)} id="fridge" className="mt-0.5" />
+                  <Checkbox checked={trackInFridge} onCheckedChange={(v) => setTrackInFridge(!!v)} id="kitchen" className="mt-0.5" />
                   <div className="space-y-0.5">
                     <span className="text-sm font-medium flex items-center gap-1.5">
-                      <Snowflake className="h-3 w-3" style={{ color: "var(--color-food-drinks)" }} />
-                      Track this in the fridge
+                      <ShoppingBasket className="h-3 w-3 text-muted-foreground" />
+                      Keep stock of this in the Kitchen
                     </span>
-                    <span className="text-xs text-muted-foreground block">Turn on for home-prepared meals you want to count. Off for store-bought / on-the-go.</span>
+                    <span className="text-xs text-muted-foreground block">Track how many you have left and get reminded to restock. Logging it on the Calories page takes one off the shelf.</span>
                   </div>
                 </label>
               </motion.div>

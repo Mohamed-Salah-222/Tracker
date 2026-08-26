@@ -26,7 +26,8 @@ const calorieEntrySchema = new Schema(
     fatPerUnitSnapshot: { type: Number, default: 0 },
     unitLabelSnapshot: { type: String, default: "" },
 
-    // Track whether this entry caused a fridge deduction at log time
+    // How many units this entry took off the Kitchen shelf at log time.
+    // Field name predates the Fridge -> Kitchen rename and holds live data, so it stays.
     fridgeDeductedAtLog: { type: Number, default: 0 },
 
     deletedAt: { type: Date, default: null },

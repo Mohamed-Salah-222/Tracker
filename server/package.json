@@ -10,8 +10,7 @@
     "migrate:expense-source": "ts-node-dev --transpile-only --no-notify src/scripts/migrate-expense-source.ts",
     "migrate:wallet-currency": "ts-node-dev --transpile-only --no-notify src/scripts/migrate-wallet-currency.ts",
     "reset:august-dashboard": "ts-node-dev --transpile-only --no-notify src/scripts/reset-august-dashboard.ts",
-    "reset:payments": "ts-node-dev --transpile-only --no-notify src/scripts/reset-payments.ts",
-    "seed:goals": "ts-node-dev --transpile-only --no-notify src/scripts/seed-goals.ts"
+    "reset:payments": "ts-node-dev --transpile-only --no-notify src/scripts/reset-payments.ts"
   },
   "keywords": [],
   "author": "",

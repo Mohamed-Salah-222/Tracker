@@ -1,7 +1,9 @@
 import { Router } from "express";
 import { CalorieEntry, MEAL_SLOTS } from "../models/CalorieEntry";
 import { Food } from "../models/Food";
-import { FridgeItem } from "../models/FridgeItem";
+// NOTE: the CalorieEntry field stays `fridgeDeductedAtLog` — it holds live data on
+// existing entries, so only the model reference was renamed, not the stored field.
+import { KitchenItem } from "../models/KitchenItem";
 import { CheatDay } from "../models/CheatDay";
 import { WaterEntry } from "../models/WaterEntry";
 import { Goal } from "../models/Goal";
@@ -64,7 +66,7 @@ router.post("/", async (req, res) => {
 
     let deducted = 0;
     if (food.trackInFridge) {
-      const item = await FridgeItem.findOne({ foodId: food._id });
+      const item = await KitchenItem.findOne({ foodId: food._id });
       if (item) {
         deducted = Math.min(n, item.count);
         if (deducted > 0) {
@@ -169,7 +171,7 @@ router.patch("/:id", async (req, res) => {
       if ((entry.fridgeDeductedAtLog ?? 0) > 0) {
         const delta = units - oldUnits;
         if (delta !== 0) {
-          const item = await FridgeItem.findOne({ foodId: entry.foodId });
+          const item = await KitchenItem.findOne({ foodId: entry.foodId });
           if (item) {
             if (delta > 0) {
               const more = Math.min(delta, item.count);
@@ -200,7 +202,7 @@ router.delete("/:id", async (req, res) => {
   await entry.save();
 
   if (entry.entryMode === "perUnit" && (entry.fridgeDeductedAtLog ?? 0) > 0) {
-    const item = await FridgeItem.findOne({ foodId: entry.foodId });
+    const item = await KitchenItem.findOne({ foodId: entry.foodId });
     if (item) {
       item.count += entry.fridgeDeductedAtLog ?? 0;
       await item.save();
