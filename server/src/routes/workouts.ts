@@ -1,15 +1,17 @@
 import { Router } from "express";
-import { WorkoutSession, WORKOUT_TYPES, normalizeWorkoutType, type WorkoutType } from "../models/WorkoutSession";
+import { WorkoutSession, REST_DAY, isRestType, isValidDayKey, normalizeWorkoutType } from "../models/WorkoutSession";
+import { loadWorkoutSettings } from "../models/WorkoutSettings";
+import { WorkoutDayPlan } from "../models/WorkoutDayPlan";
+import { ExerciseNote } from "../models/ExerciseNote";
 import { SetLog } from "../models/SetLog";
+import { toDayUTC } from "../lib/dates";
 import { isNonNegativeNumber, isObjectId, isPositiveInteger, objectIdParam, parseDayUTC, trimmedString } from "../lib/validation";
 
 const router = Router();
 
 router.param("id", objectIdParam);
 
-function isValidType(t: string): t is WorkoutType {
-  return (WORKOUT_TYPES as readonly string[]).includes(t);
-}
+const isValidType = isValidDayKey;
 
 /**
  * Sessions created before the split was simplified still hold "upperA"/"lowerB"/etc.
@@ -21,33 +23,149 @@ function serializeSession(session: { toObject: () => Record<string, unknown>; ty
 }
 
 // =====================================================================
+// Day plans: a user's edited exercise list for one day template.
+// GET    /workouts/day-plans            every customised day
+// PUT    /workouts/day-plans/:dayKey    replace that day's exercises
+// DELETE /workouts/day-plans/:dayKey    reset it to the catalogue default
+// =====================================================================
+router.get("/day-plans", async (_req, res) => {
+  const plans = await WorkoutDayPlan.find();
+  const out: Record<string, { id: string; sets: number; reps: number }[]> = {};
+  for (const p of plans) out[p.dayKey] = p.slots.map((sl) => ({ id: sl.id, sets: sl.sets, reps: sl.reps }));
+  res.json(out);
+});
+
+router.put("/day-plans/:dayKey", async (req, res) => {
+  const dayKey = trimmedString(req.params.dayKey);
+  if (!dayKey || !isValidDayKey(dayKey)) return res.status(400).json({ error: "invalid dayKey" });
+
+  const slots = req.body?.slots;
+  if (!Array.isArray(slots) || slots.length === 0) return res.status(400).json({ error: "slots required" });
+  if (slots.length > 20) return res.status(400).json({ error: "too many exercises for one day" });
+
+  const clean: { id: string; sets: number; reps: number }[] = [];
+  const seen = new Set<string>();
+  for (const raw of slots) {
+    const id = trimmedString(raw?.id);
+    if (!id) return res.status(400).json({ error: "each exercise needs an id" });
+    // The same movement twice in one day would collide: SetLog is keyed by
+    // (session, exercise, set number), so the two entries would overwrite each other.
+    if (seen.has(id)) return res.status(400).json({ error: `${id} is listed twice` });
+    seen.add(id);
+    if (!isPositiveInteger(raw?.sets) || raw.sets > 20) return res.status(400).json({ error: "sets must be 1-20" });
+    if (!isPositiveInteger(raw?.reps) || raw.reps > 500) return res.status(400).json({ error: "reps must be 1-500" });
+    clean.push({ id, sets: raw.sets, reps: raw.reps });
+  }
+
+  const plan = await WorkoutDayPlan.findOneAndUpdate({ dayKey }, { $set: { dayKey, slots: clean } }, { upsert: true, returnDocument: "after" });
+  res.json({ dayKey, slots: plan!.slots.map((sl) => ({ id: sl.id, sets: sl.sets, reps: sl.reps })) });
+});
+
+router.delete("/day-plans/:dayKey", async (req, res) => {
+  const dayKey = trimmedString(req.params.dayKey);
+  if (!dayKey) return res.status(400).json({ error: "invalid dayKey" });
+  await WorkoutDayPlan.deleteOne({ dayKey });
+  res.json({ ok: true, dayKey });
+});
+
+// =====================================================================
+// Per-movement notes. Keyed by movement, not by day, so a note about a machine
+// follows that exercise wherever it turns up.
+// GET /workouts/exercise-notes            every note, as { movementId: note }
+// PUT /workouts/exercise-notes/:movementId
+// =====================================================================
+router.get("/exercise-notes", async (_req, res) => {
+  const notes = await ExerciseNote.find();
+  const out: Record<string, string> = {};
+  for (const n of notes) out[n.movementId] = n.note;
+  res.json(out);
+});
+
+router.put("/exercise-notes/:movementId", async (req, res) => {
+  const movementId = trimmedString(req.params.movementId);
+  if (!movementId || movementId.length > 60) return res.status(400).json({ error: "invalid movementId" });
+  const note = req.body?.note;
+  if (typeof note !== "string") return res.status(400).json({ error: "note must be a string" });
+  if (note.length > 2000) return res.status(400).json({ error: "note is too long" });
+
+  if (note.trim() === "") {
+    // An emptied note is a deleted note; no point keeping blank rows around.
+    await ExerciseNote.deleteOne({ movementId });
+    return res.json({ movementId, note: "" });
+  }
+  await ExerciseNote.findOneAndUpdate({ movementId }, { $set: { movementId, note } }, { upsert: true });
+  res.json({ movementId, note });
+});
+
+// =====================================================================
+// GET /workouts/settings   /   PATCH /workouts/settings
+// Which split the user follows. `chosenAt` is what tells the page whether to show
+// the first-run picker or go straight to the session.
+// =====================================================================
+router.get("/settings", async (_req, res) => {
+  const s = await loadWorkoutSettings();
+  res.json({ splitId: s.splitId, hasChosenSplit: !!s.chosenAt, stallNoticeSessions: s.stallNoticeSessions, stallDeloadSessions: s.stallDeloadSessions });
+});
+
+router.patch("/settings", async (req, res) => {
+  const { splitId, stallNoticeSessions, stallDeloadSessions } = req.body;
+  const s = await loadWorkoutSettings();
+
+  if (splitId !== undefined) {
+    if (typeof splitId !== "string" || !/^[A-Za-z0-9_]{1,60}$/.test(splitId)) {
+      return res.status(400).json({ error: "valid splitId required" });
+    }
+    s.splitId = splitId;
+    s.chosenAt = new Date();
+  }
+
+  for (const [field, value] of [
+    ["stallNoticeSessions", stallNoticeSessions],
+    ["stallDeloadSessions", stallDeloadSessions],
+  ] as const) {
+    if (value === undefined) continue;
+    if (!isPositiveInteger(value) || value < 2 || value > 20) return res.status(400).json({ error: `${field} must be between 2 and 20` });
+    s.set(field, value);
+  }
+
+  // A deload that fires before the notice would make the notice pointless.
+  if (s.stallDeloadSessions < s.stallNoticeSessions) {
+    return res.status(400).json({ error: "the deload threshold must be at least the notice threshold" });
+  }
+
+  await s.save();
+  res.json({ splitId: s.splitId, hasChosenSplit: !!s.chosenAt, stallNoticeSessions: s.stallNoticeSessions, stallDeloadSessions: s.stallDeloadSessions });
+});
+
+// =====================================================================
 // GET /workouts/today
 // Returns today's session if it exists, else suggests the next type.
 // =====================================================================
-router.get("/today", async (_req, res) => {
-  const today = new Date();
-  today.setUTCHours(0, 0, 0, 0);
+router.get("/today", async (req, res) => {
+  // "Today" is the caller's local calendar day, not the server's UTC one. Deriving it
+  // from the server clock made this endpoint return yesterday's session for the hours
+  // when local time is ahead of UTC. In Africa/Cairo, every day between local
+  // midnight and 03:00, so a session logged on the 26th also showed up on the 27th.
+  // See client/src/lib/today.ts for the same rule on the client.
+  if (req.query.date !== undefined && !parseDayUTC(req.query.date)) {
+    return res.status(400).json({ error: "valid date required" });
+  }
+  const today = parseDayUTC(req.query.date) ?? toDayUTC(new Date());
 
+  const settings = await loadWorkoutSettings();
   const existing = await WorkoutSession.findOne({ date: today });
-  if (existing) {
-    return res.json({ session: serializeSession(existing), suggested: null });
-  }
 
-  // Simple alternating split: whatever was trained last, suggest the other half.
-  const rotation: WorkoutType[] = ["upper", "lower"];
-  const lastWorkout = await WorkoutSession.findOne({
-    type: { $ne: "rest" },
-  }).sort({ date: -1 });
+  // The split cycles live in the client catalogue, which has 34 of them. Rather than
+  // keep a second copy here that could drift, the server reports where the last
+  // session sat in its cycle and the client walks its own catalogue from there.
+  const last = await WorkoutSession.findOne({ date: { $lt: today } }).sort({ date: -1 });
 
-  let suggested: WorkoutType = "upper";
-  if (lastWorkout) {
-    const idx = rotation.indexOf(normalizeWorkoutType(lastWorkout.type));
-    if (idx !== -1) {
-      suggested = rotation[(idx + 1) % rotation.length];
-    }
-  }
-
-  res.json({ session: null, suggested });
+  res.json({
+    session: existing ? serializeSession(existing) : null,
+    splitId: settings.splitId,
+    hasChosenSplit: !!settings.chosenAt,
+    last: last ? { type: normalizeWorkoutType(last.type), splitId: last.splitId ?? "", cycleIndex: last.cycleIndex ?? null, date: last.date.toISOString().slice(0, 10) } : null,
+  });
 });
 
 // =====================================================================
@@ -73,7 +191,7 @@ router.get("/session/:id/sets", async (req, res) => {
 // Create a session for a date with a type
 // =====================================================================
 router.post("/session", async (req, res) => {
-  const { date, type, warmupMinutes, finisherMinutes } = req.body;
+  const { date, type, splitId, cycleIndex, warmupMinutes, finisherMinutes } = req.body;
   const day = parseDayUTC(date);
   if (!day) return res.status(400).json({ error: "valid date required" });
   if (typeof type !== "string" || !isValidType(type)) return res.status(400).json({ error: "invalid type" });
@@ -90,8 +208,10 @@ router.post("/session", async (req, res) => {
   const session = await WorkoutSession.create({
     date: day,
     type,
-    warmupMinutes: type === "rest" ? 0 : (warmupMinutes ?? 10),
-    finisherMinutes: type === "rest" ? 0 : (finisherMinutes ?? 20),
+    splitId: typeof splitId === "string" ? splitId : "",
+    cycleIndex: Number.isInteger(cycleIndex) ? cycleIndex : null,
+    warmupMinutes: type === REST_DAY ? 0 : (warmupMinutes ?? 10),
+    finisherMinutes: type === REST_DAY ? 0 : (finisherMinutes ?? 20),
   });
   res.json(serializeSession(session));
 });
@@ -122,6 +242,9 @@ router.patch("/session/:id", async (req, res) => {
 
   const session = await WorkoutSession.findById(req.params.id);
   if (!session) return res.status(404).json({ error: "not found" });
+
+  if (typeof req.body.cycleIndex === "number") session.set("cycleIndex", req.body.cycleIndex);
+  if (typeof req.body.splitId === "string") session.set("splitId", req.body.splitId);
 
   if (type && type !== normalizeWorkoutType(session.type)) {
     // Sets are keyed by exercise id, and the two halves of the split share none.
@@ -162,10 +285,10 @@ router.delete("/session/:id", async (req, res) => {
 // =====================================================================
 // PUT /workouts/sets
 // Upsert a set log (sessionId + exerciseId + setNumber is the key)
-// Body: { sessionId, exerciseId, setNumber, weight?, reps?, done? }
+// Body: { sessionId, exerciseId, setNumber, weight?, reps?, rpe?, done? }
 // =====================================================================
 router.put("/sets", async (req, res) => {
-  const { sessionId, exerciseId, setNumber, weight, reps, done } = req.body;
+  const { sessionId, exerciseId, setNumber, weight, reps, rpe, done } = req.body;
   if (!isObjectId(sessionId)) return res.status(400).json({ error: "invalid sessionId" });
 
   const cleanExerciseId = trimmedString(exerciseId);
@@ -179,6 +302,9 @@ router.put("/sets", async (req, res) => {
   if (reps !== undefined && reps !== null && !isNonNegativeNumber(reps)) {
     return res.status(400).json({ error: "reps must be a non-negative number" });
   }
+  if (rpe !== undefined && rpe !== null && (typeof rpe !== "number" || !Number.isFinite(rpe) || rpe < 1 || rpe > 10)) {
+    return res.status(400).json({ error: "rpe must be between 1 and 10" });
+  }
   if (done !== undefined && typeof done !== "boolean") {
     return res.status(400).json({ error: "done must be a boolean" });
   }
@@ -190,6 +316,7 @@ router.put("/sets", async (req, res) => {
   const update: Record<string, unknown> = {};
   if (weight !== undefined) update.weight = weight;
   if (reps !== undefined) update.reps = reps;
+  if (rpe !== undefined) update.rpe = rpe;
   if (typeof done === "boolean") update.done = done;
 
   const set = await SetLog.findOneAndUpdate({ sessionId, exerciseId: cleanExerciseId, setNumber }, { $set: update, $setOnInsert: { sessionId, exerciseId: cleanExerciseId, setNumber } }, { upsert: true, new: true });
@@ -268,14 +395,70 @@ router.get("/last-weights", async (req, res) => {
         weight: { $first: "$weight" },
         reps: { $first: "$reps" },
         when: { $first: "$session.date" },
+        lastSessionId: { $first: "$sessionId" },
         best: { $max: "$weight" },
+        // Heaviest estimated one-rep max ever recorded for this movement, by Epley.
+        // Computed here so the client never has to pull the whole set history.
+        bestE1rm: { $max: { $multiply: ["$weight", { $add: [1, { $divide: [{ $ifNull: ["$reps", 1] }, 30] }] }] } },
       },
     },
   ]);
 
-  const map: Record<string, { weight: number; reps: number | null; when: Date; best: number }> = {};
+  // Every set from the session that movement was last trained in. The suggestion
+  // needs the whole set, not just the top one: whether you completed all of them at
+  // the target reps is what decides between adding load and repeating it.
+  const lastSets = await SetLog.find({
+    $or: rows.map((r) => ({ exerciseId: r._id, sessionId: r.lastSessionId })),
+  }).sort({ setNumber: 1 });
+
+  const byExercise: Record<string, { weight: number | null; reps: number | null; rpe: number | null; done: boolean }[]> = {};
+  for (const s of lastSets) {
+    (byExercise[s.exerciseId] ||= []).push({ weight: s.weight ?? null, reps: s.reps ?? null, rpe: s.rpe ?? null, done: s.done });
+  }
+
+  // One entry per session per movement (its best set) for the most recent few
+  // sessions. Stall detection needs a trend, not just the latest number.
+  const RECENT_SESSIONS = 8;
+  const trend = await SetLog.aggregate([
+    { $match: { weight: { $ne: null, $gt: 0 } } },
+    { $lookup: { from: "workoutsessions", localField: "sessionId", foreignField: "_id", as: "session" } },
+    { $unwind: "$session" },
+    ...(before ? [{ $match: { "session.date": { $lt: before } } }] : []),
+    {
+      $group: {
+        _id: { exerciseId: "$exerciseId", sessionId: "$sessionId" },
+        date: { $first: "$session.date" },
+        weight: { $max: "$weight" },
+        reps: { $max: "$reps" },
+        e1rm: { $max: { $multiply: ["$weight", { $add: [1, { $divide: [{ $ifNull: ["$reps", 1] }, 30] }] }] } },
+      },
+    },
+    { $sort: { date: -1 } },
+    { $group: { _id: "$_id.exerciseId", sessions: { $push: { date: "$date", weight: "$weight", reps: "$reps", e1rm: "$e1rm" } } } },
+    { $project: { sessions: { $slice: ["$sessions", RECENT_SESSIONS] } } },
+  ]);
+
+  const trendByExercise: Record<string, { date: string; weight: number; reps: number | null; e1rm: number }[]> = {};
+  for (const t of trend) {
+    trendByExercise[t._id] = t.sessions.map((s: { date: Date; weight: number; reps: number | null; e1rm: number }) => ({
+      date: s.date.toISOString().slice(0, 10),
+      weight: s.weight,
+      reps: s.reps,
+      e1rm: Math.round(s.e1rm * 10) / 10,
+    }));
+  }
+
+  const map: Record<string, unknown> = {};
   for (const r of rows) {
-    map[r._id] = { weight: r.weight, reps: r.reps, when: r.when, best: r.best };
+    map[r._id] = {
+      weight: r.weight,
+      reps: r.reps,
+      when: r.when,
+      best: r.best,
+      bestE1rm: Math.round((r.bestE1rm ?? 0) * 10) / 10,
+      lastSets: byExercise[r._id] ?? [],
+      recent: trendByExercise[r._id] ?? [],
+    };
   }
   res.json(map);
 });
@@ -337,10 +520,11 @@ router.get("/stats", async (req, res) => {
   const trainingSessions = sessions.filter((s) => normalizeWorkoutType(s.type) !== "rest");
   const completedTrainingSessions = trainingSessions.filter((s) => s.completedAt).length;
   const completedSessions = sessions.filter((s) => s.completedAt).length;
-  const sessionsByType = { upper: 0, lower: 0, rest: 0 };
+  const sessionsByType: Record<string, number> = {};
 
   for (const s of sessions) {
-    sessionsByType[normalizeWorkoutType(s.type)]++;
+    const key = normalizeWorkoutType(s.type);
+    sessionsByType[key] = (sessionsByType[key] ?? 0) + 1;
     const sets = setsBySession[s._id.toString()] ?? [];
     for (const set of sets) {
       if (set.done) totalSetsDone++;
@@ -349,7 +533,7 @@ router.get("/stats", async (req, res) => {
   }
 
   // Per-day frequency map
-  const dayMap: Record<string, { date: string; type: WorkoutType; volume: number; setsDone: number; completed: boolean; note: string }> = {};
+  const dayMap: Record<string, { date: string; type: string; volume: number; setsDone: number; completed: boolean; note: string }> = {};
   for (const s of sessions) {
     const iso = s.date.toISOString().slice(0, 10);
     const sets = setsBySession[s._id.toString()] ?? [];
@@ -401,7 +585,7 @@ router.get("/stats", async (req, res) => {
 
 // =====================================================================
 // GET /workouts/exercise-progress?exerciseId=X&limit=N
-// Returns history for one exercise — best set per session, last N sessions
+// Returns history for one exercise: best set per session, last N sessions
 // =====================================================================
 router.get("/exercise-progress", async (req, res) => {
   const exerciseId = trimmedString(req.query.exerciseId);

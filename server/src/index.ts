@@ -22,7 +22,7 @@ const app = express();
 
 // Render (and any similar host) terminates TLS and forwards the real client IP in
 // X-Forwarded-For. Trusting exactly one hop lets the rate limiter key on the caller
-// instead of the proxy — without it every request looks like one client.
+// instead of the proxy. Without it every request looks like one client.
 app.set("trust proxy", 1);
 
 // Security headers. This API only ever returns JSON, so the browser-facing policies
@@ -47,7 +47,7 @@ app.use(
     limit: 1000,
     standardHeaders: "draft-8",
     legacyHeaders: false,
-    message: { error: "too many requests — slow down" },
+    message: { error: "too many requests, slow down" },
   }),
 );
 

@@ -10,7 +10,7 @@ router.param("id", objectIdParam);
 
 /**
  * Restock-first ordering. The previous sort was `count: -1`, which put the fullest
- * items on page 1 and buried everything at zero on the last page — exactly backwards
+ * items on page 1 and buried everything at zero on the last page, exactly backwards
  * for a list whose whole job is telling you what to buy.
  */
 const RESTOCK_SORT = { count: 1 as const, foodNameSnapshot: 1 as const };

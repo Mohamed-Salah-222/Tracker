@@ -378,7 +378,7 @@ router.get("/", async (req, res) => {
   });
 
   // Shopping ring: what is at or below its restock line right now. Not month-scoped
-  // like the habit rows — stock is a present-tense fact, not a daily history.
+  // like the habit rows. Stock is a present-tense fact, not a daily history.
   const kitchenItems = await KitchenItem.find().sort({ count: 1, foodNameSnapshot: 1 });
   const needsRestock = kitchenItems.filter((i) => kitchenStatus(i.count, i.lowThreshold) !== "ok");
   const kitchen = {
@@ -464,7 +464,7 @@ router.get("/", async (req, res) => {
 });
 
 // =====================================================================
-// GET /dashboard/goals   —   PATCH /dashboard/goals
+// GET /dashboard/goals   /   PATCH /dashboard/goals
 // The targets every row is measured against. `monthlyByKind` holds "how many days
 // this month"; a kind absent from it is measured against every day of the month.
 // =====================================================================
@@ -533,7 +533,7 @@ router.get("/habits", async (req, res) => {
   const items = HABIT_PAGE_KINDS.map((kind) => {
     const doc = byKind.get(kind);
     // Steps is a number you record, not a box you tick, so it reports its amount and
-    // target and counts as done once the target is reached — same rule as the grid.
+    // target and counts as done once the target is reached, same rule as the grid.
     const isCount = kind === "steps";
     const amount = doc?.amount ?? 0;
     const target = isCount ? goals.stepsTarget : 0;

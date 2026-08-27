@@ -117,7 +117,7 @@ export function unitWord(food: Food, n = 1): string {
 /**
  * The amount a one-tap log would use, or null when the food cannot be logged
  * without asking. Per-gram foods with no default serving fall in the second
- * group, which is most of them — the UI has to say so rather than fail quietly.
+ * group, which is most of them, so the UI has to say so rather than fail quietly.
  */
 export function quickLogAmount(food: Food): number | null {
   if (food.entryMode === "perUnit") return 1;

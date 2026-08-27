@@ -33,7 +33,7 @@ type View = "today" | "week" | "month";
 
 // ===== Helpers =====
 const fmtMoney = (n: number) => `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-const fmtCompact = (n: number) => (n === 0 ? "—" : `$${Math.round(n)}`);
+const fmtCompact = (n: number) => (n === 0 ? "-" : `$${Math.round(n)}`);
 const isWeekend = (iso: string) => {
   const day = new Date(iso).getUTCDay();
   return day === 0 || day === 6;
@@ -336,7 +336,7 @@ export default function Income() {
 
       {/* ===== Body: two columns ===== */}
       {/* The old track was minmax(818px,1fr)_262px, which needs 1096px of room but
-          switched on at the 1024px lg breakpoint — a guaranteed horizontal overflow
+          switched on at the 1024px lg breakpoint, a guaranteed horizontal overflow
           on any screen between the two. */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_262px] xl:grid-cols-[minmax(0,1fr)_300px]">
         {/* Main column */}
@@ -381,12 +381,12 @@ export default function Income() {
               {view === "today" ? (
                 <>
                   <SidebarStat label="Minutes" value={todayMinutes.toString()} />
-                  <SidebarStat label="Rate" value={rate != null ? `$${rate.toFixed(2)}` : "—"} />
+                  <SidebarStat label="Rate" value={rate != null ? `$${rate.toFixed(2)}` : "-"} />
                 </>
               ) : (
                 <>
                   <SidebarStat label="Work days" value={workingDays.toString()} />
-                  <SidebarStat label={view === "week" ? "Minutes" : "Avg/day"} value={view === "week" ? totalMinutes.toString() : workingDays > 0 ? fmtMoney(avg) : "—"} />
+                  <SidebarStat label={view === "week" ? "Minutes" : "Avg/day"} value={view === "week" ? totalMinutes.toString() : workingDays > 0 ? fmtMoney(avg) : "-"} />
                 </>
               )}
             </div>
@@ -733,7 +733,7 @@ function DayCard({ dayKey, entry, status, onChanged, size }: { dayKey: string; e
                     <WeekendTag />
                   </div>
                 ) : (
-                  <div className="text-xl font-semibold font-mono text-muted-foreground opacity-50">—</div>
+                  <div className="text-xl font-semibold font-mono text-muted-foreground opacity-50">-</div>
                 )}
               </div>
             </div>
@@ -837,7 +837,7 @@ function Sparkline({ sparkByDate, todayIso }: { sparkByDate: Record<string, { en
               if (v > 0) bg = "var(--color-income)";
               else if (s) bg = "color-mix(in oklch, var(--color-muted-foreground), transparent 60%)";
 
-              const label = v > 0 ? `${new Date(d).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" })}: ${fmtMoney(v)}` : s ? `${new Date(d).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" })}: ${s.status}` : `${new Date(d).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" })}: —`;
+              const label = v > 0 ? `${new Date(d).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" })}: ${fmtMoney(v)}` : s ? `${new Date(d).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" })}: ${s.status}` : `${new Date(d).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" })}: -`;
 
               return (
                 <div key={d} className="flex-1 flex flex-col justify-end h-full relative group" title={label}>
@@ -945,7 +945,7 @@ function DeleteDialog({ open, onOpenChange, isOffDay, entry, status, dateLabel, 
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>{isOffDay ? "Remove off-day mark?" : "Delete this entry?"}</AlertDialogTitle>
-          <AlertDialogDescription>{isOffDay ? `${dateLabel} will no longer be marked as ${status?.status}.` : `${entry?.minutes} min — ${entry && fmtMoney(entry.amount)}. Soft delete; recoverable.`}</AlertDialogDescription>
+          <AlertDialogDescription>{isOffDay ? `${dateLabel} will no longer be marked as ${status?.status}.` : `${entry?.minutes} min, ${entry && fmtMoney(entry.amount)}. Soft delete; recoverable.`}</AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel variant="outline" size="default">

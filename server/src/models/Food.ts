@@ -22,7 +22,7 @@ const foodSchema = new Schema(
     proteinPerUnit: { type: Number, required: true, min: 0, default: 0 },
     carbsPerUnit: { type: Number, required: true, min: 0, default: 0 },
     fatPerUnit: { type: Number, required: true, min: 0, default: 0 },
-    unitLabel: { type: String, default: "" }, // e.g. "piece", "bar", "scoop" — display only
+    unitLabel: { type: String, default: "" }, // e.g. "piece", "bar", "scoop". Display only
 
     archived: { type: Boolean, default: false },
   },

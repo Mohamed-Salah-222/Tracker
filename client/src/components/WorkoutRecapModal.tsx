@@ -9,7 +9,11 @@ import { BarSeries, LineSeries } from "./MiniChart";
 import { api } from "../lib/api";
 import { AxiosError } from "axios";
 import { toast } from "sonner";
-import { ALL_EXERCISES, EXERCISE_NAME_BY_ID, LOWER_EXERCISES, UPPER_EXERCISES, WORKOUT_TYPE_CHART, workoutLabel, type WorkoutType } from "../lib/workoutProgram";
+import { workoutLabel, type WorkoutType } from "../lib/workoutProgram";
+import { ALL_MOVEMENT_IDS, isRestDay, movementName } from "../lib/workoutSplits";
+
+/** Every movement any split can use, alphabetical, for the progression picker. */
+const PICKABLE = [...ALL_MOVEMENT_IDS].map((id) => ({ id, name: movementName(id) })).sort((a, b) => a.name.localeCompare(b.name));
 
 // ===== Types =====
 
@@ -50,8 +54,9 @@ function getApiError(e: unknown): string {
 const dayShort = (iso: string) => new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
 const dayLong = (iso: string) => new Date(iso).toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric", timeZone: "UTC" });
 
+/** Rest days sit at the pale end of the grey ladder; training days are solid. */
 function workoutColor(type: WorkoutType) {
-  return WORKOUT_TYPE_CHART[type] ?? "var(--color-workout-rest)";
+  return isRestDay(type) ? "var(--color-workout-rest)" : "var(--color-workout-upper)";
 }
 
 // ===== Range =====
@@ -77,7 +82,9 @@ export function WorkoutRecapModal({ open, onOpenChange }: { open: boolean; onOpe
   const [stats, setStats] = useState<StatsResp | null>(null);
   const [loading, setLoading] = useState(false);
   const [range, setRange] = useState<Range>("week");
-  const [pickedExercise, setPickedExercise] = useState<string>(ALL_EXERCISES[0].id);
+  // Left empty until the stats arrive; picking alphabetically would open the chart
+  // on a movement that has never been logged, which is what it used to do.
+  const [pickedExercise, setPickedExercise] = useState<string>("");
   const [progress, setProgress] = useState<ProgressResp | null>(null);
   const [progressLoading, setProgressLoading] = useState(false);
   const progressCache = useRef<Record<string, ProgressResp>>({});
@@ -96,6 +103,13 @@ export function WorkoutRecapModal({ open, onOpenChange }: { open: boolean; onOpe
       const r = await api.get<StatsResp>("/workouts/stats", { params: rangeParams(range) });
       statsCache.current[range] = r.data;
       setStats(r.data);
+      // Land on something with data. Only falls back to the full list when nothing
+      // at all has been logged yet.
+      setPickedExercise((current) => {
+        if (current && r.data.bestByExercise[current]) return current;
+        const logged = PICKABLE.find((e) => r.data.bestByExercise[e.id]);
+        return logged?.id ?? current ?? PICKABLE[0].id;
+      });
     } catch (e) {
       toast.error(getApiError(e));
     } finally {
@@ -136,6 +150,11 @@ export function WorkoutRecapModal({ open, onOpenChange }: { open: boolean; onOpe
   }, [stats]);
 
   const noData = !stats || stats.totalSessions === 0;
+
+  const loggedFirst = useMemo(() => {
+    const best = stats?.bestByExercise ?? {};
+    return { logged: PICKABLE.filter((e) => best[e.id]), rest: PICKABLE.filter((e) => !best[e.id]) };
+  }, [stats]);
 
   const trainingSessions = stats ? stats.sessionsByType.upper + stats.sessionsByType.lower : 0;
   const avgVolume = trainingSessions > 0 ? Math.round(stats!.totalWeightLogged / trainingSessions) : 0;
@@ -251,23 +270,29 @@ export function WorkoutRecapModal({ open, onOpenChange }: { open: boolean; onOpe
                         <TrendingUp className="h-3 w-3" />
                         Exercise progression
                       </div>
-                      <Select value={pickedExercise} onValueChange={(v) => setPickedExercise(v ?? ALL_EXERCISES[0].id)}>
+                      <Select value={pickedExercise} onValueChange={(v) => setPickedExercise(v ?? pickedExercise)}>
                         <SelectTrigger className="!h-9 w-full text-xs sm:w-[220px]">
                           <SelectValue />
                         </SelectTrigger>
+                        {/* Movements you have actually lifted come first; the rest are
+                            still reachable but pushed below a divider. */}
                         <SelectContent>
-                          <SelectItem value="section-upper" disabled className="text-[10px] uppercase tracking-wider font-medium text-muted-foreground">
-                            Upper
-                          </SelectItem>
-                          {UPPER_EXERCISES.map((e) => (
+                          {loggedFirst.logged.length > 0 && (
+                            <SelectItem value="section-logged" disabled className="text-[10px] uppercase tracking-wider font-medium text-muted-foreground">
+                              Logged
+                            </SelectItem>
+                          )}
+                          {loggedFirst.logged.map((e) => (
                             <SelectItem key={e.id} value={e.id}>
                               {e.name}
                             </SelectItem>
                           ))}
-                          <SelectItem value="section-lower" disabled className="text-[10px] uppercase tracking-wider font-medium text-muted-foreground">
-                            Lower
-                          </SelectItem>
-                          {LOWER_EXERCISES.map((e) => (
+                          {loggedFirst.rest.length > 0 && (
+                            <SelectItem value="section-rest" disabled className="text-[10px] uppercase tracking-wider font-medium text-muted-foreground">
+                              Not logged yet
+                            </SelectItem>
+                          )}
+                          {loggedFirst.rest.map((e) => (
                             <SelectItem key={e.id} value={e.id}>
                               {e.name}
                             </SelectItem>
@@ -279,7 +304,7 @@ export function WorkoutRecapModal({ open, onOpenChange }: { open: boolean; onOpe
                     {progressLoading && !progress ? (
                       <Skeleton className="h-44 w-full rounded-lg" />
                     ) : (
-                      <LineSeries points={progressPoints} height={176} emptyLabel={`No logged data for ${EXERCISE_NAME_BY_ID[pickedExercise] ?? pickedExercise} yet.`} />
+                      <LineSeries points={progressPoints} height={176} emptyLabel={`No logged data for ${movementName(pickedExercise)} yet.`} />
                     )}
 
                     {/* Compact history table */}
@@ -323,7 +348,7 @@ export function WorkoutRecapModal({ open, onOpenChange }: { open: boolean; onOpe
                         Heaviest set per exercise
                       </div>
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                        {ALL_EXERCISES.filter((e) => stats!.bestByExercise[e.id]).map((ex) => {
+                        {PICKABLE.filter((e) => stats!.bestByExercise[e.id]).map((ex) => {
                           const best = stats!.bestByExercise[ex.id];
                           return (
                             <div key={ex.id} className="flex items-center justify-between gap-2 border-b border-border py-2 text-sm last:border-b-0 md:last:border-b md:[&:nth-last-child(-n+2)]:border-b-0">
@@ -443,7 +468,7 @@ function EmptyState({ range }: { range: Range }) {
 }
 
 // =====================================================================
-// Session notes — the only place the per-day notes are readable back
+// Session notes: the only place the per-day notes are readable back
 // =====================================================================
 function SessionNotes({ days }: { days: StatsResp["days"] }) {
   const withNotes = useMemo(() => days.filter((d) => d.note.trim().length > 0).sort((a, b) => b.date.localeCompare(a.date)), [days]);

@@ -17,8 +17,13 @@ function startOfToday() {
 // unreachable: the day view only asks for today and the calendar only for the
 // month you happen to be looking at, so anything missed silently disappeared.
 // =====================================================================
-router.get("/overdue", async (_req, res) => {
-  const tasks = await Task.find({ done: false, date: { $lt: startOfToday() } }).sort({ date: 1, createdAt: 1 });
+router.get("/overdue", async (req, res) => {
+  // Same rule as ensure-daily: "before today" means before the caller's local day.
+  if (req.query.today !== undefined && !parseDayUTC(req.query.today)) {
+    return res.status(400).json({ error: "valid today date required" });
+  }
+  const cutoff = parseDayUTC(req.query.today) ?? startOfToday();
+  const tasks = await Task.find({ done: false, date: { $lt: cutoff } }).sort({ date: 1, createdAt: 1 });
   res.json(tasks);
 });
 

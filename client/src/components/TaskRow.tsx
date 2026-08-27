@@ -9,7 +9,7 @@ import { relativeDay, taskDay, type Task } from "../lib/tasks";
 // One task row, shared by Today and the Tasks calendar.
 //
 // The actions used to be `opacity-0 group-hover:opacity-100`, which meant they
-// simply did not exist on a touch screen — delete and reschedule were unreachable
+// simply did not exist on a touch screen, so delete and reschedule were unreachable
 // on a phone. They are always rendered now, dimmed until hover on pointer devices.
 // =====================================================================
 export function TaskRow({

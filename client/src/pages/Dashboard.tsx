@@ -10,6 +10,7 @@ import { Checkbox } from "../components/ui/checkbox";
 import { Skeleton } from "../components/ui/skeleton";
 import { toast } from "sonner";
 import { getApiError } from "../lib/food";
+import { todayISO } from "../lib/today";
 import {
   BarChart3,
   Beef,
@@ -282,8 +283,11 @@ export default function Dashboard() {
 
   const dailyStats = useMemo(() => {
     if (!data) return { completed: 0, total: visibleRows.length };
-    const todayInMonth = data.month.days.some((day) => day.iso === data.today);
-    const date = todayInMonth ? data.today : null;
+    // The browser's local calendar day, not the server's UTC one: they disagree for
+    // the hours local time runs ahead of UTC, which made this count yesterday's ticks.
+    const localToday = todayISO();
+    const todayInMonth = data.month.days.some((day) => day.iso === localToday);
+    const date = todayInMonth ? localToday : null;
     if (!date) return { completed: 0, total: visibleRows.length };
     const completed = visibleRows.reduce((sum, row) => {
       const cell = getCell(row, date);
@@ -460,7 +464,7 @@ export default function Dashboard() {
           </DialogHeader>
           {/* Spelled out because a bare checkbox next to a habit name reads as
               "mark this done" rather than "show this row". */}
-          <p className="-mt-1 text-xs text-muted-foreground">Choose which rows appear in the grid. This only changes what you see — it does not tick anything off.</p>
+          <p className="-mt-1 text-xs text-muted-foreground">Choose which rows appear in the grid. This only changes what you see. It does not tick anything off.</p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             {rows.map((row) => (
               <button key={row.id} type="button" onClick={() => toggleVisible(row.id)} className="flex items-center gap-3 rounded-md border border-border px-3 py-2 text-left hover:bg-muted/50 transition-colors">
@@ -482,7 +486,7 @@ export default function Dashboard() {
 }
 
 // =====================================================================
-// GoalsDialog — edit the targets every row is measured against
+// GoalsDialog: edit the targets every row is measured against
 // =====================================================================
 type GoalsResponse = {
   caloriesTarget: number;
@@ -747,7 +751,7 @@ function ProgressDonut({ percent, completed, total }: { percent: number; complet
 
 /**
  * Restock ring: how much of what you keep at home is at or below its restock line.
- * A full ring means the shopping list is long, not that things are going well —
+ * A full ring means the shopping list is long, not that things are going well;
  * the number in the middle is "how many to buy".
  */
 function KitchenRing({ kitchen }: { kitchen?: DashboardResponse["kitchen"] }) {
@@ -864,7 +868,7 @@ function TrackerRowView({
 
 // A single click toggles, a double click marks "excused". Distinguishing them means
 // holding the single-click action back until the double-click window closes, so the
-// pending timer lives in a ref and is cleared on unmount — otherwise a cell clicked
+// pending timer lives in a ref and is cleared on unmount, otherwise a cell clicked
 // just before the month changes fires its toggle against an unmounted tree.
 function useSingleOrDoubleClick(delayMs = 220) {
   const clickTimer = useRef<number | null>(null);

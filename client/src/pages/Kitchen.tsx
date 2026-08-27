@@ -298,7 +298,7 @@ export default function Kitchen() {
 }
 
 // =====================================================================
-// StockRing — proportion of tracked foods that need buying
+// StockRing: proportion of tracked foods that need buying
 // =====================================================================
 function StockRing({ out, low, total }: { out: number; low: number; total: number }) {
   const size = 60;

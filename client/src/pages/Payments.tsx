@@ -1157,7 +1157,7 @@ function BankCard({ bank, onChanged, index }: { bank: Bank; onChanged: () => voi
                   ))}
                 </SelectContent>
               </Select>
-              {bank.balance !== 0 && <p className="text-xs text-muted-foreground">Empty the account first — flipping currency on a non-zero balance would silently rewrite its value.</p>}
+              {bank.balance !== 0 && <p className="text-xs text-muted-foreground">Empty the account first. Flipping currency on a non-zero balance would silently rewrite its value.</p>}
             </div>
           </div>
           <DialogFooter className="flex justify-between sm:justify-between">
@@ -1499,7 +1499,7 @@ function ExpenseRow({ expense, wallets, banks, externalSources, onChanged }: { e
 
   const deleteDesc =
     expense.sourceType === "external"
-      ? `${fmtEGP(expense.amount)} paid by ${expense.sourceNameSnapshot} — no balance change.`
+      ? `${fmtEGP(expense.amount)} paid by ${expense.sourceNameSnapshot}, no balance change.`
       : `${fmtEGP(expense.amount)} will be returned to ${expense.sourceNameSnapshot}.`;
 
   return (

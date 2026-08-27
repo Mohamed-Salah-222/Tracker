@@ -27,7 +27,7 @@ function checkAmountConsistency(body: MovementBody, fromCurrency: string | null,
     // (100 * 1 = 100) but means the conversion was never actually applied. Reject it
     // so a forgotten rate can't quietly rewrite the value of the money.
     if (Math.abs(body.conversionRate - 1) < FLOAT_TOLERANCE) {
-      return { ok: false, error: `conversionRate of 1 is invalid between ${fromCurrency} and ${toCurrency} — supply the real rate` };
+      return { ok: false, error: `conversionRate of 1 is invalid between ${fromCurrency} and ${toCurrency}, supply the real rate` };
     }
     if (Math.abs(body.amountTo - body.amountFrom * body.conversionRate) >= FLOAT_TOLERANCE) {
       return { ok: false, error: "amountTo must equal amountFrom * conversionRate" };

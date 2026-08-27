@@ -21,7 +21,7 @@ export type DashboardTrackerKind = (typeof DASHBOARD_TRACKER_KINDS)[number];
 /**
  * The small day-to-day habits the Habits page focuses on. They are ordinary tracker
  * kinds, so ticking one there and ticking it on the dashboard grid write the same
- * row — there is no second source of truth.
+ * row. There is no second source of truth.
  *
  * `projectMedical` and `projectGym` are Prayer and Books. The keys are leftovers from
  * when those two slots meant something else; they carry months of real history, so

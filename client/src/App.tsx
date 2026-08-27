@@ -69,7 +69,7 @@ function AppContent() {
             `items-start` is load-bearing: with the default `align-items: stretch`
             the centred page column is capped at the container's height and its
             taller content spills out as *visible overflow*, which padding-bottom
-            does not extend past — so the last card ended up clipped flush against
+            does not extend past, so the last card ended up clipped flush against
             the viewport edge. Sizing the column to its content puts the padding
             back inside the scrollable area. */}
         <div

@@ -9,11 +9,19 @@ import { Card, CardContent } from "../components/ui/card";
 import { Checkbox } from "../components/ui/checkbox";
 import { Skeleton } from "../components/ui/skeleton";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "../components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
 import { toast } from "sonner";
-import { BarChart3, Check, ChevronLeft, ChevronRight, Dumbbell, Footprints, Minus, Pause, Play, Plus, RotateCcw, Timer, Trash2, Trophy, X } from "lucide-react";
+import { BarChart3, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, CloudOff, Dumbbell, Footprints, Minus, Pause, Pencil, Play, Plus, RefreshCw, RotateCcw, Settings, Timer, TimerOff, Trash2, TrendingUp, TriangleAlert, Trophy, X, Image as ImageIcon, Info } from "lucide-react";
 import { AxiosError } from "axios";
-import { PROGRAM, WORKOUT_TYPE_STYLE, exerciseTarget, exercisesFor, workoutLabel, type Exercise, type WorkoutType } from "../lib/workoutProgram";
+import { exerciseCount, exerciseTarget, exercisesFor, workoutLabel, workoutTypeStyle, type Exercise, type WorkoutType } from "../lib/workoutProgram";
+import { ALL_MOVEMENT_IDS, DEFAULT_SPLIT_ID, REST, SPLITS, getSplit, isRestDay, movementName, progressionFor, type Split } from "../lib/workoutSplits";
+import { analyseTrend, estimate1RM, suggestLoad, type ExerciseHistory, type SessionPoint } from "../lib/progression";
+import { exerciseImagePath, exerciseInfo } from "../lib/exerciseInfo";
+import { BAR_OPTIONS, describeSide, loadBar } from "../lib/plates";
+import { flush as flushSets, forgetSession, onSetSynced, pendingFor, queueSet, useSetQueue } from "../lib/setQueue";
+import { primeBeep, restOverAlert } from "../lib/beep";
+import { useWakeLock } from "../lib/wakeLock";
 
 // Recharts is ~370 kB and only the history modal needs it. Loading it lazily keeps
 // it out of the workout page itself, which is the screen actually used at the gym.
@@ -27,6 +35,8 @@ type Session = {
   _id: string;
   date: string;
   type: WorkoutType;
+  splitId?: string;
+  cycleIndex?: number | null;
   walkMinutes: number;
   walkDistanceKm: number;
   completedAt: string | null;
@@ -40,12 +50,14 @@ type SetLog = {
   setNumber: number;
   weight: number | null;
   reps: number | null;
+  /** Optional 1-10 effort rating; sharpens the one-rep-max estimate when present. */
+  rpe: number | null;
   done: boolean;
 };
 
-type SetPatch = Partial<Pick<SetLog, "weight" | "reps" | "done">>;
+type SetPatch = Partial<Pick<SetLog, "weight" | "reps" | "rpe" | "done">>;
 
-type LastEntry = { weight: number; reps: number | null; when: string; best: number };
+type LastEntry = ExerciseHistory & { recent?: SessionPoint[] };
 type LastWeights = Record<string, LastEntry>;
 
 // =====================================================================
@@ -106,8 +118,39 @@ const stagger = (i: number) => ({
   transition: { ...fadeUp.transition, delay: Math.min(i, 8) * 0.03 },
 });
 
+type PlanSlot = { id: string; sets: number; reps: number; repsMin?: number };
+
+/** A day's exercises: the user's own list if they have edited it, otherwise the catalogue default. */
+function resolveDay(dayKey: string, plans: Record<string, PlanSlot[]>): Exercise[] {
+  const custom = plans[dayKey];
+  if (!custom) return exercisesFor(dayKey);
+  return custom.map((sl) => ({ id: sl.id, name: movementName(sl.id), sets: sl.sets, targetReps: sl.reps, targetRepsMin: sl.repsMin ?? sl.reps }));
+}
+
+type LastSession = { type: string; splitId: string; cycleIndex: number | null; date: string } | null;
+type TodayResponse = { session: Session | null; splitId: string; hasChosenSplit: boolean; last: LastSession; stallNoticeSessions?: number; stallDeloadSessions?: number };
+
+/**
+ * Where the next session lands in the split's cycle. If the last session recorded
+ * its position we step on from there; otherwise we look its day up in the cycle, and
+ * failing that we start at the top. Switching splits resets to the start.
+ */
+function nextIndexInCycle(splitId: string, last: LastSession): number {
+  const cycle = getSplit(splitId).cycle;
+  if (!last || last.splitId !== splitId) return 0;
+  const from = last.cycleIndex ?? cycle.indexOf(last.type);
+  if (from < 0) return 0;
+  return (from + 1) % cycle.length;
+}
+
+function nextDayInCycle(splitId: string, last: LastSession): string {
+  const cycle = getSplit(splitId).cycle;
+  return cycle[nextIndexInCycle(splitId, last)] ?? cycle[0];
+}
+
 const REST_PRESETS = [60, 90, 120, 180];
 const REST_STORAGE_KEY = "workout:rest-seconds";
+const REST_ENABLED_KEY = "workout:rest-timer-enabled";
 
 // =====================================================================
 // MAIN
@@ -115,6 +158,17 @@ const REST_STORAGE_KEY = "workout:rest-seconds";
 export default function Workout() {
   const [session, setSession] = useState<Session | null>(null);
   const [suggested, setSuggested] = useState<WorkoutType>("upper");
+  const [splitId, setSplitId] = useState<string>(DEFAULT_SPLIT_ID);
+  const [hasChosenSplit, setHasChosenSplit] = useState(true);
+  const [nextCycleIndex, setNextCycleIndex] = useState<number>(0);
+  const [stallNoticeAt, setStallNoticeAt] = useState(3);
+  const [stallDeloadAt, setStallDeloadAt] = useState(5);
+  const [splitPickerOpen, setSplitPickerOpen] = useState(false);
+  /** dayKey -> the user's own exercise list, replacing the catalogue default. */
+  const [dayPlans, setDayPlans] = useState<Record<string, PlanSlot[]>>({});
+  const [exerciseNotes, setExerciseNotes] = useState<Record<string, string>>({});
+  const [infoFor, setInfoFor] = useState<{ id: string; suggested: number | null } | null>(null);
+  const [editDayOpen, setEditDayOpen] = useState(false);
   const [sets, setSets] = useState<SetLog[]>([]);
   const [lastWeights, setLastWeights] = useState<LastWeights>({});
   const [selectedDate, setSelectedDate] = useState(todayISO);
@@ -135,18 +189,29 @@ export default function Workout() {
     setSets(next);
   }, []);
 
+  const queue = useSetQueue();
   const isToday = selectedDate === todayISO();
   const isCompleted = !!session?.completedAt;
-  const exercises = useMemo(() => (session ? exercisesFor(session.type) : []), [session]);
+  const exercises = useMemo(() => (session ? resolveDay(session.type, dayPlans) : []), [session, dayPlans]);
+  const isCustomised = !!(session && dayPlans[session.type]);
 
   // ----- Loaders -----
   const loadSession = useCallback(async () => {
     setLoading(true);
     try {
       if (selectedDate === todayISO()) {
-        const r = await api.get<{ session: Session | null; suggested: WorkoutType | null }>("/workouts/today");
+        // The local calendar day has to travel with the request; the server must not
+        // work it out from its own clock (see client/src/lib/today.ts).
+        const r = await api.get<TodayResponse>("/workouts/today", { params: { date: selectedDate } });
         setSession(r.data.session);
-        if (r.data.suggested) setSuggested(r.data.suggested);
+        setSplitId(r.data.splitId);
+        setHasChosenSplit(r.data.hasChosenSplit);
+        if (r.data.stallNoticeSessions) setStallNoticeAt(r.data.stallNoticeSessions);
+        if (r.data.stallDeloadSessions) setStallDeloadAt(r.data.stallDeloadSessions);
+        // The cycle definitions live in the catalogue, so the next day is worked out
+        // here from where the last session sat rather than on the server.
+        setSuggested(nextDayInCycle(r.data.splitId, r.data.last));
+        setNextCycleIndex(nextIndexInCycle(r.data.splitId, r.data.last));
       } else {
         const r = await api.get<Session | null>(`/workouts/session?date=${selectedDate}`);
         setSession(r.data);
@@ -163,7 +228,17 @@ export default function Workout() {
     async (sessionId: string) => {
       try {
         const r = await api.get<SetLog[]>(`/workouts/session/${sessionId}/sets`);
-        writeSets(r.data);
+        // Anything still owed to the server is newer than what the server just sent
+        // back, so it is layered on top instead of being wiped by the reload.
+        const owed = pendingFor(sessionId);
+        if (owed.length === 0) return writeSets(r.data);
+        const merged = [...r.data];
+        for (const p of owed) {
+          const i = merged.findIndex((row) => row.exerciseId === p.exerciseId && row.setNumber === p.setNumber);
+          if (i === -1) merged.push({ sessionId, exerciseId: p.exerciseId, setNumber: p.setNumber, ...p.fields });
+          else merged[i] = { ...merged[i], ...p.fields };
+        }
+        writeSets(merged);
       } catch (e) {
         toast.error(getApiError(e));
       }
@@ -181,6 +256,43 @@ export default function Workout() {
       toast.error(getApiError(e));
     }
   }, [selectedDate]);
+
+  const loadExerciseNotes = useCallback(async () => {
+    try {
+      const r = await api.get<Record<string, string>>("/workouts/exercise-notes");
+      setExerciseNotes(r.data);
+    } catch {
+      /* notes are a convenience */
+    }
+  }, []);
+
+  const saveExerciseNote = useCallback(async (movementId: string, note: string) => {
+    setExerciseNotes((m) => ({ ...m, [movementId]: note }));
+    try {
+      await api.put(`/workouts/exercise-notes/${movementId}`, { note });
+    } catch (e) {
+      toast.error(getApiError(e));
+      void loadExerciseNotes();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const loadDayPlans = useCallback(async () => {
+    try {
+      const r = await api.get<Record<string, PlanSlot[]>>("/workouts/day-plans");
+      setDayPlans(r.data);
+    } catch {
+      /* customisations are optional; defaults still render */
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadDayPlans();
+  }, [loadDayPlans]);
+
+  useEffect(() => {
+    void loadExerciseNotes();
+  }, [loadExerciseNotes]);
 
   useEffect(() => {
     void loadSession();
@@ -208,42 +320,59 @@ export default function Workout() {
     else writeSets([]);
   }, [sessionId, loadSets, writeSets]);
 
+  // A row only has a server _id once its write lands, which on a bad signal can be
+  // minutes after it was typed.
+  useEffect(() => {
+    if (!sessionId) return;
+    return onSetSynced((synced) => {
+      if (!synced._id || synced.sessionId !== sessionId) return;
+      writeSets(setsRef.current.map((row) => (row.exerciseId === synced.exerciseId && row.setNumber === synced.setNumber && !row._id ? { ...row, _id: synced._id } : row)));
+    });
+  }, [sessionId, writeSets]);
+
   // ----- Derived -----
   const exerciseIds = useMemo(() => new Set(exercises.map((e) => e.id)), [exercises]);
+  /** "exerciseId|setNumber" for every row of this session not yet accepted by the server. */
+  const pendingRows = useMemo(() => {
+    const rows = new Set<string>();
+    if (!sessionId) return rows;
+    const prefix = `${sessionId}|`;
+    for (const key of queue.keys) if (key.startsWith(prefix)) rows.add(key.slice(prefix.length));
+    return rows;
+  }, [queue.keys, sessionId]);
   const totalSets = useMemo(() => exercises.reduce((sum, e) => sum + e.sets, 0), [exercises]);
   const doneSets = useMemo(() => sets.filter((s) => s.done && exerciseIds.has(s.exerciseId)).length, [sets, exerciseIds]);
   const volume = useMemo(() => sets.reduce((sum, s) => (s.done && exerciseIds.has(s.exerciseId) ? sum + setVolume(s) : sum), 0), [sets, exerciseIds]);
   const percent = totalSets === 0 ? 0 : Math.round((doneSets / totalSets) * 100);
 
   const rest = useRestTimer();
+  // The timer switch doubles as "I am at the gym", so it is what decides whether the
+  // screen is held awake. Off, and nothing here touches the battery.
+  useWakeLock(rest.enabled && !!session && !isCompleted && !isRestDay(session.type));
 
   // ----- Set mutations (optimistic) -----
+  /**
+   * The value stays where it was typed and is never rolled back. Sending it is the
+   * queue's problem, and it keeps owing the server until the write lands, so a dead
+   * spot in the gym cannot take a set back off the screen (see lib/setQueue.ts).
+   */
   const saveSet = useCallback(
-    async (exerciseId: string, setNumber: number, patch: SetPatch) => {
+    (exerciseId: string, setNumber: number, patch: SetPatch) => {
       if (!session) return;
       const before = setsRef.current;
       const index = before.findIndex((s) => s.exerciseId === exerciseId && s.setNumber === setNumber);
       const optimistic: SetLog =
-        index === -1 ? { sessionId: session._id, exerciseId, setNumber, weight: null, reps: null, done: false, ...patch } : { ...before[index], ...patch };
+        index === -1 ? { sessionId: session._id, exerciseId, setNumber, weight: null, reps: null, rpe: null, done: false, ...patch } : { ...before[index], ...patch };
 
       writeSets(index === -1 ? [...before, optimistic] : before.map((s, i) => (i === index ? optimistic : s)));
-
-      try {
-        const r = await api.put<SetLog>("/workouts/sets", { sessionId: session._id, exerciseId, setNumber, ...patch });
-        // Reconcile with the server row (picks up its _id) without discarding an edit
-        // the user made to a different field while this request was in flight.
-        writeSets(setsRef.current.map((s) => (s.exerciseId === exerciseId && s.setNumber === setNumber ? { ...s, _id: r.data._id } : s)));
-      } catch (e) {
-        toast.error(getApiError(e));
-        writeSets(before);
-      }
+      queueSet(session._id, exerciseId, setNumber, { weight: optimistic.weight, reps: optimistic.reps, rpe: optimistic.rpe, done: optimistic.done });
     },
     [session, writeSets],
   );
 
   const toggleSetDone = useCallback(
     (exerciseId: string, setNumber: number, nextDone: boolean) => {
-      void saveSet(exerciseId, setNumber, { done: nextDone });
+      saveSet(exerciseId, setNumber, { done: nextDone });
       if (nextDone) rest.start();
     },
     [saveSet, rest],
@@ -252,7 +381,7 @@ export default function Workout() {
   // ----- Session actions -----
   const startSession = async (type: WorkoutType) => {
     try {
-      const r = await api.post<Session>("/workouts/session", { date: selectedDate, type });
+      const r = await api.post<Session>("/workouts/session", { date: selectedDate, type, splitId, cycleIndex: nextCycleIndex });
       setSession(r.data);
       setPickerOpen(false);
     } catch (e) {
@@ -278,6 +407,7 @@ export default function Workout() {
     setConfirmEmptyOpen(false);
     rest.stop();
     await patchSession({ completedAt: new Date().toISOString() });
+    if (queue.count > 0) toast(`${queue.count} ${queue.count === 1 ? "set is" : "sets are"} still saving. Keep the app open for a moment.`);
     void loadLastWeights();
     // Finishing a session ticks the day on the habit tracker, so land the user there.
     navigate("/");
@@ -293,6 +423,7 @@ export default function Workout() {
     setDeleteOpen(false);
     try {
       await api.delete(`/workouts/session/${session._id}`);
+      forgetSession(session._id);
       setSession(null);
       writeSets([]);
       rest.stop();
@@ -301,10 +432,41 @@ export default function Workout() {
     }
   };
 
+  /**
+   * After switching split, re-point today's session at the new split's first day.
+   * Without this the existing session keeps its old day and the page renders the
+   * previous programme's exercises no matter which split was picked.
+   */
+  const adoptSplit = useCallback(
+    async (id: string) => {
+      const cycle = getSplit(id).cycle;
+      const current = session;
+      if (!current || selectedDate !== todayISO()) {
+        await loadSession();
+        return;
+      }
+      // Already a day this split contains, and tagged with it: leave it alone.
+      if (current.splitId === id && cycle.includes(current.type)) {
+        await loadSession();
+        return;
+      }
+      try {
+        await api.patch(`/workouts/session/${current._id}`, { type: cycle[0], splitId: id, cycleIndex: 0 });
+      } catch (e) {
+        toast.error(getApiError(e));
+      }
+      forgetSession(current._id);
+      writeSets([]);
+      await loadSession();
+    },
+    [session, selectedDate, loadSession, writeSets],
+  );
+
   const changeType = async (type: WorkoutType) => {
     if (!session) return;
     setPickerOpen(false);
     if (type === session.type) return;
+    forgetSession(session._id);
     writeSets([]); // the server drops the old type's sets too
     await patchSession({ type });
   };
@@ -320,18 +482,34 @@ export default function Workout() {
           <h1 className="text-xl font-semibold tracking-tight">Workout</h1>
         </div>
         <h1 className="sr-only md:hidden">Workout</h1>
-        <Button
-          variant="outline"
-          size="sm"
-          className="ml-auto h-9"
-          onClick={() => {
-            setRecapMounted(true);
-            setRecapOpen(true);
-          }}
-        >
-          <BarChart3 className="h-3.5 w-3.5 mr-1.5" aria-hidden />
-          History
-        </Button>
+        <div className="ml-auto flex items-center gap-2">
+          <Button
+            variant={rest.enabled ? "default" : "outline"}
+            size="icon"
+            className="h-9 w-9"
+            aria-pressed={rest.enabled}
+            aria-label={rest.enabled ? "Rest timer on. Turn it off" : "Rest timer off. Turn it on"}
+            title={rest.enabled ? "Rest timer on: counts down between sets and keeps the screen awake" : "Rest timer off"}
+            onClick={() => rest.setEnabled(!rest.enabled)}
+          >
+            {rest.enabled ? <Timer className="h-4 w-4" aria-hidden /> : <TimerOff className="h-4 w-4" aria-hidden />}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-9"
+            onClick={() => {
+              setRecapMounted(true);
+              setRecapOpen(true);
+            }}
+          >
+            <BarChart3 className="h-3.5 w-3.5 mr-1.5" aria-hidden />
+            History
+          </Button>
+          <Button variant="outline" size="icon" className="h-9 w-9" aria-label="Change split" title={`Split: ${getSplit(splitId).name}`} onClick={() => setSplitPickerOpen(true)}>
+            <Settings className="h-4 w-4" aria-hidden />
+          </Button>
+        </div>
       </motion.header>
 
       {/* ===== Date navigation ===== */}
@@ -370,8 +548,12 @@ export default function Workout() {
         </Button>
       </motion.nav>
 
+      {queue.count > 0 && <UnsyncedBanner count={queue.count} syncing={queue.syncing} error={queue.lastError} />}
+
       {/* ===== Body ===== */}
-      {loading ? (
+      {!hasChosenSplit && !loading ? (
+        <SplitIntro onOpen={() => setSplitPickerOpen(true)} />
+      ) : loading ? (
         <WorkoutSkeleton />
       ) : !session ? (
         <EmptyState suggested={suggested} onStart={startSession} onPick={() => setPickerOpen(true)} />
@@ -383,7 +565,7 @@ export default function Workout() {
         </>
       ) : (
         <>
-          <SessionHero session={session} percent={percent} doneSets={doneSets} totalSets={totalSets} volume={volume} onChangeType={() => setPickerOpen(true)} />
+          <SessionHero session={session} percent={percent} doneSets={doneSets} totalSets={totalSets} volume={volume} onChangeType={() => setPickerOpen(true)} onEditDay={() => setEditDayOpen(true)} isCustomised={isCustomised} />
 
           <h2 className="sr-only">Exercises</h2>
           <div className="grid gap-3">
@@ -394,9 +576,15 @@ export default function Workout() {
                 exercise={exercise}
                 sets={sets.filter((s) => s.exerciseId === exercise.id)}
                 last={lastWeights[exercise.id]}
+                scheme={progressionFor(splitId)}
+                noticeAt={stallNoticeAt}
+                deloadAt={stallDeloadAt}
                 readOnly={isCompleted}
+                pendingRows={pendingRows}
                 onSave={saveSet}
                 onToggleDone={toggleSetDone}
+                hasNote={!!exerciseNotes[exercise.id]}
+                onOpenInfo={(suggested) => setInfoFor({ id: exercise.id, suggested })}
               />
             ))}
           </div>
@@ -412,11 +600,51 @@ export default function Workout() {
       )}
 
       {/* ===== Dialogs ===== */}
+      <SplitPicker
+        open={splitPickerOpen || (!hasChosenSplit && !loading)}
+        currentId={splitId}
+        mustChoose={!hasChosenSplit}
+        noticeAt={stallNoticeAt}
+        deloadAt={stallDeloadAt}
+        onThresholds={(n, d) => {
+          setStallNoticeAt(n);
+          setStallDeloadAt(d);
+        }}
+        onOpenChange={setSplitPickerOpen}
+        onChosen={(id) => {
+          setSplitId(id);
+          setHasChosenSplit(true);
+          void adoptSplit(id);
+        }}
+      />
+
+      {infoFor && (
+        <ExerciseInfoModal
+          movementId={infoFor.id}
+          suggestedWeight={infoFor.suggested}
+          note={exerciseNotes[infoFor.id] ?? ""}
+          onNoteSaved={saveExerciseNote}
+          onClose={() => setInfoFor(null)}
+        />
+      )}
+
+      {session && !isRestDay(session.type) && (
+        <EditDayDialog
+          open={editDayOpen}
+          onOpenChange={setEditDayOpen}
+          dayKey={session.type}
+          current={exercises}
+          isCustomised={isCustomised}
+          onSaved={loadDayPlans}
+        />
+      )}
+
       <WorkoutPickerDialog
         open={pickerOpen}
         onOpenChange={setPickerOpen}
         suggested={suggested}
         currentType={session?.type ?? null}
+        splitId={splitId}
         onPick={(type) => (session ? void changeType(type) : void startSession(type))}
       />
       {recapMounted && (
@@ -430,7 +658,7 @@ export default function Workout() {
           <AlertDialogHeader>
             <AlertDialogTitle>Delete this session?</AlertDialogTitle>
             <AlertDialogDescription>
-              {formatDay(selectedDate)} — {session ? workoutLabel(session.type) : ""}. Every set logged for this day is removed. This cannot be undone.
+              {formatDay(selectedDate)}, {session ? workoutLabel(session.type) : ""}. Every set logged for this day is removed. This cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -465,14 +693,512 @@ export default function Workout() {
 }
 
 // =====================================================================
+// ExerciseInfoModal: what it works, how to do it, and your own note
+// =====================================================================
+const BAR_STORAGE_KEY = "workout:bar-kg";
+
+function ExerciseInfoModal({
+  movementId,
+  suggestedWeight,
+  onClose,
+  note,
+  onNoteSaved,
+}: {
+  movementId: string;
+  suggestedWeight: number | null;
+  onClose: () => void;
+  note: string;
+  onNoteSaved: (movementId: string, note: string) => void;
+}) {
+  const info = exerciseInfo(movementId);
+  const [draft, setDraft] = useState(note);
+  const [saved, setSaved] = useState(false);
+  const [imgOk, setImgOk] = useState(true);
+  const [bar, setBar] = useState(() => Number(localStorage.getItem(BAR_STORAGE_KEY) ?? 20));
+
+  useEffect(() => setDraft(note), [note]);
+
+  // Debounced autosave, matching the notes behaviour everywhere else.
+  useEffect(() => {
+    if (draft === note) return;
+    const id = window.setTimeout(() => {
+      onNoteSaved(movementId, draft);
+      setSaved(true);
+      window.setTimeout(() => setSaved(false), 1500);
+    }, 700);
+    return () => window.clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft]);
+
+  const setBarKg = (kg: number) => {
+    setBar(kg);
+    localStorage.setItem(BAR_STORAGE_KEY, String(kg));
+  };
+
+  const load = suggestedWeight != null && suggestedWeight > 0 ? loadBar(suggestedWeight, bar) : null;
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="!w-[calc(100vw-1rem)] !max-w-[520px] max-h-[92svh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>{movementName(movementId)}</DialogTitle>
+        </DialogHeader>
+
+        {/* Anatomy illustration. Drop a PNG at public/exercises/<id>.png and it
+            appears here; until then this is a labelled placeholder. */}
+        <div className="grid aspect-[4/3] w-full place-items-center overflow-hidden rounded-xl border border-dashed border-border bg-muted/40">
+          {imgOk ? (
+            <img src={exerciseImagePath(movementId)} alt={`Muscles worked by ${movementName(movementId)}`} onError={() => setImgOk(false)} className="h-full w-full object-contain" />
+          ) : (
+            <div className="px-6 text-center">
+              <ImageIcon className="mx-auto mb-2 h-6 w-6 text-muted-foreground" aria-hidden />
+              <div className="text-xs font-medium text-muted-foreground">Illustration coming</div>
+              <div className="mt-0.5 font-mono text-[10px] text-muted-foreground/70">public/exercises/{movementId}.png</div>
+            </div>
+          )}
+        </div>
+
+        {info && (
+          <div className="space-y-3">
+            <div className="flex flex-wrap gap-1.5">
+              {info.primary.map((m) => (
+                <span key={m} className="rounded-full bg-foreground px-2 py-0.5 text-[11px] font-semibold text-background">
+                  {m}
+                </span>
+              ))}
+              {info.secondary.map((m) => (
+                <span key={m} className="rounded-full border border-border-strong px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+                  {m}
+                </span>
+              ))}
+            </div>
+
+            <div>
+              <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">How to do it</div>
+              <ul className="space-y-1">
+                {info.cues.map((c) => (
+                  <li key={c} className="flex gap-2 text-sm text-muted-foreground">
+                    <span aria-hidden className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-foreground" />
+                    <span>{c}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        )}
+
+        {/* Plate maths for the load the page is suggesting. */}
+        {load && (
+          <div className="rounded-xl border border-border p-3">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Loading {formatKg(suggestedWeight!)}kg</span>
+              <div className="flex gap-1">
+                {BAR_OPTIONS.map((b) => (
+                  <button
+                    key={b.kg}
+                    type="button"
+                    onClick={() => setBarKg(b.kg)}
+                    title={b.label}
+                    className={`rounded-md border px-2 py-0.5 font-mono text-[10px] tabular-nums transition-colors ${b.kg === bar ? "border-foreground bg-foreground text-background" : "border-border hover:bg-muted"}`}
+                  >
+                    {b.kg === 0 ? "none" : `${b.kg}kg`}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {bar === 0 ? (
+              <p className="text-sm text-muted-foreground">Set the machine to {formatKg(suggestedWeight!)}kg.</p>
+            ) : (
+              <>
+                <div className="font-mono text-lg font-semibold tabular-nums">{describeSide(load.perSide)}</div>
+                <div className="mt-0.5 text-[11px] text-muted-foreground">per side, on a {bar}kg bar</div>
+                {load.shortfall !== 0 && <div className="mt-1 text-[11px] text-muted-foreground">Closest loadable is {formatKg(load.achievable)}kg.</div>}
+              </>
+            )}
+          </div>
+        )}
+
+        <div>
+          <div className="mb-1.5 flex items-center justify-between">
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Your note</span>
+            {saved && <span className="text-[10px] font-medium text-muted-foreground">Saved</span>}
+          </div>
+          <textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            rows={3}
+            aria-label={`Your note about ${movementName(movementId)}`}
+            placeholder="Seat height, grip, a niggle to watch…"
+            className="w-full resize-y rounded-lg border border-input bg-transparent px-2.5 py-2 text-sm outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+          />
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+
+// =====================================================================
+// EditDayDialog: swap any exercise, change sets and reps, reset to default
+// =====================================================================
+const MOVEMENT_OPTIONS = [...ALL_MOVEMENT_IDS].map((id) => ({ id, name: movementName(id) })).sort((a, b) => a.name.localeCompare(b.name));
+
+function EditDayDialog({
+  open,
+  onOpenChange,
+  dayKey,
+  current,
+  isCustomised,
+  onSaved,
+}: {
+  open: boolean;
+  onOpenChange: (b: boolean) => void;
+  dayKey: string;
+  current: Exercise[];
+  isCustomised: boolean;
+  onSaved: () => void;
+}) {
+  const [slots, setSlots] = useState<PlanSlot[]>([]);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (open) setSlots(current.map((e) => ({ id: e.id, sets: e.sets, reps: e.targetReps })));
+  }, [open, current]);
+
+  const used = new Set(slots.map((s) => s.id));
+  const spare = MOVEMENT_OPTIONS.find((m) => !used.has(m.id));
+
+  const update = (i: number, patch: Partial<PlanSlot>) => setSlots((list) => list.map((s, j) => (j === i ? { ...s, ...patch } : s)));
+  const remove = (i: number) => setSlots((list) => list.filter((_, j) => j !== i));
+  const add = () => spare && setSlots((list) => [...list, { id: spare.id, sets: 3, reps: 10 }]);
+  const move = (i: number, by: number) =>
+    setSlots((list) => {
+      const j = i + by;
+      if (j < 0 || j >= list.length) return list;
+      const next = [...list];
+      [next[i], next[j]] = [next[j], next[i]];
+      return next;
+    });
+
+  const save = async () => {
+    if (busy) return;
+    if (slots.length === 0) return toast.error("A day needs at least one exercise");
+    if (new Set(slots.map((s) => s.id)).size !== slots.length) return toast.error("The same exercise is listed twice");
+    setBusy(true);
+    try {
+      await api.put(`/workouts/day-plans/${dayKey}`, { slots });
+      onOpenChange(false);
+      onSaved();
+    } catch (e) {
+      toast.error(getApiError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const reset = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await api.delete(`/workouts/day-plans/${dayKey}`);
+      onOpenChange(false);
+      onSaved();
+    } catch (e) {
+      toast.error(getApiError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="!w-[calc(100vw-1rem)] !max-w-[640px] max-h-[92svh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>Edit {workoutLabel(dayKey)}</DialogTitle>
+        </DialogHeader>
+        <p className="-mt-1 text-xs text-muted-foreground">
+          Swap any exercise for another, change the sets and reps, or reorder them. This applies every time {workoutLabel(dayKey)} comes round.
+          {isCustomised && " This day is currently customised."}
+        </p>
+
+        <div className="space-y-1.5">
+          {slots.map((slot, i) => (
+            <div key={`${slot.id}-${i}`} className="flex items-center gap-1.5 rounded-lg border border-border p-1.5">
+              <div className="flex shrink-0 flex-col">
+                <button type="button" onClick={() => move(i, -1)} disabled={i === 0} aria-label="Move up" className="grid h-5 w-6 place-items-center rounded text-muted-foreground hover:bg-muted disabled:opacity-30">
+                  <ChevronUp className="h-3 w-3" aria-hidden />
+                </button>
+                <button type="button" onClick={() => move(i, 1)} disabled={i === slots.length - 1} aria-label="Move down" className="grid h-5 w-6 place-items-center rounded text-muted-foreground hover:bg-muted disabled:opacity-30">
+                  <ChevronDown className="h-3 w-3" aria-hidden />
+                </button>
+              </div>
+
+              <Select value={slot.id} onValueChange={(v) => v && update(i, { id: v })}>
+                <SelectTrigger className="!h-10 min-w-0 flex-1 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {MOVEMENT_OPTIONS.map((m) => (
+                    <SelectItem key={m.id} value={m.id} disabled={m.id !== slot.id && used.has(m.id)}>
+                      {m.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+
+              <Input type="number" inputMode="numeric" min="1" max="20" value={slot.sets} onChange={(e) => update(i, { sets: Number(e.target.value) })} onFocus={(e) => e.currentTarget.select()} aria-label="Sets" className="h-10 w-14 text-center font-mono tabular-nums" />
+              <span aria-hidden className="text-xs text-muted-foreground">×</span>
+              <Input type="number" inputMode="numeric" min="1" max="500" value={slot.reps} onChange={(e) => update(i, { reps: Number(e.target.value) })} onFocus={(e) => e.currentTarget.select()} aria-label="Reps" className="h-10 w-16 text-center font-mono tabular-nums" />
+
+              <button type="button" onClick={() => remove(i)} aria-label="Remove exercise" className="grid h-10 w-10 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-destructive">
+                <X className="h-3.5 w-3.5" aria-hidden />
+              </button>
+            </div>
+          ))}
+        </div>
+
+        <button type="button" onClick={add} disabled={!spare} className="inline-flex items-center gap-1 self-start rounded-md px-1.5 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40">
+          <Plus className="h-3 w-3" aria-hidden />
+          Add exercise
+        </button>
+
+        <DialogFooter className="flex-row justify-between sm:justify-between">
+          <Button variant="ghost" size="default" onClick={reset} disabled={busy || !isCustomised} title={isCustomised ? "Put this day back to the programme default" : "This day is already the default"}>
+            <RotateCcw className="h-3.5 w-3.5 mr-1.5" aria-hidden />
+            Reset to default
+          </Button>
+          <div className="flex gap-2">
+            <Button variant="outline" size="default" onClick={() => onOpenChange(false)}>
+              Cancel
+            </Button>
+            <Button variant="default" size="default" onClick={save} disabled={busy}>
+              Save
+            </Button>
+          </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+
+/** Shown behind the picker on first run, so the page is never just blank. */
+function SplitIntro({ onOpen }: { onOpen: () => void }) {
+  return (
+    <motion.div {...fadeUp}>
+      <Card>
+        <CardContent className="px-6 py-6 text-center">
+          <div className="mx-auto mb-3 grid h-12 w-12 place-items-center rounded-full bg-muted">
+            <Dumbbell className="h-5 w-5 text-muted-foreground" aria-hidden />
+          </div>
+          <div className="text-base font-semibold">Choose how you train</div>
+          <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">
+            Pick a split and the page lays out each day for you: exercises, sets and rep targets included. {SPLITS.length} to choose from, and you can switch any time.
+          </p>
+          <Button variant="default" size="default" className="mt-4" onClick={onOpen}>
+            Browse splits
+          </Button>
+        </CardContent>
+      </Card>
+    </motion.div>
+  );
+}
+
+
+// =====================================================================
+// SplitPicker: first run, and any time the settings button is pressed
+// =====================================================================
+function SplitPicker({
+  open,
+  currentId,
+  mustChoose,
+  noticeAt,
+  deloadAt,
+  onOpenChange,
+  onChosen,
+  onThresholds,
+}: {
+  open: boolean;
+  currentId: string;
+  mustChoose: boolean;
+  noticeAt: number;
+  deloadAt: number;
+  onOpenChange: (b: boolean) => void;
+  onChosen: (id: string) => void;
+  onThresholds: (notice: number, deload: number) => void;
+}) {
+  const [saving, setSaving] = useState(false);
+  const [category, setCategory] = useState<string>("All");
+  const [notice, setNotice] = useState(String(noticeAt));
+  const [deload, setDeload] = useState(String(deloadAt));
+
+  useEffect(() => {
+    if (open) {
+      setNotice(String(noticeAt));
+      setDeload(String(deloadAt));
+    }
+  }, [open, noticeAt, deloadAt]);
+
+  const commitThresholds = async () => {
+    const n = Number(notice);
+    const d = Number(deload);
+    if (!Number.isInteger(n) || !Number.isInteger(d) || n < 2 || d < n) {
+      setNotice(String(noticeAt));
+      setDeload(String(deloadAt));
+      return toast.error("Deload must be at least the notice threshold");
+    }
+    if (n === noticeAt && d === deloadAt) return;
+    try {
+      await api.patch("/workouts/settings", { stallNoticeSessions: n, stallDeloadSessions: d });
+      onThresholds(n, d);
+    } catch (e) {
+      toast.error(getApiError(e));
+    }
+  };
+
+  const categories = useMemo(() => ["All", ...new Set(SPLITS.map((sp) => sp.category))], []);
+  const visible = useMemo(() => (category === "All" ? SPLITS : SPLITS.filter((sp) => sp.category === category)), [category]);
+
+  const choose = async (sp: Split) => {
+    if (saving) return;
+    setSaving(true);
+    try {
+      await api.patch("/workouts/settings", { splitId: sp.id });
+      onChosen(sp.id);
+      onOpenChange(false);
+    } catch (e) {
+      toast.error(getApiError(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={mustChoose ? () => {} : onOpenChange}>
+      <DialogContent className="!w-[calc(100vw-1rem)] !max-w-[760px] max-h-[92svh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>{mustChoose ? "Pick your split" : "Change split"}</DialogTitle>
+        </DialogHeader>
+
+        <p className="-mt-1 text-xs text-muted-foreground">
+          {mustChoose ? "How your training week is laid out. You can change it any time from the settings button." : "Your logged history is kept. The new cycle starts from its first day."}
+        </p>
+
+        <div className="flex flex-wrap gap-1.5">
+          {categories.map((c) => (
+            <button
+              key={c}
+              type="button"
+              onClick={() => setCategory(c)}
+              className={`rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors ${c === category ? "border-foreground bg-foreground text-background" : "border-border hover:bg-muted"}`}
+            >
+              {c}
+            </button>
+          ))}
+        </div>
+
+        <div className="grid gap-2 sm:grid-cols-2">
+          {visible.map((sp) => {
+            const isCurrent = sp.id === currentId;
+            return (
+              <button
+                key={sp.id}
+                type="button"
+                onClick={() => void choose(sp)}
+                disabled={saving}
+                className={`rounded-xl border p-3 text-left transition-colors disabled:opacity-60 ${isCurrent ? "border-foreground bg-muted/60" : "border-border hover:border-border-strong hover:bg-muted/40"}`}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <span className="min-w-0">
+                    <span className="block truncate text-sm font-semibold">{sp.name}</span>
+                    <span className="block text-[11px] text-muted-foreground">{sp.summary}</span>
+                  </span>
+                  <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 font-mono text-[10px] font-semibold tabular-nums">{sp.daysPerWeek}d</span>
+                </div>
+
+                {/* The whole cycle at a glance, rest days included. */}
+                <div className="mt-2 flex flex-wrap gap-1">
+                  {sp.cycle.map((key, i) => (
+                    <span
+                      key={`${sp.id}-${i}`}
+                      className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${isRestDay(key) ? "bg-muted text-muted-foreground" : "bg-foreground text-background"}`}
+                    >
+                      {isRestDay(key) ? "Rest" : workoutLabel(key)}
+                    </span>
+                  ))}
+                </div>
+
+                {isCurrent && <div className="mt-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Current split</div>}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Stall thresholds live here because they are programme settings, not
+            per-session ones. Measured in sessions, so the right number depends on how
+            often the split trains a given movement. */}
+        {!mustChoose && (
+          <div className="border-t border-border pt-3">
+            <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Stall detection</div>
+            <p className="mb-2 text-[11px] text-muted-foreground">Counted in sessions where nothing improved: no extra weight, no extra rep. Climbing a rep range never counts.</p>
+            <div className="flex flex-wrap items-center gap-3">
+              <label className="flex items-center gap-2 text-xs">
+                Notice after
+                <Input type="number" inputMode="numeric" min="2" max="20" value={notice} onChange={(e) => setNotice(e.target.value)} onBlur={commitThresholds} onFocus={(e) => e.currentTarget.select()} aria-label="Sessions before a stall notice" className="h-9 w-16 text-center font-mono tabular-nums" />
+              </label>
+              <label className="flex items-center gap-2 text-xs">
+                Suggest deload after
+                <Input type="number" inputMode="numeric" min="2" max="20" value={deload} onChange={(e) => setDeload(e.target.value)} onBlur={commitThresholds} onFocus={(e) => e.currentTarget.select()} aria-label="Sessions before suggesting a deload" className="h-9 w-16 text-center font-mono tabular-nums" />
+              </label>
+            </div>
+          </div>
+        )}
+
+        {!mustChoose && (
+          <DialogFooter>
+            <Button variant="outline" size="default" onClick={() => onOpenChange(false)}>
+              Close
+            </Button>
+          </DialogFooter>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+
+// =====================================================================
 // Shared bits
 // =====================================================================
+/**
+ * Says out loud what the queue is holding. Without it, "the set is on my phone but
+ * not on the server yet" is invisible, and invisible is how the old rollback lost
+ * sets in the first place.
+ */
+function UnsyncedBanner({ count, syncing, error }: { count: number; syncing: boolean; error: string | null }) {
+  return (
+    <motion.div {...fadeUp} role="status" className="flex items-center gap-2.5 rounded-lg border border-border-strong px-3 py-2">
+      <CloudOff className="h-4 w-4 shrink-0" aria-hidden />
+      <div className="min-w-0 flex-1">
+        <p className="text-xs font-semibold">
+          {count} {count === 1 ? "set is" : "sets are"} waiting to save
+        </p>
+        <p className="text-[11px] leading-snug text-muted-foreground">{error ?? "Kept on this phone and sent on their own once there is signal."}</p>
+      </div>
+      <Button variant="outline" size="sm" className="h-8 shrink-0" disabled={syncing} onClick={() => void flushSets()}>
+        <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${syncing ? "animate-spin" : ""}`} aria-hidden />
+        {syncing ? "Saving" : "Retry"}
+      </Button>
+    </motion.div>
+  );
+}
+
 function Eyebrow({ children, className = "" }: { children: React.ReactNode; className?: string }) {
   return <div className={`text-[10px] font-semibold uppercase tracking-wider text-muted-foreground ${className}`}>{children}</div>;
 }
 
 function WorkoutTypeBadge({ type }: { type: WorkoutType }) {
-  const v = WORKOUT_TYPE_STYLE[type];
+  const v = workoutTypeStyle(type);
   return (
     <span className="rounded-full border px-2 py-0.5 text-[11px] font-semibold" style={{ color: v.fg, background: v.bg, borderColor: v.border }}>
       {v.label}
@@ -576,6 +1302,8 @@ function SessionHero({
   totalSets,
   volume,
   onChangeType,
+  onEditDay,
+  isCustomised,
 }: {
   session: Session;
   percent: number;
@@ -583,6 +1311,8 @@ function SessionHero({
   totalSets: number;
   volume: number;
   onChangeType: () => void;
+  onEditDay: () => void;
+  isCustomised: boolean;
 }) {
   return (
     <motion.section {...stagger(1)} aria-label="Session summary">
@@ -606,11 +1336,23 @@ function SessionHero({
                 </span>
               </div>
             </div>
-            <Button variant="outline" size="icon" className="h-10 w-10 shrink-0 sm:w-auto sm:px-3" aria-label="Change workout type" onClick={onChangeType}>
-              <RotateCcw className="h-4 w-4 sm:mr-1.5" aria-hidden />
-              <span className="hidden text-sm sm:inline">Change</span>
-            </Button>
+            <div className="flex shrink-0 items-center gap-1.5">
+              <Button variant="outline" size="icon" className="h-10 w-10" aria-label="Edit this day's exercises" title="Edit exercises" onClick={onEditDay}>
+                <Pencil className="h-4 w-4" aria-hidden />
+              </Button>
+              <Button variant="outline" size="icon" className="h-10 w-10 sm:w-auto sm:px-3" aria-label="Change workout type" onClick={onChangeType}>
+                <RotateCcw className="h-4 w-4 sm:mr-1.5" aria-hidden />
+                <span className="hidden text-sm sm:inline">Change</span>
+              </Button>
+            </div>
           </div>
+
+          {isCustomised && (
+            <div className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-border-strong px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              <Pencil className="h-2.5 w-2.5" aria-hidden />
+              Customised
+            </div>
+          )}
 
           {session.completedAt && (
             <div className="mt-3 flex items-center gap-1.5 rounded-lg bg-muted px-2.5 py-1.5 text-xs font-medium text-muted-foreground">
@@ -631,18 +1373,31 @@ function ExerciseCard({
   exercise,
   sets,
   last,
+  scheme,
+  noticeAt,
+  deloadAt,
   index,
   readOnly,
+  pendingRows,
   onSave,
   onToggleDone,
+  hasNote,
+  onOpenInfo,
 }: {
   exercise: Exercise;
   sets: SetLog[];
   last: LastEntry | undefined;
+  scheme: "linear" | "double" | "wave531" | "none";
+  noticeAt: number;
+  deloadAt: number;
   index: number;
   readOnly: boolean;
+  /** "exerciseId|setNumber" of every row the server has not accepted yet. */
+  pendingRows: Set<string>;
   onSave: (exerciseId: string, setNumber: number, patch: SetPatch) => void;
   onToggleDone: (exerciseId: string, setNumber: number, next: boolean) => void;
+  hasNote: boolean;
+  onOpenInfo: (suggestedWeight: number | null) => void;
 }) {
   // Historical sessions may hold more rows than the current three; never hide them.
   const highestLogged = sets.reduce((m, s) => Math.max(m, s.setNumber), 0);
@@ -655,6 +1410,19 @@ function ExerciseCard({
 
   const heaviest = sets.reduce((m, s) => Math.max(m, s.weight ?? 0), 0);
   const isPr = !!last && heaviest > last.best;
+
+  const e1rm = useMemo(() => {
+    // Prefer today's own work once it exists, so the figure moves as you lift.
+    const todayBest = sets.reduce((m, s) => Math.max(m, estimate1RM(s.weight ?? 0, s.reps ?? 0, s.rpe)), 0);
+    return Math.round(Math.max(todayBest, last?.bestE1rm ?? 0) * 10) / 10;
+  }, [sets, last]);
+
+  const suggestion = useMemo(
+    () => suggestLoad({ movementId: exercise.id, targetSets: exercise.sets, targetReps: exercise.targetReps, targetRepsMin: exercise.targetRepsMin, scheme, history: last }),
+    [exercise, scheme, last],
+  );
+
+  const trend = useMemo(() => analyseTrend(last?.recent, noticeAt, deloadAt), [last, noticeAt, deloadAt]);
 
 
   const [collapsed, setCollapsed] = useState(false);
@@ -688,6 +1456,19 @@ function ExerciseCard({
                     PR
                   </span>
                 )}
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onOpenInfo(suggestion?.weight ?? null);
+                  }}
+                  aria-label={`How to do ${exercise.name}`}
+                  title="Form, muscles worked and your notes"
+                  className="relative grid h-7 w-7 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                >
+                  <Info className="h-3.5 w-3.5" aria-hidden />
+                  {hasNote && <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-foreground" aria-hidden />}
+                </button>
               </div>
               <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-muted-foreground">
                 <span className="font-mono tabular-nums">Target {exerciseTarget(exercise)}</span>
@@ -699,7 +1480,34 @@ function ExerciseCard({
                     </span>
                   </>
                 )}
+                {e1rm > 0 && (
+                  <>
+                    <span aria-hidden>·</span>
+                    <span className="font-mono tabular-nums" title="Estimated one-rep max, from your heaviest logged set">est. 1RM {formatKg(e1rm)}kg</span>
+                  </>
+                )}
               </div>
+
+              {/* The number to aim for today, with the reasoning attached so it is
+                  never a black box. */}
+              {suggestion && (
+                <div className="mt-1.5 inline-flex flex-wrap items-center gap-1.5 rounded-lg bg-muted px-2 py-1">
+                  {suggestion.isIncrease ? <TrendingUp className="h-3 w-3 shrink-0" aria-hidden /> : <Minus className="h-3 w-3 shrink-0 text-muted-foreground" aria-hidden />}
+                  <span className="font-mono text-[11px] font-semibold tabular-nums">
+                    Today {formatKg(trend.status === "deload" && trend.deloadTo ? trend.deloadTo : suggestion.weight)}kg × {suggestion.reps}
+                  </span>
+                  <span className="text-[10px] text-muted-foreground">{trend.status === "deload" ? "deload" : suggestion.reason}</span>
+                </div>
+              )}
+
+              {/* Only speaks up when it has something to say: a stall worth noticing,
+                  a deload worth taking, or ground actually lost. */}
+              {(trend.status === "notice" || trend.status === "deload" || trend.status === "regressed") && (
+                <div className={`mt-1.5 flex items-start gap-1.5 rounded-lg px-2 py-1 ${trend.status === "deload" ? "bg-foreground text-background" : "border border-border-strong"}`}>
+                  <TriangleAlert className="mt-0.5 h-3 w-3 shrink-0" aria-hidden />
+                  <span className="text-[10px] leading-snug">{trend.message}</span>
+                </div>
+              )}
             </div>
             <span className={`shrink-0 font-mono text-xs font-semibold tabular-nums ${allDone ? "text-foreground" : "text-muted-foreground"}`}>
               {done}/{rowCount}
@@ -718,7 +1526,17 @@ function ExerciseCard({
               >
                 <div className="space-y-1 pt-2">
                   {rows.map((setNumber) => (
-                    <SetRow key={setNumber} exercise={exercise} setNumber={setNumber} log={byNumber.get(setNumber)} last={last} readOnly={readOnly} onSave={onSave} onToggleDone={onToggleDone} />
+                    <SetRow
+                      key={setNumber}
+                      exercise={exercise}
+                      setNumber={setNumber}
+                      log={byNumber.get(setNumber)}
+                      last={last}
+                      readOnly={readOnly}
+                      pending={pendingRows.has(`${exercise.id}|${setNumber}`)}
+                      onSave={onSave}
+                      onToggleDone={onToggleDone}
+                    />
                   ))}
                 </div>
               </motion.div>
@@ -731,7 +1549,7 @@ function ExerciseCard({
 }
 
 // =====================================================================
-// Set row — weight and reps are both entered
+// Set row: weight and reps are both entered
 // =====================================================================
 function SetRow({
   exercise,
@@ -739,6 +1557,7 @@ function SetRow({
   log,
   last,
   readOnly,
+  pending,
   onSave,
   onToggleDone,
 }: {
@@ -747,34 +1566,41 @@ function SetRow({
   log: SetLog | undefined;
   last: LastEntry | undefined;
   readOnly: boolean;
+  pending: boolean;
   onSave: (exerciseId: string, setNumber: number, patch: SetPatch) => void;
   onToggleDone: (exerciseId: string, setNumber: number, next: boolean) => void;
 }) {
   const serverWeight = log?.weight != null ? formatKg(log.weight) : "";
   const serverReps = log?.reps != null ? String(log.reps) : "";
+  const serverRpe = log?.rpe != null ? String(log.rpe) : "";
   const isDone = log?.done ?? false;
 
   const [weight, setWeight] = useState(serverWeight);
   const [reps, setReps] = useState(serverReps);
+  const [rpe, setRpe] = useState(serverRpe);
 
   // Resync when the stored values themselves change, not just when the number of
-  // rows does — editing a value used to leave the input showing stale text.
+  // rows does. Editing a value used to leave the input showing stale text.
   useEffect(() => setWeight(serverWeight), [serverWeight]);
   useEffect(() => setReps(serverReps), [serverReps]);
+  useEffect(() => setRpe(serverRpe), [serverRpe]);
 
   const weightId = `w-${exercise.id}-${setNumber}`;
   const repsId = `r-${exercise.id}-${setNumber}`;
+  const rpeId = `e-${exercise.id}-${setNumber}`;
   const checkId = `c-${exercise.id}-${setNumber}`;
 
-  const commit = (field: "weight" | "reps", raw: string) => {
+  const commit = (field: "weight" | "reps" | "rpe", raw: string) => {
     const parsed = parseNumeric(raw);
-    if (parsed === undefined) {
+    const invalid = parsed === undefined || (field === "rpe" && parsed !== null && (parsed < 1 || parsed > 10));
+    if (invalid) {
       // Invalid entry: snap back to what is stored rather than saving garbage.
       if (field === "weight") setWeight(serverWeight);
-      else setReps(serverReps);
+      else if (field === "reps") setReps(serverReps);
+      else setRpe(serverRpe);
       return;
     }
-    const current = field === "weight" ? (log?.weight ?? null) : (log?.reps ?? null);
+    const current = field === "weight" ? (log?.weight ?? null) : field === "reps" ? (log?.reps ?? null) : (log?.rpe ?? null);
     if (parsed === current) return;
     onSave(exercise.id, setNumber, { [field]: parsed } as SetPatch);
   };
@@ -829,10 +1655,29 @@ function SetRow({
           step="1"
           disabled={readOnly}
           ariaLabel={`Reps for ${rowLabel}`}
-          placeholder={String(exercise.targetReps)}
+          placeholder={String(exercise.targetRepsMin)}
+        />
+        {/* Optional. Left blank it changes nothing; filled in it sharpens the 1RM
+            estimate, because RPE says how many reps were still in the tank. */}
+        <NumberField
+          id={rpeId}
+          value={rpe}
+          onChange={setRpe}
+          onCommit={(v) => commit("rpe", v)}
+          onEnter={() => advanceFrom("reps")}
+          suffix="rpe"
+          step="0.5"
+          disabled={readOnly}
+          ariaLabel={`Effort for ${rowLabel}, 1 to 10`}
+          placeholder="–"
+          className="relative hidden w-20 shrink-0 sm:block"
         />
       </div>
 
+      {/* A held width, so a row does not jump sideways the moment it saves. */}
+      <span className="flex w-3 shrink-0 justify-center">
+        {pending && <span className="h-1.5 w-1.5 rounded-full border border-foreground" role="img" aria-label={`${rowLabel} not saved yet`} title="Not saved yet" />}
+      </span>
     </motion.div>
   );
 }
@@ -848,6 +1693,7 @@ function NumberField({
   disabled,
   ariaLabel,
   placeholder,
+  className,
 }: {
   id: string;
   value: string;
@@ -859,9 +1705,10 @@ function NumberField({
   disabled: boolean;
   ariaLabel: string;
   placeholder: string;
+  className?: string;
 }) {
   return (
-    <div className="relative flex-1">
+    <div className={className ?? "relative flex-1"}>
       <Input
         id={id}
         type="number"
@@ -897,11 +1744,14 @@ function NumberField({
 type RestTimer = ReturnType<typeof useRestTimer>;
 
 /**
- * Holds only state that changes on user action — never the per-tick clock. The
+ * Holds only state that changes on user action, never the per-tick clock. The
  * countdown itself ticks inside RestTimerBar, so a running timer does not re-render
  * the whole page (and every set row in it) four times a second.
  */
 function useRestTimer() {
+  // Off is a perfectly reasonable way to train, so the whole feature is a switch.
+  // Persisted per device: it is a preference about this phone, not about the plan.
+  const [enabled, setEnabled] = useState(() => localStorage.getItem(REST_ENABLED_KEY) !== "0");
   const [duration, setDuration] = useState(() => {
     const stored = Number(localStorage.getItem(REST_STORAGE_KEY));
     return REST_PRESETS.includes(stored) ? stored : 90;
@@ -909,12 +1759,16 @@ function useRestTimer() {
   const [endsAt, setEndsAt] = useState<number | null>(null);
   const [paused, setPaused] = useState<number | null>(null); // seconds left while paused
 
-  const running = endsAt !== null || paused !== null;
+  const running = enabled && (endsAt !== null || paused !== null);
 
   const start = useCallback(() => {
+    if (!enabled) return;
+    // Audio can only be created from a user gesture, and the tap that ticked the set
+    // off is the one that got us here.
+    primeBeep();
     setPaused(null);
     setEndsAt(Date.now() + duration * 1000);
-  }, [duration]);
+  }, [enabled, duration]);
 
   const stop = useCallback(() => {
     setEndsAt(null);
@@ -941,9 +1795,19 @@ function useRestTimer() {
     localStorage.setItem(REST_STORAGE_KEY, String(seconds));
   }, []);
 
+  const changeEnabled = useCallback((on: boolean) => {
+    setEnabled(on);
+    localStorage.setItem(REST_ENABLED_KEY, on ? "1" : "0");
+    if (on) primeBeep();
+    else {
+      setEndsAt(null);
+      setPaused(null);
+    }
+  }, []);
+
   return useMemo(
-    () => ({ duration, changeDuration, endsAt, pausedAt: paused, running, start, stop, toggle, adjust }),
-    [duration, changeDuration, endsAt, paused, running, start, stop, toggle, adjust],
+    () => ({ enabled, setEnabled: changeEnabled, duration, changeDuration, endsAt, pausedAt: paused, running, start, stop, toggle, adjust }),
+    [enabled, changeEnabled, duration, changeDuration, endsAt, paused, running, start, stop, toggle, adjust],
   );
 }
 
@@ -968,7 +1832,7 @@ function RestTimerBar({ rest }: { rest: RestTimer }) {
   useEffect(() => {
     if (finished && endsAt !== null && firedFor.current !== endsAt) {
       firedFor.current = endsAt;
-      navigator.vibrate?.([120, 80, 120]);
+      restOverAlert();
     }
   }, [finished, endsAt]);
 
@@ -1205,15 +2069,28 @@ function WorkoutPickerDialog({
   onOpenChange,
   suggested,
   currentType,
+  splitId,
   onPick,
 }: {
   open: boolean;
   onOpenChange: (b: boolean) => void;
   suggested: WorkoutType;
   currentType: WorkoutType | null;
+  splitId: string;
   onPick: (type: WorkoutType) => void;
 }) {
-  const options: WorkoutType[] = ["upper", "lower", "rest"];
+  // The days this split actually contains, in cycle order, plus rest.
+  const options: WorkoutType[] = useMemo(() => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const key of getSplit(splitId).cycle) {
+      if (isRestDay(key) || seen.has(key)) continue;
+      seen.add(key);
+      out.push(key);
+    }
+    out.push(REST);
+    return out;
+  }, [splitId]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -1240,7 +2117,7 @@ function WorkoutPickerDialog({
                   <WorkoutTypeBadge type={type} />
                   <div className="min-w-0">
                     <div className="text-sm font-medium">{workoutLabel(type)}</div>
-                    <div className="text-[11px] text-muted-foreground">{type === "rest" ? "No training" : `${PROGRAM[type].length} exercises`}</div>
+                    <div className="text-[11px] text-muted-foreground">{isRestDay(type) ? "No training" : `${exerciseCount(type)} exercises`}</div>
                   </div>
                 </div>
                 {isSuggested && <span className="shrink-0 rounded-full bg-foreground px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-background">Suggested</span>}

@@ -19,7 +19,7 @@ router.param("id", objectIdParam);
 // Balances are a derived value: they only move through logged Expense and
 // MoneyMovement records, never a direct field write. Rejected here so the
 // audit trail can't be bypassed by an old client or a stray script.
-const BALANCE_EDIT_ERROR = "balance cannot be edited directly — record an adjustment movement instead";
+const BALANCE_EDIT_ERROR = "balance cannot be edited directly; record an adjustment movement instead";
 
 // A new account starts at 0; a non-zero opening balance is applied as an
 // "adjustment" movement in the same transaction, so even the first peso has a
@@ -344,7 +344,7 @@ router.post("/expenses", async (req, res) => {
     }
   }
 
-  // external — no balance change
+  // external, no balance change
   const ext = await ExternalSource.findById(sourceId);
   if (!ext || ext.archived) return res.status(404).json({ error: "external source not found" });
 

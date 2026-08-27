@@ -39,7 +39,7 @@ function isValidEntryMode(m: string): m is EntryMode {
   return (ENTRY_MODES as readonly string[]).includes(m);
 }
 
-// Every macro must be a real, non-negative number before it reaches Mongoose —
+// Every macro must be a real, non-negative number before it reaches Mongoose:
 // NaN/Infinity would otherwise be stored and poison every downstream total.
 function validateNutrition(n: NutritionInput): string | null {
   for (const field of ["calories", "protein", "carbs", "fat"] as const) {

@@ -16,7 +16,7 @@ export type Page<T> = {
   offset: number;
 };
 
-// "1-50 of 213" / "3 of 3" — the label next to a paged list.
+// "1-50 of 213" / "3 of 3": the label next to a paged list.
 export function pageRangeLabel(loaded: number, total: number, offset = 0): string {
   if (total === 0) return "0";
   if (loaded >= total && offset === 0) return `${total}`;

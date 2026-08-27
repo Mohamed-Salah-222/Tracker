@@ -407,7 +407,7 @@ function CaloriesSkeleton() {
 }
 
 // =====================================================================
-// DaySummary — the number that actually matters is what is left
+// DaySummary: the number that actually matters is what is left
 // =====================================================================
 function DaySummary({ totals, goal, cheat }: { totals: Macros; goal: Goal; cheat: boolean }) {
   const cal = Math.round(totals.cal);
@@ -604,7 +604,7 @@ function MealCard({
               onClick={onAdd}
               className="flex min-h-[92px] flex-1 items-center justify-center rounded-lg border border-dashed border-border text-xs font-medium text-muted-foreground transition-colors hover:border-border-strong hover:bg-muted/40"
             >
-              Nothing logged — tap to add
+              Nothing logged, tap to add
             </button>
           ) : (
             <div className="space-y-0.5">
@@ -622,7 +622,7 @@ function MealCard({
 }
 
 // =====================================================================
-// EntryRow — adjust in place instead of opening a dialog for a number
+// EntryRow: adjust in place instead of opening a dialog for a number
 // =====================================================================
 function EntryRow({ entry, onEdit, onDelete }: { entry: Entry; onEdit: (entry: Entry, patch: { grams?: number; units?: number }) => void; onDelete: (entry: Entry) => void }) {
   const isUnit = entry.entryMode === "perUnit";
@@ -728,7 +728,7 @@ function FoodShelf({
 }
 
 // =====================================================================
-// FoodTile — tap logs one serving, the chevron opens the full picker
+// FoodTile: tap logs one serving, the chevron opens the full picker
 // =====================================================================
 function FoodTile({ food, draggable = false, onQuickLog, onOpenPicker }: { food: Food; draggable?: boolean; onQuickLog: () => void; onOpenPicker: () => void }) {
   const canQuickLog = quickLogAmount(food) !== null;

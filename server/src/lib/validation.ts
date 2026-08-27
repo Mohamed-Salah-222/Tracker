@@ -72,7 +72,7 @@ export function parseDayUTC(value: unknown): Date | null {
   }
   if (typeof value !== "string" || !value.trim()) return null;
   // Parse first so nonsense ("2026-02-30", "hello") is rejected, but normalize the
-  // original string — toDayUTC reads the calendar day the sender wrote, which a
+  // original string. toDayUTC reads the calendar day the sender wrote, which a
   // Date instance can no longer report.
   if (Number.isNaN(new Date(value).getTime())) return null;
   return toDayUTC(value);

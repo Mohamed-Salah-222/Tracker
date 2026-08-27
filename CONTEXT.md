@@ -87,7 +87,7 @@
 transaction via `mongoose.startSession()` + `session.withTransaction()`. Transactions
 require a replica set or a sharded cluster. **A standalone `mongod` will fail these
 endpoints** with `Transaction numbers are only allowed on a replica set member or
-mongos` — meaning every expense, movement, and account creation breaks, while the
+mongos`, meaning every expense, movement, and account creation breaks, while the
 rest of the app keeps working. There is no non-transactional fallback path.
 
 Transaction call sites in `server/src/routes/payments.ts`:
@@ -106,7 +106,7 @@ Transaction call sites in `server/src/routes/payments.ts`:
 Expense routes not listed here (`GET /expenses`, `GET /summary`) are read-only and
 work on any topology.
 
-### Current deployment — verified 2026-07-29
+### Current deployment, verified 2026-07-29
 - API host: Render (`https://tracker-u98r.onrender.com/api`, hard-coded in `client/src/lib/api.ts`).
 - Database: **MongoDB Atlas, 3-node replica set** `atlas-7p9y1s-shard-0`, MongoDB **8.0.28**.
   Driver reports topology `ReplicaSetWithPrimary`.
@@ -114,10 +114,10 @@ work on any topology.
   aborting: the write rolled back cleanly and left nothing behind.
 - Caveat: `MONGO_URI` uses the plain `mongodb://` scheme with an explicit 3-host seed
   list rather than `mongodb+srv://`. This works today, but it pins specific shard
-  hostnames — if Atlas rotates or resizes nodes the seed list can go stale. Prefer the
+  hostnames. If Atlas rotates or resizes nodes the seed list can go stale. Prefer the
   `mongodb+srv://` connection string, which resolves members via DNS SRV.
 - If the database is ever moved (local `mongod`, a single-container Mongo, a
-  budget host), it **must** be a replica set — even a single-node replica set
+  budget host), it **must** be a replica set, even a single-node replica set
   (`rs.initiate()`) is enough. Plain standalone Mongo will break payments.
 
 ## Data Model
@@ -200,7 +200,7 @@ work on any topology.
   - Create/edit/archive wallets and banks in `server/src/routes/payments.ts` and `client/src/pages/Payments.tsx`.
   - **Balances are never edited directly.** `PATCH /payments/wallets/:id` and `PATCH /payments/banks/:id` reject a `balance` field with a 400. An account balance only changes through a logged `Expense` or `MoneyMovement`, so the Movements list is a complete audit trail.
     - Manual corrections stay possible: the edit dialog's "Correct balance" field computes the delta against the current balance and posts an `adjustment` `MoneyMovement` (`recordBalanceAdjustment` in `client/src/pages/Payments.tsx`), with an optional reason stored as the movement note.
-    - A non-zero opening balance on account creation is applied the same way — the account is inserted at `0` and an `adjustment` movement noted `"Opening balance"` is committed in the same transaction.
+    - A non-zero opening balance on account creation is applied the same way: the account is inserted at `0` and an `adjustment` movement noted `"Opening balance"` is committed in the same transaction.
     - Changing an account's currency is refused while its balance is non-zero, since that would silently reinterpret the stored amount.
   - Create/filter/edit/soft-delete expenses with category, source, date, search; source balance is adjusted transactionally in `server/src/routes/payments.ts`.
   - Weekly/monthly expense recap in `client/src/components/RecapModal.tsx` backed by `GET /api/payments/summary`.

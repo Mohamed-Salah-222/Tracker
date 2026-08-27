@@ -192,8 +192,8 @@ function MovementAmountDisplay({ mov }: { mov: Movement }) {
 function MovementRow({ mov, onEdit }: { mov: Movement; onEdit: (m: Movement) => void }) {
   const isAdjustment = mov.type === "adjustment";
   const summary = isAdjustment
-    ? (mov.fromNameSnapshot ?? mov.toNameSnapshot ?? "—")
-    : `${mov.fromNameSnapshot ?? "—"} → ${mov.toNameSnapshot ?? "—"}`;
+    ? (mov.fromNameSnapshot ?? mov.toNameSnapshot ?? "-")
+    : `${mov.fromNameSnapshot ?? "-"} → ${mov.toNameSnapshot ?? "-"}`;
 
   return (
     <button

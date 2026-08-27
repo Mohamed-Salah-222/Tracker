@@ -86,7 +86,7 @@ export default function Foods() {
   const [filterCat, setFilterCat] = useState<string>("all");
   const [addOpen, setAddOpen] = useState(false);
 
-  // The input stays instant, but only the settled value reaches the query —
+  // The input stays instant, but only the settled value reaches the query,
   // otherwise every keystroke fires its own /foods request.
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedSearch(search), 300);

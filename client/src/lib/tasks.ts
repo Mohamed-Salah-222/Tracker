@@ -51,7 +51,7 @@ export const dayMedium = (iso: string) => fmt(iso, { weekday: "short", month: "s
 export const dayShort = (iso: string) => fmt(iso, { month: "short", day: "numeric" });
 export const fullDate = (iso: string) => fmt(iso, { month: "long", day: "numeric", year: "numeric" });
 
-/** "today" / "tomorrow" / "3 days ago" — for headers and overdue badges. */
+/** "today" / "tomorrow" / "3 days ago": for headers and overdue badges. */
 export function relativeDay(iso: string): string {
   const days = Math.round((Date.parse(iso + "T00:00:00Z") - Date.parse(todayISO() + "T00:00:00Z")) / 86_400_000);
   if (days === 0) return "today";

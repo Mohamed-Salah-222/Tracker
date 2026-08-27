@@ -7,7 +7,7 @@ import { Label } from "./ui/label";
 import { Card, CardContent } from "./ui/card";
 
 // =====================================================================
-// CONFIG — edit these
+// CONFIG: edit these
 // =====================================================================
 const PASSWORD = "2462"; // ← change this to your actual password
 const UNLOCK_DURATION_MS = 10 * 60 * 1000; // 10 minutes
@@ -32,7 +32,7 @@ function setUnlocked() {
   try {
     localStorage.setItem(STORAGE_KEY, String(Date.now() + UNLOCK_DURATION_MS));
   } catch {
-    // ignore — localStorage might be disabled
+    // ignore; localStorage might be disabled
   }
 }
 
@@ -69,7 +69,7 @@ export function PrivateRoute({ children }: { children: ReactNode }) {
     return () => clearTimeout(timer);
   }, [unlocked]);
 
-  // Cross-tab sync — if another tab locks, this one locks too
+  // Cross-tab sync: if another tab locks, this one locks too
   useEffect(() => {
     const handler = (e: StorageEvent) => {
       if (e.key === STORAGE_KEY) {

@@ -225,7 +225,7 @@ export function RecapModal({ open, onOpenChange, period }: { open: boolean; onOp
                     <StatCard label="Transactions" value={data.count.toString()} />
                     <StatCard label="Avg / day" value={fmtEGP(data.avgPerDay)} />
                     <StatCard label="Active days" value={`${data.daysWithExpenses} / ${data.daysInRange}`} />
-                    <StatCard label="Biggest" value={data.topExpenses[0] ? fmtEGP(data.topExpenses[0].amount) : "—"} />
+                    <StatCard label="Biggest" value={data.topExpenses[0] ? fmtEGP(data.topExpenses[0].amount) : "-"} />
                     {!!data.externalFundedTotal && data.externalFundedTotal > 0 && (
                       <StatCard label="Family funded" value={fmtEGP(data.externalFundedTotal)} />
                     )}

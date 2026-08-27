@@ -21,7 +21,7 @@ rateSchema.pre("validate", async function () {
     .countDocuments({ _id: { $ne: this._id }, effectiveTo: null })
     .limit(1);
   if (openRates > 0) {
-    this.invalidate("effectiveTo", "another rate is still active — close it before opening a new one", this.effectiveTo);
+    this.invalidate("effectiveTo", "another rate is still active, close it before opening a new one", this.effectiveTo);
   }
 });
 

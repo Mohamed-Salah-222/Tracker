@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { CalorieEntry, MEAL_SLOTS } from "../models/CalorieEntry";
 import { Food } from "../models/Food";
-// NOTE: the CalorieEntry field stays `fridgeDeductedAtLog` — it holds live data on
+// NOTE: the CalorieEntry field stays `fridgeDeductedAtLog`; it holds live data on
 // existing entries, so only the model reference was renamed, not the stored field.
 import { KitchenItem } from "../models/KitchenItem";
 import { CheatDay } from "../models/CheatDay";
@@ -364,7 +364,7 @@ router.get("/week-summary", async (req, res) => {
     days[idx].water += w.ml;
   }
 
-  // Aggregate weekly stats — EXCLUDING cheat days
+  // Aggregate weekly stats, EXCLUDING cheat days
   const tracked = days.filter((d) => !d.isCheat);
   const trackedCount = tracked.length || 1;
 
@@ -392,7 +392,7 @@ router.get("/week-summary", async (req, res) => {
     water: totals.water / trackedCount,
   };
 
-  // Best/worst day (tracked only, by calorie adherence — closest to target without going over is "best")
+  // Best/worst day (tracked only, by calorie adherence: closest to target without going over is "best")
   let bestDay: (typeof tracked)[number] | null = null;
   let worstDay: (typeof tracked)[number] | null = null;
   if (tracked.length > 0 && goal) {

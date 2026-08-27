@@ -236,7 +236,7 @@ export type StackPoint = {
   /** Segment values, bottom to top. Must line up with `segments`. */
   values: number[];
   tooltip: string[];
-  /** Renders hollow — used for days with nothing logged. */
+  /** Renders hollow, used for days with nothing logged. */
   muted?: boolean;
 };
 

@@ -1,32 +1,49 @@
 import { Schema, model } from "mongoose";
 
-/** Types the app creates today. */
-export const WORKOUT_TYPES = ["upper", "lower", "rest"] as const;
+export const REST_DAY = "rest";
 
 /**
- * Retired split values. The program used to be a 4-day upperA/lowerA/upperB/lowerB
- * rotation; it is now a simple upper/lower split. Old documents still carry the old
- * values, so they stay in the schema enum (otherwise re-saving a historical session
- * throws a validation error) and are folded into the new types on read via
- * `normalizeWorkoutType`.
+ * Retired split values. The programme used to be a fixed four-day
+ * upperA/lowerA/upperB/lowerB rotation, then a plain upper/lower one. Old documents
+ * still carry those values, so they are folded into current day keys on read.
  */
-export const LEGACY_WORKOUT_TYPES = ["upperA", "lowerA", "upperB", "lowerB"] as const;
+const LEGACY_TYPE_MAP: Record<string, string> = {
+  upperA: "upper",
+  upperB: "upper",
+  lowerA: "lower",
+  lowerB: "lower",
+};
 
-const ALL_WORKOUT_TYPES = [...WORKOUT_TYPES, ...LEGACY_WORKOUT_TYPES];
+/**
+ * A session's `type` is a day-template key from the split catalogue
+ * (client/src/lib/workoutSplits.ts): "push", "legsB", "chestBack", or "rest".
+ *
+ * It is deliberately not an enum here. The catalogue has 60+ day templates and
+ * grows whenever a split is added; mirroring that list server-side would mean two
+ * copies drifting apart. Nothing on the server branches on the value except the
+ * "rest" sentinel, so a slug check is the honest amount of validation.
+ */
+export function isValidDayKey(value: unknown): value is string {
+  return typeof value === "string" && /^[a-zA-Z][a-zA-Z0-9]{0,39}$/.test(value);
+}
 
-export type WorkoutType = (typeof WORKOUT_TYPES)[number];
+export function normalizeWorkoutType(type: string): string {
+  return LEGACY_TYPE_MAP[type] ?? type;
+}
 
-export function normalizeWorkoutType(type: string): WorkoutType {
-  if (type === "upperA" || type === "upperB") return "upper";
-  if (type === "lowerA" || type === "lowerB") return "lower";
-  if (type === "upper" || type === "lower" || type === "rest") return type;
-  return "rest";
+export function isRestType(type: string): boolean {
+  return normalizeWorkoutType(type) === REST_DAY;
 }
 
 const workoutSessionSchema = new Schema(
   {
     date: { type: Date, required: true, unique: true, index: true },
-    type: { type: String, enum: ALL_WORKOUT_TYPES, required: true },
+    type: { type: String, required: true, trim: true },
+
+    /** Which split this session came from, so history stays readable after a change. */
+    splitId: { type: String, default: "" },
+    /** Position in that split's cycle, used to suggest the next day. */
+    cycleIndex: { type: Number, default: null },
 
     // Legacy cardio bookend fields kept for existing documents.
     warmupMinutes: { type: Number, default: 0, min: 0 },
@@ -34,7 +51,7 @@ const workoutSessionSchema = new Schema(
     finisherMinutes: { type: Number, default: 0, min: 0 },
     finisherDone: { type: Boolean, default: false },
 
-    // Rest day walk
+    // Rest day walk (retained for historical rows).
     walkMinutes: { type: Number, default: 0, min: 0 },
     walkDistanceKm: { type: Number, default: 0, min: 0 },
 

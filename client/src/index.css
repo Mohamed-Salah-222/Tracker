@@ -31,7 +31,7 @@
   --color-input: #e4e4e7;
   --color-ring: #18181b;
 
-  /* Semantic colors — monochrome, like the rest of the app. Money in vs money out
+  /* Semantic colors: monochrome, like the rest of the app. Money in vs money out
      and the day statuses are told apart by weight and by their own labels, not hue. */
   --color-income: #18181b;
   --color-income-bg: #f4f4f5;
@@ -53,7 +53,7 @@
   --color-sidebar-foreground: #09090b;
   --color-sidebar-border: #e4e4e7;
 
-  /* Expense categories — a grey ladder. Every tag carries its own name, so the
+  /* Expense categories: a grey ladder. Every tag carries its own name, so the
      shade is only there to separate rows and chart slices, never to encode meaning. */
   --color-cat-food: #18181b;
   --color-cat-food-bg: #f4f4f5;
@@ -114,7 +114,7 @@
   --color-water: #0284c7;
   --color-water-bg: #f0f9ff;
 
-  /* Workout — deliberately monochrome. The three session types are told apart by
+  /* Workout: deliberately monochrome. The three session types are told apart by
      weight (filled / outlined / ghost), not by hue. */
   --color-workout-upper: #18181b;
   --color-workout-upper-bg: #18181b;

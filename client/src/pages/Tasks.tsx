@@ -63,7 +63,7 @@ export default function Tasks() {
 
   useEffect(() => {
     api
-      .get<Task[]>("/tasks/overdue")
+      .get<Task[]>("/tasks/overdue", { params: { today: todayISO() } })
       .then((r) => setOverdueCount(r.data.length))
       .catch(() => setOverdueCount(0));
   }, [tasks]);

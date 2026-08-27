@@ -10,6 +10,12 @@ const setLogSchema = new Schema(
     setNumber: { type: Number, required: true, min: 1 },
     weight: { type: Number, default: null }, // kg, null = not logged
     reps: { type: Number, default: null }, // null = not logged
+    /**
+     * Rate of perceived exertion, 1-10. Optional. When present it says how many reps
+     * were left in reserve (RPE 8 means two more were possible), which makes a set's
+     * true difficulty comparable across days and feeds the load suggestion.
+     */
+    rpe: { type: Number, default: null, min: 1, max: 10 },
     done: { type: Boolean, default: false },
   },
   { timestamps: true },

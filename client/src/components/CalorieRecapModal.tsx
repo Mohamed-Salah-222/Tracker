@@ -91,7 +91,7 @@ export function CalorieRecapModal({ open, onOpenChange }: { open: boolean; onOpe
     setLoading(true);
     try {
       // The previous week used to be fetched alongside this one and then thrown
-      // away — the state setter was never read. That request is gone.
+      // away. The state setter was never read. That request is gone.
       const r = await api.get<WeekSummary>("/calories/week-summary", { params: { startDate: anchor } });
       cache.current[anchor] = r.data;
       setData(r.data);

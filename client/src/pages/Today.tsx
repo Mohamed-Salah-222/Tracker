@@ -24,7 +24,7 @@ const stagger = (i: number) => ({
   transition: { ...fadeUp.transition, delay: Math.min(i, 6) * 0.03 },
 });
 
-/** Monochrome burst — the palette is black and white, so the confetti is too. */
+/** Monochrome burst: the palette is black and white, so the confetti is too. */
 function spawnConfetti(originEl: HTMLElement) {
   if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
   const rect = originEl.getBoundingClientRect();
@@ -89,7 +89,7 @@ export default function Today() {
 
   const loadOverdue = useCallback(async () => {
     try {
-      const r = await api.get<Task[]>("/tasks/overdue");
+      const r = await api.get<Task[]>("/tasks/overdue", { params: { today: todayISO() } });
       setOverdue(r.data);
     } catch (e) {
       toast.error(getApiError(e));
