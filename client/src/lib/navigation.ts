@@ -1,4 +1,4 @@
-import { LayoutDashboard, Wallet, CreditCard, CheckSquare, Sun, Apple, ShoppingBasket, BookOpen, Dumbbell, Sparkles } from "lucide-react";
+import { LayoutDashboard, Wallet, CreditCard, CheckSquare, Sun, Apple, ShoppingBasket, BookOpen, Dumbbell, Sparkles, Target, NotebookPen } from "lucide-react";
 
 // Nav data lives outside AppSidebar.tsx so that file exports only components and
 // stays eligible for react-refresh fast refresh.
@@ -24,6 +24,8 @@ export const navSections: NavSection[] = [
       { title: "Today", url: "/today", icon: Sun },
       { title: "Tasks", url: "/tasks", icon: CheckSquare },
       { title: "Habits", url: "/habits", icon: Sparkles },
+      { title: "Goals", url: "/goals", icon: Target },
+      { title: "Journal", url: "/journal", icon: NotebookPen },
     ],
   },
   {

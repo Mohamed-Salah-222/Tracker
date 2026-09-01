@@ -18,8 +18,7 @@ import { exerciseCount, exerciseTarget, exercisesFor, workoutLabel, workoutTypeS
 import { ALL_MOVEMENT_IDS, DEFAULT_SPLIT_ID, REST, SPLITS, getSplit, isRestDay, movementName, progressionFor, type Split } from "../lib/workoutSplits";
 import { analyseTrend, estimate1RM, suggestLoad, type ExerciseHistory, type SessionPoint } from "../lib/progression";
 import { exerciseImagePath, exerciseInfo } from "../lib/exerciseInfo";
-import { BAR_OPTIONS, describeSide, loadBar } from "../lib/plates";
-import { flush as flushSets, forgetSession, onSetSynced, pendingFor, queueSet, useSetQueue } from "../lib/setQueue";
+import { flush as flushSets, forgetSession, onSetDropped, onSetSynced, pendingFor, queueSet, useSetQueue } from "../lib/setQueue";
 import { primeBeep, restOverAlert } from "../lib/beep";
 import { useWakeLock } from "../lib/wakeLock";
 
@@ -167,7 +166,7 @@ export default function Workout() {
   /** dayKey -> the user's own exercise list, replacing the catalogue default. */
   const [dayPlans, setDayPlans] = useState<Record<string, PlanSlot[]>>({});
   const [exerciseNotes, setExerciseNotes] = useState<Record<string, string>>({});
-  const [infoFor, setInfoFor] = useState<{ id: string; suggested: number | null } | null>(null);
+  const [infoFor, setInfoFor] = useState<string | null>(null);
   const [editDayOpen, setEditDayOpen] = useState(false);
   const [sets, setSets] = useState<SetLog[]>([]);
   const [lastWeights, setLastWeights] = useState<LastWeights>({});
@@ -320,6 +319,14 @@ export default function Workout() {
     else writeSets([]);
   }, [sessionId, loadSets, writeSets]);
 
+  useEffect(
+    () =>
+      onSetDropped((d) => {
+        toast.error(`Set ${d.setNumber} of ${movementName(d.exerciseId)} could not be saved: ${d.reason}`);
+      }),
+    [],
+  );
+
   // A row only has a server _id once its write lands, which on a bad signal can be
   // minutes after it was typed.
   useEffect(() => {
@@ -407,7 +414,7 @@ export default function Workout() {
     setConfirmEmptyOpen(false);
     rest.stop();
     await patchSession({ completedAt: new Date().toISOString() });
-    if (queue.count > 0) toast(`${queue.count} ${queue.count === 1 ? "set is" : "sets are"} still saving. Keep the app open for a moment.`);
+    if (queue.count > 0) toast(`${queue.count} ${queue.count === 1 ? "set is" : "sets are"} still waiting to save. Keep the app open for a moment.`);
     void loadLastWeights();
     // Finishing a session ticks the day on the habit tracker, so land the user there.
     navigate("/");
@@ -584,7 +591,7 @@ export default function Workout() {
                 onSave={saveSet}
                 onToggleDone={toggleSetDone}
                 hasNote={!!exerciseNotes[exercise.id]}
-                onOpenInfo={(suggested) => setInfoFor({ id: exercise.id, suggested })}
+                onOpenInfo={() => setInfoFor(exercise.id)}
               />
             ))}
           </div>
@@ -618,15 +625,7 @@ export default function Workout() {
         }}
       />
 
-      {infoFor && (
-        <ExerciseInfoModal
-          movementId={infoFor.id}
-          suggestedWeight={infoFor.suggested}
-          note={exerciseNotes[infoFor.id] ?? ""}
-          onNoteSaved={saveExerciseNote}
-          onClose={() => setInfoFor(null)}
-        />
-      )}
+      {infoFor && <ExerciseInfoModal movementId={infoFor} note={exerciseNotes[infoFor] ?? ""} onNoteSaved={saveExerciseNote} onClose={() => setInfoFor(null)} />}
 
       {session && !isRestDay(session.type) && (
         <EditDayDialog
@@ -695,17 +694,13 @@ export default function Workout() {
 // =====================================================================
 // ExerciseInfoModal: what it works, how to do it, and your own note
 // =====================================================================
-const BAR_STORAGE_KEY = "workout:bar-kg";
-
 function ExerciseInfoModal({
   movementId,
-  suggestedWeight,
   onClose,
   note,
   onNoteSaved,
 }: {
   movementId: string;
-  suggestedWeight: number | null;
   onClose: () => void;
   note: string;
   onNoteSaved: (movementId: string, note: string) => void;
@@ -714,7 +709,6 @@ function ExerciseInfoModal({
   const [draft, setDraft] = useState(note);
   const [saved, setSaved] = useState(false);
   const [imgOk, setImgOk] = useState(true);
-  const [bar, setBar] = useState(() => Number(localStorage.getItem(BAR_STORAGE_KEY) ?? 20));
 
   useEffect(() => setDraft(note), [note]);
 
@@ -730,13 +724,6 @@ function ExerciseInfoModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draft]);
 
-  const setBarKg = (kg: number) => {
-    setBar(kg);
-    localStorage.setItem(BAR_STORAGE_KEY, String(kg));
-  };
-
-  const load = suggestedWeight != null && suggestedWeight > 0 ? loadBar(suggestedWeight, bar) : null;
-
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="!w-[calc(100vw-1rem)] !max-w-[520px] max-h-[92svh] overflow-y-auto">
@@ -744,7 +731,7 @@ function ExerciseInfoModal({
           <DialogTitle>{movementName(movementId)}</DialogTitle>
         </DialogHeader>
 
-        {/* Anatomy illustration. Drop a PNG at public/exercises/<id>.png and it
+        {/* Anatomy illustration. Drop a file at public/exercises/<id>.webp and it
             appears here; until then this is a labelled placeholder. */}
         <div className="grid aspect-[4/3] w-full place-items-center overflow-hidden rounded-xl border border-dashed border-border bg-muted/40">
           {imgOk ? (
@@ -753,7 +740,7 @@ function ExerciseInfoModal({
             <div className="px-6 text-center">
               <ImageIcon className="mx-auto mb-2 h-6 w-6 text-muted-foreground" aria-hidden />
               <div className="text-xs font-medium text-muted-foreground">Illustration coming</div>
-              <div className="mt-0.5 font-mono text-[10px] text-muted-foreground/70">public/exercises/{movementId}.png</div>
+              <div className="mt-0.5 font-mono text-[10px] text-muted-foreground/70">public/exercises/{movementId}.webp</div>
             </div>
           )}
         </div>
@@ -784,37 +771,6 @@ function ExerciseInfoModal({
                 ))}
               </ul>
             </div>
-          </div>
-        )}
-
-        {/* Plate maths for the load the page is suggesting. */}
-        {load && (
-          <div className="rounded-xl border border-border p-3">
-            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-              <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Loading {formatKg(suggestedWeight!)}kg</span>
-              <div className="flex gap-1">
-                {BAR_OPTIONS.map((b) => (
-                  <button
-                    key={b.kg}
-                    type="button"
-                    onClick={() => setBarKg(b.kg)}
-                    title={b.label}
-                    className={`rounded-md border px-2 py-0.5 font-mono text-[10px] tabular-nums transition-colors ${b.kg === bar ? "border-foreground bg-foreground text-background" : "border-border hover:bg-muted"}`}
-                  >
-                    {b.kg === 0 ? "none" : `${b.kg}kg`}
-                  </button>
-                ))}
-              </div>
-            </div>
-            {bar === 0 ? (
-              <p className="text-sm text-muted-foreground">Set the machine to {formatKg(suggestedWeight!)}kg.</p>
-            ) : (
-              <>
-                <div className="font-mono text-lg font-semibold tabular-nums">{describeSide(load.perSide)}</div>
-                <div className="mt-0.5 text-[11px] text-muted-foreground">per side, on a {bar}kg bar</div>
-                {load.shortfall !== 0 && <div className="mt-1 text-[11px] text-muted-foreground">Closest loadable is {formatKg(load.achievable)}kg.</div>}
-              </>
-            )}
           </div>
         )}
 
@@ -1397,7 +1353,7 @@ function ExerciseCard({
   onSave: (exerciseId: string, setNumber: number, patch: SetPatch) => void;
   onToggleDone: (exerciseId: string, setNumber: number, next: boolean) => void;
   hasNote: boolean;
-  onOpenInfo: (suggestedWeight: number | null) => void;
+  onOpenInfo: () => void;
 }) {
   // Historical sessions may hold more rows than the current three; never hide them.
   const highestLogged = sets.reduce((m, s) => Math.max(m, s.setNumber), 0);
@@ -1441,78 +1397,76 @@ function ExerciseCard({
     <motion.section {...stagger(index)} aria-label={exercise.name}>
       <Card style={allDone ? { boxShadow: "inset 3px 0 0 0 var(--color-foreground)" } : undefined}>
         <CardContent className="px-3 py-0 sm:px-4">
-          <button
-            type="button"
-            onClick={() => setCollapsed((c) => !c)}
-            aria-expanded={!collapsed}
-            className="-mx-1 flex w-[calc(100%+0.5rem)] items-center gap-2 rounded-lg px-1 py-1 text-left transition-colors hover:bg-muted/50"
-          >
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2">
-                <h3 className={`truncate text-sm font-semibold ${allDone ? "text-muted-foreground" : ""}`}>{exercise.name}</h3>
-                {isPr && (
-                  <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-foreground px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-background">
-                    <Trophy className="h-2.5 w-2.5" aria-hidden />
-                    PR
-                  </span>
-                )}
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onOpenInfo(suggestion?.weight ?? null);
-                  }}
-                  aria-label={`How to do ${exercise.name}`}
-                  title="Form, muscles worked and your notes"
-                  className="relative grid h-7 w-7 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                >
-                  <Info className="h-3.5 w-3.5" aria-hidden />
-                  {hasNote && <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-foreground" aria-hidden />}
-                </button>
-              </div>
-              <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-muted-foreground">
-                <span className="font-mono tabular-nums">Target {exerciseTarget(exercise)}</span>
-                {last && (
-                  <>
-                    <span aria-hidden>·</span>
-                    <span className="font-mono tabular-nums">
-                      Last {formatKg(last.weight)}kg{last.reps ? ` × ${last.reps}` : ""} <span className="text-muted-foreground/70">({formatRelativeDay(last.when)})</span>
+          <div className="-mx-1 flex items-start gap-1">
+            <button
+              type="button"
+              onClick={() => setCollapsed((c) => !c)}
+              aria-expanded={!collapsed}
+              className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1 py-1 text-left transition-colors hover:bg-muted/50"
+            >
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <h3 className={`truncate text-sm font-semibold ${allDone ? "text-muted-foreground" : ""}`}>{exercise.name}</h3>
+                  {isPr && (
+                    <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-foreground px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-background">
+                      <Trophy className="h-2.5 w-2.5" aria-hidden />
+                      PR
                     </span>
-                  </>
+                  )}
+                </div>
+                <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-muted-foreground">
+                  <span className="font-mono tabular-nums">Target {exerciseTarget(exercise)}</span>
+                  {last && (
+                    <>
+                      <span aria-hidden>·</span>
+                      <span className="font-mono tabular-nums">
+                        Last {formatKg(last.weight)}kg{last.reps ? ` × ${last.reps}` : ""} <span className="text-muted-foreground/70">({formatRelativeDay(last.when)})</span>
+                      </span>
+                    </>
+                  )}
+                  {e1rm > 0 && (
+                    <>
+                      <span aria-hidden>·</span>
+                      <span className="font-mono tabular-nums" title="Estimated one-rep max, from your heaviest logged set">est. 1RM {formatKg(e1rm)}kg</span>
+                    </>
+                  )}
+                </div>
+
+                {/* The number to aim for today, with the reasoning attached so it is
+                    never a black box. */}
+                {suggestion && (
+                  <div className="mt-1.5 inline-flex flex-wrap items-center gap-1.5 rounded-lg bg-muted px-2 py-1">
+                    {suggestion.isIncrease ? <TrendingUp className="h-3 w-3 shrink-0" aria-hidden /> : <Minus className="h-3 w-3 shrink-0 text-muted-foreground" aria-hidden />}
+                    <span className="font-mono text-[11px] font-semibold tabular-nums">
+                      Today {formatKg(trend.status === "deload" && trend.deloadTo ? trend.deloadTo : suggestion.weight)}kg × {suggestion.reps}
+                    </span>
+                    <span className="text-[10px] text-muted-foreground">{trend.status === "deload" ? "deload" : suggestion.reason}</span>
+                  </div>
                 )}
-                {e1rm > 0 && (
-                  <>
-                    <span aria-hidden>·</span>
-                    <span className="font-mono tabular-nums" title="Estimated one-rep max, from your heaviest logged set">est. 1RM {formatKg(e1rm)}kg</span>
-                  </>
+
+                {/* Only speaks up when it has something to say: a stall worth noticing,
+                    a deload worth taking, or ground actually lost. */}
+                {(trend.status === "notice" || trend.status === "deload" || trend.status === "regressed") && (
+                  <div className={`mt-1.5 flex items-start gap-1.5 rounded-lg px-2 py-1 ${trend.status === "deload" ? "bg-foreground text-background" : "border border-border-strong"}`}>
+                    <TriangleAlert className="mt-0.5 h-3 w-3 shrink-0" aria-hidden />
+                    <span className="text-[10px] leading-snug">{trend.message}</span>
+                  </div>
                 )}
               </div>
+            </button>
 
-              {/* The number to aim for today, with the reasoning attached so it is
-                  never a black box. */}
-              {suggestion && (
-                <div className="mt-1.5 inline-flex flex-wrap items-center gap-1.5 rounded-lg bg-muted px-2 py-1">
-                  {suggestion.isIncrease ? <TrendingUp className="h-3 w-3 shrink-0" aria-hidden /> : <Minus className="h-3 w-3 shrink-0 text-muted-foreground" aria-hidden />}
-                  <span className="font-mono text-[11px] font-semibold tabular-nums">
-                    Today {formatKg(trend.status === "deload" && trend.deloadTo ? trend.deloadTo : suggestion.weight)}kg × {suggestion.reps}
-                  </span>
-                  <span className="text-[10px] text-muted-foreground">{trend.status === "deload" ? "deload" : suggestion.reason}</span>
-                </div>
-              )}
-
-              {/* Only speaks up when it has something to say: a stall worth noticing,
-                  a deload worth taking, or ground actually lost. */}
-              {(trend.status === "notice" || trend.status === "deload" || trend.status === "regressed") && (
-                <div className={`mt-1.5 flex items-start gap-1.5 rounded-lg px-2 py-1 ${trend.status === "deload" ? "bg-foreground text-background" : "border border-border-strong"}`}>
-                  <TriangleAlert className="mt-0.5 h-3 w-3 shrink-0" aria-hidden />
-                  <span className="text-[10px] leading-snug">{trend.message}</span>
-                </div>
-              )}
-            </div>
-            <span className={`shrink-0 font-mono text-xs font-semibold tabular-nums ${allDone ? "text-foreground" : "text-muted-foreground"}`}>
-              {done}/{rowCount}
-            </span>
-          </button>
+            <button
+              type="button"
+              onClick={onOpenInfo}
+              aria-label={hasNote ? `Form, muscles worked and your note for ${exercise.name}` : `Form and muscles worked for ${exercise.name}`}
+              title={hasNote ? "Form, muscles worked and your note" : "Form, muscles worked, and somewhere to keep your own notes"}
+              className={`mt-1 grid h-9 w-9 shrink-0 self-start place-items-center rounded-lg border transition-colors ${
+                hasNote ? "border-foreground bg-foreground text-background" : "border-border-strong hover:bg-muted"
+              }`}
+            >
+              <Info className="h-5 w-5" aria-hidden />
+            </button>
+          </div>
 
           <AnimatePresence initial={false}>
             {!collapsed && (

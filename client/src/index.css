@@ -164,12 +164,6 @@ body {
    fill/stroke transition on every one of them. Recharts then animates the same
    properties itself, so bars, gridlines and tooltip hovers all fought the CSS
    transition and the whole chart felt like it was dragging. Charts opt out. */
-.recharts-wrapper,
-.recharts-wrapper *,
-.recharts-wrapper *::before,
-.recharts-wrapper *::after {
-  transition: none !important;
-}
 
 /* Custom scrollbar */
 ::-webkit-scrollbar {

@@ -13,6 +13,18 @@ const weightEntrySchema = new Schema(
     waterPct: { type: Number, default: null, min: 0, max: 100 },
     boneKg: { type: Number, default: null, min: 0 },
 
+    /**
+     * Tape measurements, all optional and all in centimetres. Weight alone cannot
+     * tell a lost kilo from a gained one that moved: the waist and the arm can.
+     */
+    neckCm: { type: Number, default: null, min: 0 },
+    chestCm: { type: Number, default: null, min: 0 },
+    waistCm: { type: Number, default: null, min: 0 },
+    hipsCm: { type: Number, default: null, min: 0 },
+    armCm: { type: Number, default: null, min: 0 },
+    thighCm: { type: Number, default: null, min: 0 },
+    calfCm: { type: Number, default: null, min: 0 },
+
     note: { type: String, default: "" },
     deletedAt: { type: Date, default: null },
   },

@@ -1,0 +1,23 @@
+{
+  "name": "LifeTracker",
+  "short_name": "LifeTracker",
+  "description": "Habits, food, training, money and goals, one day at a time.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#ffffff",
+  "theme_color": "#09090b",
+  "categories": ["health", "lifestyle", "productivity"],
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Today", "short_name": "Today", "url": "/today", "description": "The day's tasks, sleep and journal" },
+    { "name": "Workout", "short_name": "Workout", "url": "/workout", "description": "Log the session you are in" },
+    { "name": "Calories", "short_name": "Calories", "url": "/calories", "description": "Log what you ate" }
+  ]
+}

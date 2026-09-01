@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { motion } from "motion/react";
 import { api } from "../lib/api";
@@ -10,6 +10,10 @@ import { Checkbox } from "../components/ui/checkbox";
 import { Skeleton } from "../components/ui/skeleton";
 import { toast } from "sonner";
 import { getApiError } from "../lib/food";
+
+// A year of history and every habit's whole life. Only wanted when asked for, so it
+// stays out of the bundle until the button is pressed.
+const DashboardRecapModal = lazy(() => import("../components/DashboardRecapModal"));
 import { todayISO } from "../lib/today";
 import {
   BarChart3,
@@ -25,6 +29,7 @@ import {
   Dumbbell,
   Flame,
   HandHeart,
+  History,
   FolderKanban,
   Footprints,
   Languages,
@@ -102,15 +107,18 @@ type DashboardResponse = {
     goalsLeft: number;
     gymCount: number;
     workHours: number;
-    misses: { id: string; label: string; left: number; percent: number }[];
-    topHabits: { id: string; label: string; percent: number; actual: number; goal: number }[];
-    dayProgress: { date: string; day: number; label: string; percent: number }[];
+    /** percent is null for a day still to come, or one where everything was skipped. */
+    dayProgress: { date: string; day: number; label: string; percent: number | null; done: number; judged: number; skipped: number; future: boolean }[];
+    earliestMonth: string;
   };
   kitchen?: {
     tracked: number;
     out: number;
     low: number;
-    items: { id: string; name: string; count: number; lowThreshold: number; status: "out" | "low" | "ok" }[];
+    /** Free-text lines on the to-buy list that are not tracked foods. */
+    manual: number;
+    toBuy: number;
+    items: { id: string; kind: "stock" | "manual"; label: string; detail: string; status: "out" | "low" | "ok" | "manual"; done: boolean }[];
   };
   rows: TrackerRow[];
 };
@@ -124,9 +132,13 @@ type AmountEdit = {
   target: number;
 };
 
-const TRACKER_VISIBILITY_KEY = "lifetracker.dashboard.visibleRows.v5";
-const DEFAULT_VISIBLE_IDS = ["sleep", "tasks", "projectMedical", "vitamins", "calories", "protein", "water", "projects", "projectGym", "gym", "english", "steps", "work"];
-const MIN_MONTH_KEY = "2026-08";
+const LEGACY_VISIBILITY_KEY = "lifetracker.dashboard.visibleRows.v5";
+/**
+ * What to hide, rather than what to show. The old list named every row it wanted, so
+ * a habit created afterwards was missing from the grid with nothing to explain why,
+ * and it still named projectMedical and projectGym months after those were renamed.
+ */
+const TRACKER_HIDDEN_KEY = "lifetracker.dashboard.hiddenRows.v1";
 
 const fadeUp = {
   initial: { opacity: 0, y: 8 },
@@ -161,15 +173,21 @@ function trackerTone() {
   return ACCENT_TONE;
 }
 
-function readVisibleRows() {
-  if (typeof window === "undefined") return DEFAULT_VISIBLE_IDS;
+function readHiddenRows(): string[] {
+  if (typeof window === "undefined") return [];
   try {
-    const raw = window.localStorage.getItem(TRACKER_VISIBILITY_KEY);
-    if (!raw) return DEFAULT_VISIBLE_IDS;
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) && parsed.every((item) => typeof item === "string") ? parsed : DEFAULT_VISIBLE_IDS;
+    const raw = window.localStorage.getItem(TRACKER_HIDDEN_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) && parsed.every((item) => typeof item === "string") ? parsed : [];
+    }
+    // Nothing hidden by default. The old allow-list is dropped rather than inverted:
+    // it cannot be inverted without knowing every row, and it named keys that no
+    // longer exist.
+    window.localStorage.removeItem(LEGACY_VISIBILITY_KEY);
+    return [];
   } catch {
-    return DEFAULT_VISIBLE_IDS;
+    return [];
   }
 }
 
@@ -226,11 +244,17 @@ export default function Dashboard() {
   const [amountValue, setAmountValue] = useState("");
   const [pickerOpen, setPickerOpen] = useState(false);
   const [goalsOpen, setGoalsOpen] = useState(false);
-  const [visibleIds, setVisibleIds] = useState<string[]>(readVisibleRows);
+  const [recapOpen, setRecapOpen] = useState(false);
+  const [recapMounted, setRecapMounted] = useState(false);
+  const [hiddenIds, setHiddenIds] = useState<string[]>(readHiddenRows);
 
   const load = useCallback(async () => {
-    const query = monthKey ? `?month=${monthKey}` : "";
-    const res = await api.get<DashboardResponse>(`/dashboard${query}`);
+    // The local calendar day travels with the request. Left to its own UTC clock the
+    // server called it yesterday for the hours local time runs ahead, which moved the
+    // highlighted day and made the calorie rule judge the wrong one.
+    const params = new URLSearchParams({ today: todayISO() });
+    if (monthKey) params.set("month", monthKey);
+    const res = await api.get<DashboardResponse>(`/dashboard?${params.toString()}`);
     setData(res.data);
   }, [monthKey]);
 
@@ -239,16 +263,16 @@ export default function Dashboard() {
   }, [load]);
 
   useEffect(() => {
-    window.localStorage.setItem(TRACKER_VISIBILITY_KEY, JSON.stringify(visibleIds));
-  }, [visibleIds]);
+    window.localStorage.setItem(TRACKER_HIDDEN_KEY, JSON.stringify(hiddenIds));
+  }, [hiddenIds]);
 
   // `data?.rows ?? []` built a fresh array on every render while data was null,
   // so it never matched as a dependency and every downstream useMemo recomputed.
   const rows = useMemo(() => data?.rows ?? [], [data]);
   const visibleRows = useMemo(() => {
-    const selected = rows.filter((row) => visibleIds.includes(row.id));
-    return selected.length ? selected : rows;
-  }, [rows, visibleIds]);
+    const shown = rows.filter((row) => !hiddenIds.includes(row.id));
+    return shown.length ? shown : rows;
+  }, [rows, hiddenIds]);
 
   const visibleStats = useMemo(() => {
     const totalGoal = visibleRows.reduce((sum, row) => sum + row.goal, 0);
@@ -264,19 +288,38 @@ export default function Dashboard() {
     return { totalGoal, totalActual, overallPercent, completedRows, misses, topHabits };
   }, [visibleRows]);
 
-  const dayProgress = useMemo(() => {
+  /**
+   * Recomputed here rather than taken from the server so hiding a row changes the
+   * chart. Same rule as the server's copy: a skip is neutral and a day still to come
+   * is not scored, because counting `checked` made a day of ten skips read 100%.
+   */
+  const dayProgress = useMemo<DashboardResponse["metrics"]["dayProgress"]>(() => {
     if (!data) return [];
-    const checkRows = visibleRows;
+    const localToday = todayISO();
     return data.month.days.map((day) => {
-      const done = checkRows.reduce((sum, row) => {
+      let done = 0;
+      let judged = 0;
+      let skipped = 0;
+      for (const row of visibleRows) {
         const cell = getCell(row, day.iso);
-        return sum + (cell?.checked ? 1 : 0);
-      }, 0);
+        if (!cell?.editable) continue;
+        if (cell.state === "excused") {
+          skipped++;
+          continue;
+        }
+        judged++;
+        if (cell.state === "done") done++;
+      }
+      const future = day.iso > localToday;
       return {
         date: day.iso,
         day: day.day,
         label: day.label,
-        percent: checkRows.length ? Math.round((done / checkRows.length) * 100) : 0,
+        percent: future || judged === 0 ? null : Math.round((done / judged) * 100),
+        done,
+        judged,
+        skipped,
+        future,
       };
     });
   }, [data, visibleRows]);
@@ -336,9 +379,10 @@ export default function Dashboard() {
     setAmountEdit({
       row,
       cell,
-      title: row.kind === "work-money" ? "Log work" : "Log steps",
-      label: row.kind === "work-money" ? "Money made" : "Steps walked",
-      placeholder: row.kind === "work-money" ? "40" : "7000",
+      // Named after the row rather than assuming every number row is Steps.
+      title: row.kind === "work-money" ? "Log work" : `Log ${row.label}`,
+      label: row.kind === "work-money" ? "Money made" : row.label,
+      placeholder: row.kind === "work-money" ? "40" : String(isAmountCell(cell) ? cell.target : (cell.target ?? 1)),
       target: isAmountCell(cell) ? cell.target : cell.target ?? 1,
     });
   };
@@ -352,41 +396,59 @@ export default function Dashboard() {
   };
 
   const toggleVisible = (rowId: string) => {
-    setVisibleIds((current) => (current.includes(rowId) ? current.filter((id) => id !== rowId) : [...current, rowId]));
+    setHiddenIds((current) => (current.includes(rowId) ? current.filter((id) => id !== rowId) : [...current, rowId]));
   };
 
   if (!data) {
     return (
-      <div className="min-h-[70vh] flex items-center justify-center text-sm text-muted-foreground">
-        <motion.div animate={{ opacity: [0.45, 1, 0.45] }} transition={{ duration: 1.5, repeat: Infinity }}>
-          Loading monthly tracker...
-        </motion.div>
+      <div className="w-full max-w-[1680px] flex flex-col gap-3 rounded-[18px] md:rounded-[24px] border border-border bg-card p-2.5 md:p-4" aria-busy="true" aria-label="Loading the tracker">
+        <div className="flex items-end justify-between gap-3">
+          <Skeleton className="h-10 w-56 rounded-lg" />
+          <Skeleton className="h-8 w-64 rounded-lg" />
+        </div>
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-[1.15fr_0.8fr_230px_230px]">
+          {[0, 1, 2, 3].map((i) => (
+            <Skeleton key={i} className="h-[132px] rounded-xl" />
+          ))}
+        </div>
+        <Skeleton className="h-[420px] rounded-xl" />
       </div>
     );
   }
 
-  const isAtMinMonth = monthKeyToNumber(data.month.key) <= monthKeyToNumber(MIN_MONTH_KEY);
+  const isAtMinMonth = monthKeyToNumber(data.month.key) <= monthKeyToNumber(data.metrics.earliestMonth);
 
   return (
-    <div className="w-full max-w-[1680px] md:max-h-[calc(100svh-3rem)] flex flex-col gap-3 overflow-visible md:overflow-hidden rounded-[18px] md:rounded-[24px] border border-neutral-200 bg-white p-2.5 md:p-4 text-neutral-900 shadow-[0_18px_50px_rgba(15,23,42,0.06)]">
+    <div className="w-full max-w-[1680px] md:max-h-[calc(100svh-3rem)] flex flex-col gap-3 overflow-visible md:overflow-hidden rounded-[18px] md:rounded-[24px] border border-border bg-card p-2.5 md:p-4 text-foreground shadow-[0_18px_50px_rgba(15,23,42,0.06)]">
       <motion.div {...fadeUp} className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
         <div>
-          <div className="text-[10px] uppercase tracking-[0.22em] font-semibold text-neutral-500">Habit Tracker</div>
-          <h1 className="text-2xl md:text-3xl font-semibold tracking-tight mt-1 text-neutral-900">{data.month.label}</h1>
+          <div className="text-[10px] uppercase tracking-[0.22em] font-semibold text-muted-foreground">Habit Tracker</div>
+          <h1 className="text-2xl md:text-3xl font-semibold tracking-tight mt-1 text-foreground">{data.month.label}</h1>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Button variant="outline" size="icon" className="h-8 w-8 rounded-md border-neutral-200 bg-white text-neutral-700 shadow-sm hover:bg-neutral-50" disabled={isAtMinMonth} onClick={() => setMonthKey(shiftMonth(data.month.key, -1))} aria-label="Previous month">
+          <Button variant="outline" size="icon" className="h-8 w-8 rounded-md border-border bg-card text-foreground shadow-sm hover:bg-muted" disabled={isAtMinMonth} onClick={() => setMonthKey(shiftMonth(data.month.key, -1))} aria-label="Previous month">
             <ChevronLeft className="h-4 w-4" />
           </Button>
-          <div className="h-8 rounded-md border border-neutral-200 bg-white px-3.5 flex items-center text-xs font-semibold shadow-sm min-w-36 justify-center text-neutral-800">{data.month.label}</div>
-          <Button variant="outline" size="icon" className="h-8 w-8 rounded-md border-neutral-200 bg-white text-neutral-700 shadow-sm hover:bg-neutral-50" onClick={() => setMonthKey(shiftMonth(data.month.key, 1))} aria-label="Next month">
+          <div className="h-8 rounded-md border border-border bg-card px-3.5 flex items-center text-xs font-semibold shadow-sm min-w-36 justify-center text-foreground">{data.month.label}</div>
+          <Button variant="outline" size="icon" className="h-8 w-8 rounded-md border-border bg-card text-foreground shadow-sm hover:bg-muted" onClick={() => setMonthKey(shiftMonth(data.month.key, 1))} aria-label="Next month">
             <ChevronRight className="h-4 w-4" />
           </Button>
-          <Button variant="outline" className="h-8 rounded-md border-neutral-200 bg-white px-3 text-xs text-neutral-700 shadow-sm hover:bg-neutral-50" onClick={() => setGoalsOpen(true)}>
+          <Button
+            variant="outline"
+            className="h-8 rounded-md border-border bg-card px-3 text-xs text-foreground shadow-sm hover:bg-muted"
+            onClick={() => {
+              setRecapMounted(true);
+              setRecapOpen(true);
+            }}
+          >
+            <History className="h-3.5 w-3.5" />
+            Recap
+          </Button>
+          <Button variant="outline" className="h-8 rounded-md border-border bg-card px-3 text-xs text-foreground shadow-sm hover:bg-muted" onClick={() => setGoalsOpen(true)}>
             <Target className="h-3.5 w-3.5" />
             Goals
           </Button>
-          <Button variant="outline" className="h-8 rounded-md border-neutral-200 bg-white px-3 text-xs text-neutral-700 shadow-sm hover:bg-neutral-50" onClick={() => setPickerOpen(true)}>
+          <Button variant="outline" className="h-8 rounded-md border-border bg-card px-3 text-xs text-foreground shadow-sm hover:bg-muted" onClick={() => setPickerOpen(true)}>
             <SlidersHorizontal className="h-3.5 w-3.5" />
             Trackers
           </Button>
@@ -405,11 +467,11 @@ export default function Dashboard() {
       </motion.div>
 
       <motion.div {...fadeUp} className="grid grid-cols-1 2xl:grid-cols-[minmax(0,1fr)_256px] gap-3 items-start">
-        <Card className="overflow-hidden py-0 gap-0 rounded-xl min-w-0 border-neutral-200 bg-white shadow-[0_14px_36px_rgba(15,23,42,0.06)]">
+        <Card className="overflow-hidden py-0 gap-0 rounded-xl min-w-0 border-border bg-card shadow-[0_14px_36px_rgba(15,23,42,0.06)]">
           <CardContent className="p-0">
             <div className="overflow-x-auto overscroll-x-contain">
               <div className="w-full" style={{ minWidth: monthGridMinWidth(data.month.days.length) }}>
-                <div className="grid items-stretch border-b border-neutral-200 bg-neutral-50 text-[10px] font-semibold uppercase tracking-wide text-neutral-500" style={{ gridTemplateColumns: monthGridTemplate(data.month.days.length) }}>
+                <div className="grid items-stretch border-b border-border bg-muted text-[10px] font-semibold uppercase tracking-wide text-muted-foreground" style={{ gridTemplateColumns: monthGridTemplate(data.month.days.length) }}>
                   <div className="px-3 md:px-4 py-2 border-r border-white/10 bg-neutral-900 text-white row-span-3 flex items-center justify-center text-center text-sm md:text-base font-bold tracking-tight">My Habits</div>
                   {monthGroups.map((group) => (
                     <div key={group.week} className="h-7 flex items-center justify-center text-center border-r border-white/15 bg-neutral-800 text-white" style={{ gridColumn: `span ${group.days.length}` }}>
@@ -456,6 +518,11 @@ export default function Dashboard() {
       </Dialog>
 
       <GoalsDialog open={goalsOpen} onOpenChange={setGoalsOpen} onSaved={load} />
+      {recapMounted && (
+        <Suspense fallback={null}>
+          <DashboardRecapModal open={recapOpen} onOpenChange={setRecapOpen} />
+        </Suspense>
+      )}
 
       <Dialog open={pickerOpen} onOpenChange={setPickerOpen}>
         <DialogContent className="sm:max-w-[520px]">
@@ -468,13 +535,13 @@ export default function Dashboard() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             {rows.map((row) => (
               <button key={row.id} type="button" onClick={() => toggleVisible(row.id)} className="flex items-center gap-3 rounded-md border border-border px-3 py-2 text-left hover:bg-muted/50 transition-colors">
-                <Checkbox checked={visibleIds.includes(row.id)} onCheckedChange={() => toggleVisible(row.id)} />
+                <Checkbox checked={!hiddenIds.includes(row.id)} onCheckedChange={() => toggleVisible(row.id)} />
                 <span className="text-sm font-medium">{row.label}</span>
               </button>
             ))}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setVisibleIds(DEFAULT_VISIBLE_IDS)}>
+            <Button variant="outline" onClick={() => setHiddenIds([])}>
               Reset
             </Button>
             <Button onClick={() => setPickerOpen(false)}>Done</Button>
@@ -494,6 +561,8 @@ type GoalsResponse = {
   waterTargetMl: number;
   stepsTarget: number;
   workDayMoney: number;
+  sleepMinMinutes: number;
+  sleepMaxMinutes: number;
   monthlyByKind: Record<string, number>;
   editableKinds: { kind: string; label: string; monthly: number | null }[];
 };
@@ -506,10 +575,14 @@ const DAILY_FIELDS: { key: keyof GoalsResponse & string; label: string; suffix: 
   { key: "workDayMoney", label: "Work", suffix: "$ / weekday" },
 ];
 
+const hoursOf = (minutes: number) => String(Math.round((minutes / 60) * 100) / 100);
+
 function GoalsDialog({ open, onOpenChange, onSaved }: { open: boolean; onOpenChange: (b: boolean) => void; onSaved: () => void }) {
   const [goals, setGoals] = useState<GoalsResponse | null>(null);
   const [daily, setDaily] = useState<Record<string, string>>({});
   const [monthly, setMonthly] = useState<Record<string, string>>({});
+  const [sleepMin, setSleepMin] = useState("6");
+  const [sleepMax, setSleepMax] = useState("8");
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -523,6 +596,8 @@ function GoalsDialog({ open, onOpenChange, onSaved }: { open: boolean; onOpenCha
         setDaily(Object.fromEntries(DAILY_FIELDS.map((f) => [f.key, String(r.data[f.key] ?? 0)])));
         // Blank means "every day of the month" rather than zero.
         setMonthly(Object.fromEntries(r.data.editableKinds.map((k) => [k.kind, k.monthly === null ? "" : String(k.monthly)])));
+        setSleepMin(hoursOf(r.data.sleepMinMinutes));
+        setSleepMax(hoursOf(r.data.sleepMaxMinutes));
       } catch (e) {
         toast.error(getApiError(e));
       }
@@ -541,6 +616,13 @@ function GoalsDialog({ open, onOpenChange, onSaved }: { open: boolean; onOpenCha
       if (!Number.isFinite(n) || n < 0) return toast.error(`${f.label} must be zero or more`);
       body[f.key] = n;
     }
+
+    const min = Number(sleepMin);
+    const max = Number(sleepMax);
+    if (!Number.isFinite(min) || !Number.isFinite(max) || min < 0 || max <= 0) return toast.error("The sleep range must be hours");
+    if (min > max) return toast.error("The shortest night cannot be longer than the longest");
+    body.sleepMinMinutes = Math.round(min * 60);
+    body.sleepMaxMinutes = Math.round(max * 60);
 
     const byKind: Record<string, number | null> = {};
     for (const k of goals.editableKinds) {
@@ -606,6 +688,37 @@ function GoalsDialog({ open, onOpenChange, onSaved }: { open: boolean; onOpenCha
             </section>
 
             <section className="border-t border-border pt-4">
+              <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Sleep range</h3>
+              <p className="mb-2.5 text-[11px] text-muted-foreground">A night inside this counts. The old habit spelled it into its own label, where nothing could read it.</p>
+              <div className="flex items-center gap-3">
+                <span className="w-20 shrink-0 text-sm font-medium">Hours</span>
+                <Input
+                  type="number"
+                  inputMode="decimal"
+                  min="0"
+                  step="0.5"
+                  value={sleepMin}
+                  onChange={(e) => setSleepMin(e.target.value)}
+                  onFocus={(e) => e.currentTarget.select()}
+                  aria-label="Shortest night that counts"
+                  className="h-11 flex-1 font-mono tabular-nums"
+                />
+                <span className="shrink-0 text-[11px] text-muted-foreground">to</span>
+                <Input
+                  type="number"
+                  inputMode="decimal"
+                  min="0"
+                  step="0.5"
+                  value={sleepMax}
+                  onChange={(e) => setSleepMax(e.target.value)}
+                  onFocus={(e) => e.currentTarget.select()}
+                  aria-label="Longest night that counts"
+                  className="h-11 flex-1 font-mono tabular-nums"
+                />
+              </div>
+            </section>
+
+            <section className="border-t border-border pt-4">
               <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Days per month</h3>
               <p className="mb-2.5 text-[11px] text-muted-foreground">How many days this month you mean to do it. Leave blank for every day.</p>
               <div className="space-y-2">
@@ -646,10 +759,10 @@ function GoalsDialog({ open, onOpenChange, onSaved }: { open: boolean; onOpenCha
 
 function ChartPanel({ title, icon: Icon, children }: { title: string; icon: React.ElementType; children: React.ReactNode }) {
   return (
-    <Card className="py-0 rounded-xl h-full border-neutral-200 bg-white shadow-[0_14px_36px_rgba(15,23,42,0.06)]">
+    <Card className="py-0 rounded-xl h-full border-border bg-card shadow-[0_14px_36px_rgba(15,23,42,0.06)]">
       <CardContent className="p-2.5 h-full">
-        <div className="flex items-center gap-1.5 text-xs font-semibold mb-2 text-neutral-800">
-          <span className="flex h-5 w-5 items-center justify-center rounded-md bg-neutral-100 text-neutral-700">
+        <div className="flex items-center gap-1.5 text-xs font-semibold mb-2 text-foreground">
+          <span className="flex h-5 w-5 items-center justify-center rounded-md bg-muted text-foreground">
             <Icon className="h-3.5 w-3.5" />
           </span>
           <span>{title}</span>
@@ -660,18 +773,36 @@ function ChartPanel({ title, icon: Icon, children }: { title: string; icon: Reac
   );
 }
 
-function DailyProgressChart({ items }: { items: { date: string; day: number; percent: number }[] }) {
-  return <PercentBarChart items={items.map((item) => ({ key: item.date, label: String(item.day), percent: item.percent, title: `${item.day}: ${item.percent}%` }))} barWidth={8} plotHeight={68} palette={["#d4d4d4", "#18181b"]} />;
+function DailyProgressChart({ items }: { items: DashboardResponse["metrics"]["dayProgress"] }) {
+  return (
+    <PercentBarChart
+      barWidth={8}
+      plotHeight={68}
+      items={items.map((item) => ({
+        key: item.date,
+        label: String(item.day),
+        percent: item.percent,
+        // A day at 100% off three judged habits is not the same as one off thirteen,
+        // so the tooltip says which it was.
+        title: item.future
+          ? `${item.day}: still to come`
+          : item.percent === null
+            ? `${item.day}: nothing to judge${item.skipped ? `, ${item.skipped} skipped` : ""}`
+            : `${item.day}: ${item.done} of ${item.judged} done${item.skipped ? `, ${item.skipped} skipped` : ""}`,
+      }))}
+    />
+  );
 }
 
-function PercentBarChart({ items, barWidth, plotHeight }: { items: { key: string; label: string; percent: number; title: string }[]; barWidth: number; plotHeight: number; palette: string[] }) {
+/** A null percent is a day with nothing to judge; it draws a placeholder, not a bar. */
+function PercentBarChart({ items, barWidth, plotHeight }: { items: { key: string; label: string; percent: number | null; title: string }[]; barWidth: number; plotHeight: number }) {
   const ticks = [100, 75, 50, 25, 0];
   const plotWidth = 620;
   const step = items.length > 0 ? plotWidth / items.length : plotWidth;
   const svgBarWidth = Math.min(barWidth * 2, step * 0.55);
   return (
     <div className="grid grid-cols-[34px_1fr] gap-2">
-      <div className="flex flex-col justify-between text-[9px] text-neutral-500 tabular-nums pt-0.5" style={{ height: plotHeight }}>
+      <div className="flex flex-col justify-between text-[9px] text-muted-foreground tabular-nums pt-0.5" style={{ height: plotHeight }}>
         {ticks.map((tick) => (
           <span key={tick}>{tick}%</span>
         ))}
@@ -682,13 +813,20 @@ function PercentBarChart({ items, barWidth, plotHeight }: { items: { key: string
             <line key={tick} x1="0" x2={plotWidth} y1={plotHeight - (tick / 100) * plotHeight} y2={plotHeight - (tick / 100) * plotHeight} stroke="#e5e5e5" strokeWidth="1" vectorEffect="non-scaling-stroke" />
           ))}
           {items.map((item, index) => {
-            const clamped = Math.max(0, Math.min(100, item.percent));
-            const heightPx = Math.round((clamped / 100) * plotHeight);
             const x = step * index + step / 2 - svgBarWidth / 2;
-            const y = plotHeight - heightPx;
-            const fill = item.percent > 0 ? "#18181b" : "#e5e5e5";
+            if (item.percent === null) {
+              // A flat stub sitting on the baseline, so an unscored day reads as absent
+              // rather than as a perfect one.
+              return (
+                <rect key={item.key} x={x} y={plotHeight - 2} width={svgBarWidth} height={2} rx="1" ry="1" fill="var(--color-border)">
+                  <title>{item.title}</title>
+                </rect>
+              );
+            }
+            const clamped = Math.max(0, Math.min(100, item.percent));
+            const heightPx = Math.max(2, Math.round((clamped / 100) * plotHeight));
             return (
-              <rect key={item.key} x={x} y={y} width={svgBarWidth} height={heightPx} rx="3" ry="3" fill={fill}>
+              <rect key={item.key} x={x} y={plotHeight - heightPx} width={svgBarWidth} height={heightPx} rx="3" ry="3" fill={item.percent > 0 ? "var(--color-foreground)" : "var(--color-muted)"}>
                 <title>{item.title}</title>
               </rect>
             );
@@ -696,7 +834,7 @@ function PercentBarChart({ items, barWidth, plotHeight }: { items: { key: string
         </svg>
         <div className="absolute left-0 right-0 bottom-0 flex gap-1.5">
           {items.map((item) => (
-            <span key={item.key} className="flex-1 min-w-2 text-center text-[9px] tabular-nums text-neutral-500">
+            <span key={item.key} className="flex-1 min-w-2 text-center text-[9px] tabular-nums text-muted-foreground">
               {item.label}
             </span>
           ))}
@@ -706,19 +844,23 @@ function PercentBarChart({ items, barWidth, plotHeight }: { items: { key: string
   );
 }
 
-function WeekStrip({ days, progress }: { days: Day[]; progress: { date: string; percent: number }[] }) {
+function WeekStrip({ days, progress }: { days: Day[]; progress: DashboardResponse["metrics"]["dayProgress"] }) {
+  // Averaged over the days that were actually judged. Treating an unscored day as a
+  // zero dragged a week down for days that had not happened yet.
   const byWeek = days.reduce<Record<number, { total: number; count: number }>>((acc, day) => {
     const found = progress.find((item) => item.date === day.iso);
     acc[day.week] = acc[day.week] ?? { total: 0, count: 0 };
-    acc[day.week].total += found?.percent ?? 0;
-    acc[day.week].count += 1;
+    if (found && found.percent !== null) {
+      acc[day.week].total += found.percent;
+      acc[day.week].count += 1;
+    }
     return acc;
   }, {});
   const items = Object.entries(byWeek).map(([week, value]) => {
-    const pct = value.count ? Math.round(value.total / value.count) : 0;
-    return { key: week, label: `W${week}`, percent: pct, title: `Week ${week}: ${pct}%` };
+    const pct = value.count ? Math.round(value.total / value.count) : null;
+    return { key: week, label: `W${week}`, percent: pct, title: pct === null ? `Week ${week}: nothing to judge yet` : `Week ${week}: ${pct}% over ${value.count} day${value.count === 1 ? "" : "s"}` };
   });
-  return <PercentBarChart items={items} barWidth={16} plotHeight={82} palette={["#d4d4d4", "#18181b"]} />;
+  return <PercentBarChart items={items} barWidth={16} plotHeight={82} />;
 }
 
 function ProgressDonut({ percent, completed, total }: { percent: number; completed: number; total: number }) {
@@ -728,18 +870,18 @@ function ProgressDonut({ percent, completed, total }: { percent: number; complet
   const circumference = 2 * Math.PI * radius;
   const dash = circumference * (Math.min(percent, 100) / 100);
   return (
-    <Card className="py-0 rounded-xl h-full border-neutral-200 bg-white shadow-[0_14px_36px_rgba(15,23,42,0.06)]">
+    <Card className="py-0 rounded-xl h-full border-border bg-card shadow-[0_14px_36px_rgba(15,23,42,0.06)]">
       <CardContent className="p-2.5 h-full">
-        <h3 className="text-xs font-semibold text-neutral-800">Overall Stats</h3>
+        <h3 className="text-xs font-semibold text-foreground">Overall Stats</h3>
         <div className="mt-1.5 flex items-center gap-3">
           <div className="relative shrink-0" style={{ width: size, height: size }}>
             <svg width={size} height={size} className="-rotate-90">
               <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke="#e5e5e5" strokeWidth={stroke} />
               <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke="#18181b" strokeWidth={stroke} strokeDasharray={`${dash} ${circumference}`} strokeLinecap="round" />
             </svg>
-            <div className="absolute inset-0 flex items-center justify-center text-lg font-semibold tracking-tight tabular-nums text-neutral-900">{percent}%</div>
+            <div className="absolute inset-0 flex items-center justify-center text-lg font-semibold tracking-tight tabular-nums text-foreground">{percent}%</div>
           </div>
-          <div className="space-y-2 text-xs min-w-0 flex-1 text-neutral-700">
+          <div className="space-y-2 text-xs min-w-0 flex-1 text-foreground">
             <SummaryLine label="Completed" value={`${completed}/${total}`} />
             <SummaryLine label="Left" value={`${Math.max(total - completed, 0)}`} />
           </div>
@@ -756,28 +898,31 @@ function ProgressDonut({ percent, completed, total }: { percent: number; complet
  */
 function KitchenRing({ kitchen }: { kitchen?: DashboardResponse["kitchen"] }) {
   const tracked = kitchen?.tracked ?? 0;
-  const need = (kitchen?.out ?? 0) + (kitchen?.low ?? 0);
-  const items = kitchen?.items ?? [];
+  // Everything you would put in a basket: low stock plus anything written on the
+  // list by hand, which is the only place things without macros can live.
+  const need = kitchen?.toBuy ?? 0;
+  const items = (kitchen?.items ?? []).filter((i) => !i.done);
+  const denom = tracked + (kitchen?.manual ?? 0);
   const size = 88;
   const stroke = 10;
   const radius = (size - stroke) / 2;
   const circumference = 2 * Math.PI * radius;
-  const dash = circumference * (tracked > 0 ? Math.min(need / tracked, 1) : 0);
+  const dash = circumference * (denom > 0 ? Math.min(need / denom, 1) : 0);
 
   return (
-    <Card className="py-0 rounded-xl h-full border-neutral-200 bg-white shadow-[0_14px_36px_rgba(15,23,42,0.06)]">
+    <Card className="py-0 rounded-xl h-full border-border bg-card shadow-[0_14px_36px_rgba(15,23,42,0.06)]">
       <CardContent className="p-2.5 h-full">
         <div className="flex items-center justify-between gap-2">
-          <h3 className="text-xs font-semibold text-neutral-800">Restock</h3>
-          <Link to="/kitchen" className="text-[10px] font-semibold uppercase tracking-wide text-neutral-500 hover:text-neutral-900">
+          <h3 className="text-xs font-semibold text-foreground">Restock</h3>
+          <Link to="/kitchen" className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground">
             Kitchen
           </Link>
         </div>
 
-        {tracked === 0 ? (
-          <p className="mt-3 text-[11px] leading-relaxed text-neutral-500">
+        {denom === 0 ? (
+          <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground">
             Nothing tracked yet.{" "}
-            <Link to="/kitchen" className="underline underline-offset-2 hover:text-neutral-900">
+            <Link to="/kitchen" className="underline underline-offset-2 hover:text-foreground">
               Add the foods you keep at home
             </Link>{" "}
             to get restock reminders here.
@@ -790,31 +935,30 @@ function KitchenRing({ kitchen }: { kitchen?: DashboardResponse["kitchen"] }) {
                 <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke="#18181b" strokeWidth={stroke} strokeDasharray={`${dash} ${circumference}`} strokeLinecap="round" />
               </svg>
               <div className="absolute inset-0 flex flex-col items-center justify-center leading-none">
-                <span className="text-lg font-semibold tabular-nums tracking-tight text-neutral-900">{need}</span>
-                <span className="mt-0.5 text-[9px] font-semibold uppercase tracking-wide text-neutral-500">to buy</span>
+                <span className="text-lg font-semibold tabular-nums tracking-tight text-foreground">{need}</span>
+                <span className="mt-0.5 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">to buy</span>
               </div>
             </div>
 
             <div className="min-w-0 flex-1">
               {need === 0 ? (
-                <p className="text-[11px] text-neutral-500">All {tracked} stocked.</p>
+                <p className="text-[11px] text-muted-foreground">All {tracked} stocked.</p>
               ) : (
                 <>
                   <div className="flex flex-wrap gap-1">
                     {items.slice(0, 5).map((i) => (
                       <span
                         key={i.id}
-                        title={`${i.count} left · restock at ${i.lowThreshold}`}
+                        title={i.detail || "on your to-buy list"}
                         className={`inline-flex max-w-full items-center gap-1 rounded-full border px-1.5 py-px text-[10px] font-medium ${
-                          i.status === "out" ? "border-neutral-900 bg-neutral-900 text-white" : "border-neutral-300 text-neutral-700"
+                          i.status === "out" ? "border-foreground bg-foreground text-background" : "border-border-strong text-foreground"
                         }`}
                       >
-                        <span className="truncate">{i.name}</span>
-                        <span className="tabular-nums opacity-70">{i.count}</span>
+                        <span className="truncate">{i.label}</span>
                       </span>
                     ))}
                   </div>
-                  {items.length > 5 && <div className="mt-1 text-[10px] text-neutral-500">+{need - 5} more</div>}
+                  {items.length > 5 && <div className="mt-1 text-[10px] text-muted-foreground">+{need - 5} more</div>}
                 </>
               )}
             </div>
@@ -843,9 +987,9 @@ function TrackerRowView({
   const weekStartDates = new Set(weekGroups.map((group) => group.days[0]?.iso).filter(Boolean));
   const tone = trackerTone();
   return (
-    <div className="grid items-center border-b border-neutral-200/70 last:border-b-0 transition-colors hover:brightness-[0.99]" style={{ gridTemplateColumns: monthGridTemplate(days.length) }} title={row.description}>
+    <div className="grid items-center border-b border-border/70 last:border-b-0 transition-colors hover:brightness-[0.99]" style={{ gridTemplateColumns: monthGridTemplate(days.length) }} title={row.description}>
       <div className="h-full min-h-9 px-3 py-1.5 border-r border-white/10 text-white flex items-center gap-2 min-w-0" style={{ backgroundColor: ROW_CHROME.base }}>
-        <div className="h-6 w-6 rounded-[4px] border border-white/45 bg-white/15 flex items-center justify-center shrink-0 text-white shadow-inner">
+        <div className="h-6 w-6 rounded-[4px] border border-white/45 bg-card/15 flex items-center justify-center shrink-0 text-white shadow-inner">
           <Icon className="h-3.5 w-3.5" strokeWidth={2.2} />
         </div>
         <span className="font-semibold text-[12px] truncate">{row.label}</span>
@@ -855,7 +999,7 @@ function TrackerRowView({
         return (
           <div
             key={day.iso}
-            className={`h-full min-h-9 flex items-center justify-center border-r border-neutral-200/70 ${index === 0 || weekStartDates.has(day.iso) ? "border-l border-l-neutral-300" : ""}`}
+            className={`h-full min-h-9 flex items-center justify-center border-r border-border/70 ${index === 0 || weekStartDates.has(day.iso) ? "border-l border-l-border-strong" : ""}`}
             style={{ backgroundColor: day.weekend ? tone.faint : "rgba(255,255,255,0.72)" }}
           >
             {cell ? <TrackerCell row={row} cell={cell} onSetState={onSetState} onAmountClick={onAmountClick} /> : null}
@@ -951,11 +1095,14 @@ function TrackerCell({
   );
 }
 
+/** Done, left and progress, one line per row. */
+const ANALYSIS_COLUMNS = "64px 60px minmax(110px, 132px)";
+
 function AnalysisBlock({ rows }: { rows: TrackerRow[] }) {
   return (
-    <Card className="overflow-hidden py-0 gap-0 rounded-xl border-neutral-200 bg-white shadow-[0_14px_36px_rgba(15,23,42,0.06)]">
+    <Card className="overflow-hidden py-0 gap-0 rounded-xl border-border bg-card shadow-[0_14px_36px_rgba(15,23,42,0.06)]">
       <CardContent className="p-0">
-        <div className="grid border-b border-white/10 bg-neutral-900 text-white text-[10px] font-semibold uppercase tracking-wide" style={{ gridTemplateColumns: "58px 58px 140px" }}>
+        <div className="grid border-b border-white/10 bg-neutral-900 text-white text-[10px] font-semibold uppercase tracking-wide" style={{ gridTemplateColumns: ANALYSIS_COLUMNS }}>
           <div className="h-7 flex items-center justify-center border-r border-white/20" style={{ gridColumn: "span 3" }}>
             Analysis
           </div>
@@ -968,14 +1115,14 @@ function AnalysisBlock({ rows }: { rows: TrackerRow[] }) {
         {rows.map((row) => {
           const tone = trackerTone();
           return (
-            <div key={row.id} className="grid border-b border-neutral-200/70 last:border-b-0" style={{ gridTemplateColumns: "58px 58px 140px" }}>
-              <div className="min-h-9 px-2 py-1.5 border-r border-neutral-200/70 flex items-center justify-end text-[11px] tabular-nums font-semibold text-neutral-900" style={{ backgroundColor: tone.faint }}>
+            <div key={row.id} className="grid border-b border-border/70 last:border-b-0" style={{ gridTemplateColumns: ANALYSIS_COLUMNS }}>
+              <div className="min-h-9 px-2 py-1.5 border-r border-border/70 flex items-center justify-end text-[11px] tabular-nums font-semibold text-foreground" style={{ backgroundColor: tone.faint }}>
                 {formatAnalysisValue(row, row.actual)}
               </div>
-              <div className="min-h-9 px-2 py-1.5 border-r border-neutral-200/70 bg-white/80 flex items-center justify-end text-[11px] tabular-nums text-neutral-500">
+              <div className="min-h-9 px-2 py-1.5 border-r border-border/70 bg-card/80 flex items-center justify-end text-[11px] tabular-nums text-muted-foreground">
                 {formatAnalysisValue(row, row.left)}
               </div>
-              <div className="min-h-9 px-2 py-1.5 border-r border-neutral-200/70 bg-white/80 flex items-center gap-2">
+              <div className="min-h-9 px-2 py-1.5 border-r border-border/70 bg-card/80 flex items-center gap-2">
                 <ProgressBar percent={row.percent} color={tone.base} />
                 <span className="w-8 text-right text-[11px] tabular-nums font-semibold" style={{ color: tone.dark }}>
                   {row.percent}%
@@ -991,7 +1138,7 @@ function AnalysisBlock({ rows }: { rows: TrackerRow[] }) {
 
 function ProgressBar({ percent, color }: { percent: number; color: string }) {
   return (
-    <div className="h-1.5 min-w-0 flex-1 rounded-full overflow-hidden bg-neutral-100">
+    <div className="h-1.5 min-w-0 flex-1 rounded-full overflow-hidden bg-muted">
       <div className="h-full rounded-full" style={{ width: `${Math.min(percent, 100)}%`, backgroundColor: color }} />
     </div>
   );

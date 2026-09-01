@@ -6,6 +6,7 @@ import { Toaster } from "./components/ui/sonner";
 import { AppSidebar } from "./components/AppSidebar";
 import { currentPageTitle } from "./lib/navigation";
 import { PrivateRoute } from "./components/PrivateRoute";
+import { InstallHint, OfflinePill } from "./components/ConnectionStatus";
 import { Menu } from "lucide-react";
 
 // Route-level code splitting: each page becomes its own chunk, so opening the app
@@ -19,6 +20,9 @@ const Today = lazy(() => import("./pages/Today"));
 const Calories = lazy(() => import("./pages/Calories"));
 const Kitchen = lazy(() => import("./pages/Kitchen"));
 const Habits = lazy(() => import("./pages/Habits"));
+const Goals = lazy(() => import("./pages/Goals"));
+const Journal = lazy(() => import("./pages/Journal"));
+const GoalPage = lazy(() => import("./pages/GoalPage"));
 const Workout = lazy(() => import("./pages/Workout"));
 
 function PageFallback() {
@@ -49,6 +53,7 @@ function MobileTopBar() {
         <Menu className="h-5 w-5" aria-hidden />
       </button>
       <span className="truncate text-sm font-semibold tracking-tight">{currentPageTitle(location.pathname)}</span>
+      <OfflinePill className="ml-auto shrink-0" />
     </header>
   );
 }
@@ -75,6 +80,7 @@ function AppContent() {
         <div
           className={`flex-1 overflow-y-auto overscroll-contain p-3 w-full min-w-0 pb-[max(0.75rem,env(safe-area-inset-bottom))] md:pb-[max(1.5rem,env(safe-area-inset-bottom))] ${isDashboard ? "md:py-6 md:pr-6 md:pl-0.5" : "md:p-6 flex justify-center items-start"}`}
         >
+          <InstallHint />
           <Suspense fallback={<PageFallback />}>
             <Routes>
               <Route path="/" element={<Dashboard />} />
@@ -96,7 +102,10 @@ function AppContent() {
               />
               <Route path="/tasks" element={<Tasks />} />
               <Route path="/habits" element={<Habits />} />
+              <Route path="/goals" element={<Goals />} />
+              <Route path="/goals/:id" element={<GoalPage />} />
               <Route path="/today" element={<Today />} />
+              <Route path="/journal" element={<Journal />} />
               <Route path="/calories" element={<Calories />} />
               <Route path="/kitchen" element={<Kitchen />} />
               {/* Old bookmarks keep working. */}

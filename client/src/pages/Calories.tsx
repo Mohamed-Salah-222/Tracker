@@ -11,15 +11,20 @@ import { Skeleton } from "../components/ui/skeleton";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "../components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { toast } from "sonner";
-import { BarChart3, Cake, ChevronLeft, ChevronRight, Droplet, GripVertical, Minus, Plus, Search, ShoppingBasket, Target, Trash2 } from "lucide-react";
+import { BarChart3, Cake, ChefHat, ChevronLeft, ChevronRight, Copy as CopyIcon, Droplet, GripVertical, Minus, Plus, Scale, Search, ShoppingBasket, Target, Trash2 } from "lucide-react";
+import { useRecipes, type Recipe } from "../lib/recipes";
 // Recharts is ~320 kB and only the recap needs it. Loading it lazily keeps it off
 // the Calories page itself, which is the screen used several times a day.
 const importRecap = () => import("../components/CalorieRecapModal");
+// Weighing in is occasional, so the chart and the history list stay out of the
+// bundle until the button is pressed.
+const BodyModal = lazy(() => import("../components/BodyModal").then((m) => ({ default: m.BodyModal })));
 const CalorieRecapModal = lazy(() => importRecap().then((m) => ({ default: m.CalorieRecapModal })));
 import {
   MEALS,
   MEAL_LABELS,
   dayLabel,
+  dayShortLabel,
   entryTotals,
   foodHeadlineCalories,
   foodHeadlineUnit,
@@ -45,6 +50,8 @@ type WaterRow = { _id: string; date: string; ml: number };
 type CheatDay = { _id: string; date: string; note?: string } | null;
 type Goal = {
   caloriesTarget: number;
+  /** Bottom of the calorie band. 0 means no floor. */
+  caloriesMin: number;
   proteinTarget: number;
   carbsTarget: number;
   fatTarget: number;
@@ -66,6 +73,46 @@ const stagger = (i: number) => ({
 // =====================================================================
 // MAIN
 // =====================================================================
+type LoggedEntry = Entry & { kitchenShortfall?: number };
+
+type RecipeLogResult = { logged: number; meal: string; shortfalls: { name: string; amount: number; unit: "g" | "unit" }[]; skipped: number };
+
+/** The kitchen had less than you just logged, so its count was already wrong. */
+function warnShortfall(data: LoggedEntry, name: string, unit: "g" | "unit") {
+  const short = data.kitchenShortfall ?? 0;
+  if (short <= 0) return;
+  const amount = unit === "g" ? `${Math.round(short)}g` : String(short);
+  toast(`Logged, but the kitchen was ${amount} short on ${name}. Its count is now zero.`);
+}
+
+/** Saved recipes, tapped straight into the meal they usually belong to. */
+function RecipeStrip({ recipes, onLog }: { recipes: Recipe[]; onLog: (r: Recipe) => void }) {
+  return (
+    <Card>
+      <CardContent className="px-4 py-0">
+        <div className="flex items-center gap-2">
+          <ChefHat className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Recipes</span>
+        </div>
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {recipes.map((r) => (
+            <button
+              key={r._id}
+              type="button"
+              onClick={() => onLog(r)}
+              title={`${r.items.map((i) => i.name).join(", ")} into ${MEAL_LABELS[r.defaultMeal as Meal]}`}
+              className="inline-flex items-center gap-1.5 rounded-full border border-border-strong px-2.5 py-1 text-[11px] font-medium transition-colors hover:border-foreground hover:bg-muted"
+            >
+              {r.name}
+              <span className="font-mono tabular-nums text-muted-foreground">{r.totals.calories}</span>
+            </button>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function Calories() {
   const [date, setDate] = useState(todayISO);
   const [foods, setFoods] = useState<Food[]>([]);
@@ -83,7 +130,11 @@ export default function Calories() {
   const [recapMounted, setRecapMounted] = useState(false);
   const [goalOpen, setGoalOpen] = useState(false);
   const [shelfOpen, setShelfOpen] = useState(false);
+  const [copyOpen, setCopyOpen] = useState(false);
+  const [weightOpen, setWeightOpen] = useState(false);
+  const [weightMounted, setWeightMounted] = useState(false);
   const [foodSearch, setFoodSearch] = useState("");
+  const { recipes } = useRecipes();
 
   const entriesRef = useRef<Entry[]>([]);
   const writeEntries = useCallback((next: Entry[]) => {
@@ -215,9 +266,24 @@ export default function Calories() {
     }
     try {
       const body = food.entryMode === "perUnit" ? { date, foodId: food._id, meal, units: amount } : { date, foodId: food._id, meal, grams: amount };
-      const r = await api.post<Entry>("/calories", body);
+      const r = await api.post<LoggedEntry>("/calories", body);
+      warnShortfall(r.data, food.name, food.entryMode === "perUnit" ? "unit" : "g");
       writeEntries([...entriesRef.current, r.data]);
       void loadRecent();
+    } catch (e) {
+      toast.error(getApiError(e));
+    }
+  };
+
+  const logRecipe = async (recipe: Recipe) => {
+    try {
+      const r = await api.post<RecipeLogResult>(`/recipes/${recipe._id}/log`, { date, meal: recipe.defaultMeal });
+      await loadDay();
+      void loadRecent();
+      const parts = [`${recipe.name} added to ${MEAL_LABELS[recipe.defaultMeal as Meal]}`];
+      if (r.data.skipped > 0) parts.push(`${r.data.skipped} food no longer exists`);
+      for (const short of r.data.shortfalls) parts.push(`kitchen was ${short.unit === "g" ? `${Math.round(short.amount)}g` : short.amount} short on ${short.name}`);
+      toast(parts.join(". "));
     } catch (e) {
       toast.error(getApiError(e));
     }
@@ -239,6 +305,23 @@ export default function Calories() {
     writeEntries(before.filter((x) => x._id !== entry._id));
     try {
       await api.delete(`/calories/${entry._id}`);
+      // The row is only soft-deleted, so offering it back costs nothing and a
+      // mis-tap on the bin stops being permanent.
+      toast(`${entry.foodNameSnapshot} removed`, {
+        action: {
+          label: "Undo",
+          onClick: () => {
+            void (async () => {
+              try {
+                await api.post(`/calories/${entry._id}/restore`);
+                await loadDay();
+              } catch (e) {
+                toast.error(getApiError(e));
+              }
+            })();
+          },
+        },
+      });
     } catch (e) {
       toast.error(getApiError(e));
       writeEntries(before);
@@ -302,6 +385,22 @@ export default function Calories() {
           <Cake className="h-3.5 w-3.5 mr-1.5" aria-hidden />
           {cheat ? "Cheat day on" : "Cheat day"}
         </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-9"
+          onClick={() => {
+            setWeightMounted(true);
+            setWeightOpen(true);
+          }}
+        >
+          <Scale className="h-3.5 w-3.5 mr-1.5" aria-hidden />
+          Body
+        </Button>
+        <Button variant="outline" size="sm" className="h-9" onClick={() => setCopyOpen(true)}>
+          <CopyIcon className="h-3.5 w-3.5 mr-1.5" aria-hidden />
+          Copy a day
+        </Button>
         <Button variant="outline" size="sm" className="h-9" onClick={() => setGoalOpen(true)}>
           <Target className="h-3.5 w-3.5 mr-1.5" aria-hidden />
           Targets
@@ -334,6 +433,13 @@ export default function Calories() {
             <motion.section {...stagger(2)} aria-label="Day summary">
               <DaySummary totals={totals} goal={goal} cheat={!!cheat} />
             </motion.section>
+
+            {/* ===== Recipes ===== */}
+            {recipes.length > 0 && (
+              <motion.section {...stagger(3)} aria-label="Recipes">
+                <RecipeStrip recipes={recipes} onLog={logRecipe} />
+              </motion.section>
+            )}
 
             {/* ===== Water ===== */}
             <motion.section {...stagger(3)} aria-label="Water">
@@ -380,6 +486,12 @@ export default function Calories() {
 
       <FoodPickerDialog open={pickerOpen} onOpenChange={setPickerOpen} foods={foods} recentIds={recentIds} meal={pendingMeal} date={date} initialFood={pendingFood} onLogged={(entry) => writeEntries([...entriesRef.current, entry])} onRecent={loadRecent} />
       <GoalDialog open={goalOpen} onOpenChange={setGoalOpen} goal={goal} onSaved={loadGoal} />
+      {weightMounted && (
+        <Suspense fallback={null}>
+          <BodyModal open={weightOpen} onOpenChange={setWeightOpen} />
+        </Suspense>
+      )}
+      {copyOpen && <CopyDayDialog to={date} onClose={() => setCopyOpen(false)} onCopied={() => { setCopyOpen(false); void loadDay(); }} />}
       {recapMounted && (
         <Suspense fallback={null}>
           <CalorieRecapModal open={recapOpen} onOpenChange={setRecapOpen} />
@@ -427,6 +539,7 @@ function DaySummary({ totals, goal, cheat }: { totals: Macros; goal: Goal; cheat
             </div>
             <div className="mt-0.5 font-mono text-[11px] tabular-nums text-muted-foreground">
               {cal} of {goal.caloriesTarget} eaten
+              {goal.caloriesMin > 0 && cal > 0 && cal < goal.caloriesMin && <span className="ml-1.5">· {goal.caloriesMin - cal} under the floor</span>}
             </div>
           </div>
 
@@ -624,7 +737,126 @@ function MealCard({
 // =====================================================================
 // EntryRow: adjust in place instead of opening a dialog for a number
 // =====================================================================
+/**
+ * Bring a previous day's food onto this one. The same breakfast four mornings a week
+ * meant typing it out four times.
+ */
+function CopyDayDialog({ to, onClose, onCopied }: { to: string; onClose: () => void; onCopied: () => void }) {
+  const [from, setFrom] = useState(shiftDay(to, -1));
+  const [meal, setMeal] = useState<"all" | Meal>("all");
+  const [busy, setBusy] = useState(false);
+
+  const run = async () => {
+    setBusy(true);
+    try {
+      const body: { from: string; to: string; meal?: Meal } = { from, to };
+      if (meal !== "all") body.meal = meal;
+      const r = await api.post<{ copied: number; skipped: number; shortfalls: { name: string; amount: number; unit: "g" | "unit" }[] }>("/calories/copy", body);
+      const bits = [`${r.data.copied} ${r.data.copied === 1 ? "entry" : "entries"} copied`];
+      if (r.data.skipped > 0) bits.push(`${r.data.skipped} skipped, the food is gone`);
+      for (const sf of r.data.shortfalls) bits.push(`kitchen was ${sf.unit === "g" ? `${Math.round(sf.amount)}g` : sf.amount} short on ${sf.name}`);
+      toast(bits.join(". "));
+      onCopied();
+    } catch (e) {
+      toast.error(getApiError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="!w-[calc(100vw-1.5rem)] !max-w-[400px]">
+        <DialogHeader>
+          <DialogTitle>Copy onto {dayShortLabel(to)}</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div className="space-y-1.5">
+            <Label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Copy from</Label>
+            <Input type="date" value={from} max={shiftDay(to, -1)} onChange={(e) => setFrom(e.target.value)} className="h-11 font-mono tabular-nums" />
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">What</Label>
+            <Select value={meal} onValueChange={(v) => setMeal((v ?? "all") as "all" | Meal)}>
+              <SelectTrigger className="w-full !h-11 capitalize">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">The whole day</SelectItem>
+                {MEALS.map((m) => (
+                  <SelectItem key={m} value={m}>
+                    {MEAL_LABELS[m]} only
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <p className="text-[11px] text-muted-foreground">
+            Each food is logged again at today's macros and comes off your kitchen shelf, exactly as if you had added it by hand.
+          </p>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" size="default" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button variant="default" size="default" onClick={run} disabled={busy || !from}>
+            Copy
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** Type the amount. The stepper alone could never reach 60g from 150g. */
+function AmountDialog({ entry, onClose, onSave }: { entry: Entry; onClose: () => void; onSave: (amount: number) => void }) {
+  const isUnit = entry.entryMode === "perUnit";
+  const current = isUnit ? (entry.units ?? 0) : (entry.grams ?? 0);
+  const [value, setValue] = useState(String(round1(current)));
+  const parsed = Number(value.trim());
+  const valid = Number.isFinite(parsed) && parsed > 0;
+  const per = isUnit ? entry.caloriesPerUnitSnapshot : entry.caloriesPerGramSnapshot;
+  const unitWord = isUnit ? entry.unitLabelSnapshot || "unit" : "grams";
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="!w-[calc(100vw-1.5rem)] !max-w-[360px]">
+        <DialogHeader>
+          <DialogTitle>{entry.foodNameSnapshot}</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <Input
+              type="number"
+              inputMode="decimal"
+              min="0"
+              step={isUnit ? "1" : "5"}
+              value={value}
+              autoFocus
+              onChange={(e) => setValue(e.target.value)}
+              onFocus={(e) => e.currentTarget.select()}
+              onKeyDown={(e) => e.key === "Enter" && valid && onSave(parsed)}
+              className="h-11 font-mono tabular-nums"
+            />
+            <span className="shrink-0 text-sm font-medium text-muted-foreground">{unitWord}</span>
+          </div>
+          <p className="font-mono text-[11px] tabular-nums text-muted-foreground">{valid ? `${round(parsed * per)} cal` : "Enter an amount greater than 0"}</p>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" size="default" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button variant="default" size="default" onClick={() => valid && onSave(parsed)} disabled={!valid}>
+            Save
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function EntryRow({ entry, onEdit, onDelete }: { entry: Entry; onEdit: (entry: Entry, patch: { grams?: number; units?: number }) => void; onDelete: (entry: Entry) => void }) {
+  const [amountOpen, setAmountOpen] = useState(false);
   const isUnit = entry.entryMode === "perUnit";
   const amount = isUnit ? (entry.units ?? 0) : (entry.grams ?? 0);
   const step = isUnit ? 1 : 25;
@@ -632,22 +864,35 @@ function EntryRow({ entry, onEdit, onDelete }: { entry: Entry; onEdit: (entry: E
   const label = isUnit ? `${round1(amount)} ${entry.unitLabelSnapshot || "unit"}${amount === 1 ? "" : "s"}` : `${round(amount)}g`;
 
   const bump = (delta: number) => {
-    const next = round1(Math.max(step, amount + delta));
+    // Floor at the smallest sensible amount rather than at the step, which used to
+    // strand anything below 25g with no way down.
+    const next = round1(Math.max(isUnit ? 1 : 5, amount + delta));
     if (next === amount) return;
     onEdit(entry, isUnit ? { units: next } : { grams: next });
   };
 
   return (
     <motion.div layout="position" initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, x: -8 }} transition={{ duration: 0.18 }} className="group flex items-center gap-1.5 rounded-lg px-1.5 py-1 transition-colors hover:bg-muted/50">
-      <div className="min-w-0 flex-1">
+      <button type="button" onClick={() => setAmountOpen(true)} className="min-w-0 flex-1 rounded-md px-1 py-0.5 text-left transition-colors hover:bg-muted/60" aria-label={`Change how much ${entry.foodNameSnapshot}`}>
         <div className="truncate text-sm font-medium">{entry.foodNameSnapshot}</div>
         <div className="font-mono text-[11px] tabular-nums text-muted-foreground">
-          {label} · {round(t.cal)} cal · P {round1(t.p)} C {round1(t.c)} F {round1(t.f)}
+          <span className="underline decoration-dotted underline-offset-2">{label}</span> · {round(t.cal)} cal · P {round1(t.p)} C {round1(t.c)} F {round1(t.f)}
         </div>
-      </div>
+      </button>
+
+      {amountOpen && (
+        <AmountDialog
+          entry={entry}
+          onClose={() => setAmountOpen(false)}
+          onSave={(amount) => {
+            setAmountOpen(false);
+            onEdit(entry, isUnit ? { units: amount } : { grams: amount });
+          }}
+        />
+      )}
 
       <div className="flex shrink-0 items-center gap-0.5 opacity-70 transition-opacity focus-within:opacity-100 group-hover:opacity-100 md:opacity-0">
-        <button type="button" onClick={() => bump(-step)} disabled={amount <= step} aria-label={`Less ${entry.foodNameSnapshot}`} className="grid h-9 w-9 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-30">
+        <button type="button" onClick={() => bump(-step)} disabled={amount <= (isUnit ? 1 : 5)} aria-label={`Less ${entry.foodNameSnapshot}`} className="grid h-9 w-9 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-30">
           <Minus className="h-3.5 w-3.5" aria-hidden />
         </button>
         <button type="button" onClick={() => bump(step)} aria-label={`More ${entry.foodNameSnapshot}`} className="grid h-9 w-9 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
@@ -828,7 +1073,8 @@ function FoodPickerDialog({
     setSaving(true);
     try {
       const body = isUnit ? { date, foodId: picked._id, meal: targetMeal, units: n } : { date, foodId: picked._id, meal: targetMeal, grams: n };
-      const r = await api.post<Entry>("/calories", body);
+      const r = await api.post<LoggedEntry>("/calories", body);
+      warnShortfall(r.data, picked.name, isUnit ? "unit" : "g");
       onLogged(r.data);
       onRecent();
       onOpenChange(false);
@@ -938,6 +1184,7 @@ function FoodPickerDialog({
 function GoalDialog({ open, onOpenChange, goal, onSaved }: { open: boolean; onOpenChange: (b: boolean) => void; goal: Goal | null; onSaved: () => void }) {
   const [form, setForm] = useState<Record<keyof Goal, string>>({
     caloriesTarget: "2000",
+    caloriesMin: "0",
     proteinTarget: "160",
     carbsTarget: "200",
     fatTarget: "70",
@@ -950,6 +1197,7 @@ function GoalDialog({ open, onOpenChange, goal, onSaved }: { open: boolean; onOp
     if (open && goal) {
       setForm({
         caloriesTarget: String(goal.caloriesTarget),
+        caloriesMin: String(goal.caloriesMin ?? 0),
         proteinTarget: String(goal.proteinTarget),
         carbsTarget: String(goal.carbsTarget),
         fatTarget: String(goal.fatTarget),
@@ -969,6 +1217,9 @@ function GoalDialog({ open, onOpenChange, goal, onSaved }: { open: boolean; onOp
     // The server rejects an out-of-order band; catching it here explains why.
     if (values.waterMin > values.waterTarget || values.waterTarget > values.waterMax) {
       return toast.error("Water needs min ≤ target ≤ max");
+    }
+    if (values.caloriesMin > values.caloriesTarget) {
+      return toast.error("The calorie floor cannot be above the target");
     }
     try {
       await api.patch("/calories/goal", values);
@@ -1001,11 +1252,14 @@ function GoalDialog({ open, onOpenChange, goal, onSaved }: { open: boolean; onOp
             <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Macros</div>
             <div className="grid grid-cols-2 gap-3">
               {field("caloriesTarget", "Calories")}
+              {field("caloriesMin", "Eat at least", "cal")}
               {field("proteinTarget", "Protein", "g")}
               {field("carbsTarget", "Carbs", "g")}
               {field("fatTarget", "Fat", "g")}
             </div>
-            <p className="mt-2 text-[11px] text-muted-foreground">Calories, carbs and fat are ceilings. Protein is a goal to reach.</p>
+            <p className="mt-2 text-[11px] text-muted-foreground">
+              Calories, carbs and fat are ceilings. Protein is a goal to reach. Leave "eat at least" at 0 for no floor; set it and a day well under it stops counting as a win.
+            </p>
           </div>
 
           <div className="border-t border-border pt-4">

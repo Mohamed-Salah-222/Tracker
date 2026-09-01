@@ -12,8 +12,10 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
 import { toast } from "sonner";
-import { Plus, Search, ShoppingBasket, Trash2 } from "lucide-react";
+import { Archive, Plus, RotateCcw, Ruler, Search, ShoppingBasket, Trash2, TriangleAlert } from "lucide-react";
 import { AxiosError } from "axios";
+import RecipesSection from "../components/RecipesSection";
+import { useRecipes } from "../lib/recipes";
 
 // ===== Types =====
 type Category = "protein" | "carbs" | "fats" | "vegetables" | "snacks" | "drinks" | "prepared" | "other";
@@ -37,6 +39,9 @@ type Food = {
   unitLabel: string;
 };
 
+/** The list response carries the true size of every category, not just the loaded rows. */
+type FoodsPage = Page<Food> & { categoryCounts?: Record<string, number>; needsServingCount?: number; archivedCount?: number };
+
 const CATEGORIES: Category[] = ["protein", "carbs", "fats", "vegetables", "snacks", "drinks", "prepared", "other"];
 
 // ===== Helpers =====
@@ -45,6 +50,32 @@ function getApiError(e: unknown): string {
     return (e.response?.data as { error?: string })?.error ?? e.message;
   }
   return "Something went wrong";
+}
+
+/**
+ * Strict, unlike parseFloat, which reads "12abc" as 12 and let "abc" through as 0
+ * because of the `|| 0` that followed it. A typo should stop the save, not be
+ * quietly stored as a real macro value.
+ */
+function parseMacro(raw: string): number | null {
+  const t = raw.trim();
+  if (t === "") return 0;
+  if (!/^d*.?d+$/.test(t)) return null;
+  const v = Number(t);
+  return Number.isFinite(v) && v >= 0 ? v : null;
+}
+
+/**
+ * Protein and carbs are 4 calories a gram, fat is 9. A food whose macros do not add
+ * up to its calorie figure usually has a typo in one of the four, and nothing in the
+ * app would ever notice: every total downstream just inherits the mistake.
+ */
+function macroMismatch(cal: number, p: number, c: number, f: number): number | null {
+  const derived = p * 4 + c * 4 + f * 9;
+  if (cal < 5 && derived < 5) return null;
+  const off = Math.abs(derived - cal);
+  if (off <= Math.max(30, cal * 0.35)) return null;
+  return Math.round(derived);
 }
 
 // Headline calories for a card
@@ -79,11 +110,17 @@ const stagger = (i: number) => ({
 export default function Foods() {
   const [foods, setFoods] = useState<Food[]>([]);
   const [foodTotal, setFoodTotal] = useState(0);
+  const [categoryCounts, setCategoryCounts] = useState<Record<string, number>>({});
   const [loadingMore, setLoadingMore] = useState(false);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [filterCat, setFilterCat] = useState<string>("all");
+  const [needsServingOnly, setNeedsServingOnly] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
+  const { recipes, loading: recipesLoading, reload: reloadRecipes } = useRecipes();
+  const [needsServingCount, setNeedsServingCount] = useState(0);
+  const [archivedCount, setArchivedCount] = useState(0);
   const [addOpen, setAddOpen] = useState(false);
 
   // The input stays instant, but only the settled value reaches the query,
@@ -97,18 +134,23 @@ export default function Foods() {
     const params: Record<string, string> = {};
     if (debouncedSearch) params.search = debouncedSearch;
     if (filterCat !== "all") params.category = filterCat;
+    if (needsServingOnly) params.needsServing = "1";
+    if (showArchived) params.archived = "1";
     return params;
-  }, [debouncedSearch, filterCat]);
+  }, [debouncedSearch, filterCat, needsServingOnly, showArchived]);
 
   // First page; a search or category change re-runs this from offset 0.
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await api.get<Page<Food>>("/foods", {
+      const r = await api.get<FoodsPage>("/foods", {
         params: { ...foodFilters(), limit: PAGE_LIMIT, offset: 0 },
       });
       setFoods(r.data.items);
       setFoodTotal(r.data.total);
+      setCategoryCounts(r.data.categoryCounts ?? {});
+      setNeedsServingCount(r.data.needsServingCount ?? 0);
+      setArchivedCount(r.data.archivedCount ?? 0);
     } catch (e) {
       toast.error(getApiError(e));
     } finally {
@@ -119,11 +161,12 @@ export default function Foods() {
   const loadMore = async () => {
     setLoadingMore(true);
     try {
-      const r = await api.get<Page<Food>>("/foods", {
+      const r = await api.get<FoodsPage>("/foods", {
         params: { ...foodFilters(), limit: PAGE_LIMIT, offset: foods.length },
       });
       setFoods((prev) => [...prev, ...r.data.items]);
       setFoodTotal(r.data.total);
+      setCategoryCounts(r.data.categoryCounts ?? {});
     } catch (e) {
       toast.error(getApiError(e));
     } finally {
@@ -141,8 +184,8 @@ export default function Foods() {
     return g;
   }, [foods]);
 
-  const groupOrder = CATEGORIES.filter((c) => grouped[c]);
-  const hasFilters = !!search || filterCat !== "all";
+  const groupOrder = CATEGORIES.filter((c) => (categoryCounts[c] ?? 0) > 0 || grouped[c]);
+  const hasFilters = !!search || filterCat !== "all" || needsServingOnly || showArchived;
 
   return (
     <div className="w-full max-w-[1100px] space-y-4">
@@ -190,8 +233,28 @@ export default function Foods() {
                 </Select>
               </div>
             </div>
+
+            {(needsServingCount > 0 || archivedCount > 0 || needsServingOnly || showArchived) && (
+              <div className="mt-3 flex flex-wrap gap-2 border-t border-border pt-3">
+                {(needsServingCount > 0 || needsServingOnly) && (
+                  <FilterChip active={needsServingOnly} onClick={() => setNeedsServingOnly((v) => !v)} icon={<Ruler className="h-3 w-3" aria-hidden />}>
+                    Needs a serving {needsServingCount}
+                  </FilterChip>
+                )}
+                {(archivedCount > 0 || showArchived) && (
+                  <FilterChip active={showArchived} onClick={() => setShowArchived((v) => !v)} icon={<Archive className="h-3 w-3" aria-hidden />}>
+                    Archived {archivedCount}
+                  </FilterChip>
+                )}
+              </div>
+            )}
           </CardContent>
         </Card>
+      </motion.div>
+
+      {/* ===== Recipes ===== */}
+      <motion.div {...stagger(2)}>
+        <RecipesSection recipes={recipes} loading={recipesLoading} onChanged={reloadRecipes} />
       </motion.div>
 
       {/* ===== Loading ===== */}
@@ -229,21 +292,35 @@ export default function Foods() {
 
       {/* ===== Category sections ===== */}
       {!loading &&
-        groupOrder.map((cat, ci) => (
-        <motion.div key={cat} {...stagger(ci + 2)} className="space-y-2">
-          <div className="flex items-baseline justify-between px-1">
-            <div className="flex items-baseline gap-2">
-              <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium capitalize">{cat}</span>
-              <span className="text-[10px] font-mono tabular-nums text-muted-foreground">{grouped[cat].length}</span>
-            </div>
-          </div>
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-            {grouped[cat].map((f, i) => (
-              <FoodCard key={f._id} food={f} onChanged={load} index={i} />
-            ))}
-            </div>
-          </motion.div>
-        ))}
+        groupOrder.map((cat, ci) => {
+          const shown = grouped[cat] ?? [];
+          const real = categoryCounts[cat] ?? shown.length;
+          const hidden = Math.max(0, real - shown.length);
+          return (
+            <motion.div key={cat} {...stagger(ci + 2)} className="space-y-2">
+              <div className="flex items-baseline justify-between gap-2 px-1">
+                <div className="flex items-baseline gap-2">
+                  <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground capitalize">{cat}</span>
+                  <span className="font-mono text-[10px] tabular-nums text-muted-foreground">{real}</span>
+                </div>
+                {/* Jumping to the category filter fetches the whole of it, rather than
+                    paging blindly through everything in front of it. */}
+                {hidden > 0 && (
+                  <button type="button" onClick={() => setFilterCat(cat)} className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground underline underline-offset-2 hover:text-foreground">
+                    {shown.length === 0 ? `Show all ${real}` : `+${hidden} more`}
+                  </button>
+                )}
+              </div>
+              {shown.length > 0 && (
+                <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4">
+                  {shown.map((f, i) => (
+                    <FoodCard key={f._id} food={f} onChanged={load} index={i} archivedView={showArchived} />
+                  ))}
+                </div>
+              )}
+            </motion.div>
+          );
+        })}
 
       {!loading && foods.length < foodTotal && (
         <div className="flex justify-center">
@@ -258,17 +335,55 @@ export default function Foods() {
   );
 }
 
+function FilterChip({ active, onClick, icon, children }: { active: boolean; onClick: () => void; icon: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold transition-colors ${
+        active ? "border-foreground bg-foreground text-background" : "border-border-strong text-muted-foreground hover:bg-muted"
+      }`}
+    >
+      {icon}
+      {children}
+    </button>
+  );
+}
+
 // =====================================================================
 // FoodCard
 // =====================================================================
-function FoodCard({ food, onChanged, index }: { food: Food; onChanged: () => void; index: number }) {
+function FoodCard({ food, onChanged, index, archivedView }: { food: Food; onChanged: () => void; index: number; archivedView: boolean }) {
   const [editOpen, setEditOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [servingOpen, setServingOpen] = useState(false);
+  const [purgeOpen, setPurgeOpen] = useState(false);
+
+  const purge = async () => {
+    try {
+      const r = await api.delete<{ recipesRemoved?: number }>(`/foods/${food._id}/permanent`);
+      toast.success(r.data?.recipesRemoved ? "Gone, along with a recipe that had nothing left in it" : "Gone for good");
+      onChanged();
+    } catch (e) {
+      toast.error(getApiError(e));
+    }
+  };
+
+  const restore = async () => {
+    try {
+      await api.post(`/foods/${food._id}/restore`);
+      toast.success(`${food.name} is back`);
+      onChanged();
+    } catch (e) {
+      toast.error(getApiError(e));
+    }
+  };
 
   const del = async () => {
     try {
-      await api.delete(`/foods/${food._id}`);
-      toast.success("Deleted");
+      const r = await api.delete<{ untrackedFromKitchen?: number }>(`/foods/${food._id}`);
+      toast.success(r.data?.untrackedFromKitchen ? `Archived, and taken off your kitchen shelf` : "Archived");
       onChanged();
     } catch (e) {
       toast.error(getApiError(e));
@@ -284,6 +399,7 @@ function FoodCard({ food, onChanged, index }: { food: Food; onChanged: () => voi
     f: Math.round((food.entryMode === "perUnit" ? food.fatPerUnit : food.fatPerGram * per) * 10) / 10,
   };
   const needsServing = food.entryMode === "perGram" && !food.defaultServingGrams;
+  const mismatch = macroMismatch(cal, macros.p, macros.c, macros.f);
 
   return (
     <>
@@ -294,16 +410,44 @@ function FoodCard({ food, onChanged, index }: { food: Food; onChanged: () => voi
         transition={{ duration: 0.25, delay: Math.min(index * 0.03, 0.3), ease: [0.16, 1, 0.3, 1] }}
         whileHover={{ y: -2 }}
         whileTap={{ scale: 0.98 }}
-        onClick={() => setEditOpen(true)}
-        className="group relative flex min-h-[132px] flex-col rounded-xl border border-border bg-card p-3 text-left transition-colors hover:border-border-strong"
-        aria-label={`Edit ${food.name}`}
+        onClick={() => (archivedView ? void restore() : setEditOpen(true))}
+        className={`group relative flex min-h-[132px] flex-col rounded-xl border bg-card p-3 text-left transition-colors hover:border-border-strong ${archivedView ? "border-dashed border-border-strong opacity-70" : "border-border"}`}
+        aria-label={archivedView ? `Restore ${food.name}` : `Edit ${food.name}`}
       >
         <div className="mb-2 flex items-start justify-between gap-2">
           <div className="line-clamp-2 text-sm font-semibold leading-snug text-foreground">{food.name}</div>
-          {food.trackInFridge && <ShoppingBasket className="h-3 w-3 flex-shrink-0 text-muted-foreground" aria-label="Tracked in the Kitchen" />}
+          {archivedView ? (
+            <span
+              role="button"
+              tabIndex={0}
+              onClick={(e) => {
+                e.stopPropagation();
+                setPurgeOpen(true);
+              }}
+              onKeyDown={(e) => {
+                if (e.key !== "Enter" && e.key !== " ") return;
+                e.preventDefault();
+                e.stopPropagation();
+                setPurgeOpen(true);
+              }}
+              aria-label={`Delete ${food.name} for good`}
+              title="Delete for good"
+              className="grid h-6 w-6 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-destructive"
+            >
+              <Trash2 className="h-3 w-3" aria-hidden />
+            </span>
+          ) : (
+            food.trackInFridge && <ShoppingBasket className="h-3 w-3 flex-shrink-0 text-muted-foreground" aria-label="Tracked in the Kitchen" />
+          )}
         </div>
 
         <div className="mt-auto">
+          {archivedView && (
+            <div className="mb-1 inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              <RotateCcw className="h-2.5 w-2.5" aria-hidden />
+              Tap to restore
+            </div>
+          )}
           <div className="flex items-baseline gap-1.5">
             <span className="font-mono text-2xl font-semibold tabular-nums tracking-tight text-foreground">{cal}</span>
             <span className="text-xs font-medium text-muted-foreground">cal</span>
@@ -317,14 +461,50 @@ function FoodCard({ food, onChanged, index }: { food: Food; onChanged: () => voi
             <span>F {macros.f}</span>
           </div>
 
-          {/* A per-gram food with no default serving cannot be logged in one tap. */}
-          {needsServing && (
-            <div className="mt-1.5 inline-flex items-center rounded-full border border-border-strong px-1.5 py-px text-[9px] font-semibold uppercase tracking-wider text-muted-foreground" title="Set a default serving so this can be logged in one tap">
-              No serving set
-            </div>
-          )}
+          <div className="mt-1.5 flex flex-wrap gap-1">
+            {/* A per-gram food with no default serving cannot be logged in one tap,
+                so the badge is the fix rather than just the complaint. */}
+            {needsServing && !archivedView && (
+              <span
+                role="button"
+                tabIndex={0}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setServingOpen(true);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key !== "Enter" && e.key !== " ") return;
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setServingOpen(true);
+                }}
+                className="inline-flex cursor-pointer items-center gap-1 rounded-full border border-border-strong px-1.5 py-px text-[9px] font-semibold uppercase tracking-wider text-muted-foreground transition-colors hover:border-foreground hover:text-foreground"
+                title="Set a default serving so this can be logged in one tap"
+              >
+                <Ruler className="h-2.5 w-2.5" aria-hidden />
+                Set serving
+              </span>
+            )}
+            {mismatch !== null && (
+              <span className="inline-flex items-center gap-1 rounded-full border border-border-strong px-1.5 py-px text-[9px] font-semibold uppercase tracking-wider text-muted-foreground" title={`Protein, carbs and fat add up to about ${mismatch} cal, not ${cal}. One of the four is probably a typo.`}>
+                <TriangleAlert className="h-2.5 w-2.5" aria-hidden />
+                Check macros
+              </span>
+            )}
+          </div>
         </div>
       </motion.button>
+
+      {servingOpen && (
+        <ServingDialog
+          food={food}
+          onClose={() => setServingOpen(false)}
+          onSaved={() => {
+            setServingOpen(false);
+            onChanged();
+          }}
+        />
+      )}
 
       <FoodFormDialog
         open={editOpen}
@@ -337,23 +517,112 @@ function FoodCard({ food, onChanged, index }: { food: Food; onChanged: () => voi
         }}
       />
 
+      <AlertDialog open={purgeOpen} onOpenChange={setPurgeOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete "{food.name}" for good?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This one cannot be undone. Meals you already logged keep their own copy of the name and macros, so your history is unaffected. Any recipe using it loses that ingredient.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel variant="outline" size="default">
+              Keep it
+            </AlertDialogCancel>
+            <AlertDialogAction variant="destructive" size="default" onClick={purge}>
+              Delete for good
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete "{food.name}"?</AlertDialogTitle>
-            <AlertDialogDescription>Archived. Past calorie entries keep working.</AlertDialogDescription>
+            <AlertDialogTitle>Archive "{food.name}"?</AlertDialogTitle>
+            <AlertDialogDescription>
+              It leaves your list and stops being trackable in the Kitchen. Past calorie entries keep working, and you can bring it back from the Archived filter.
+            </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel variant="outline" size="default">
               Cancel
             </AlertDialogCancel>
             <AlertDialogAction variant="destructive" size="default" onClick={del}>
-              Delete
+              Archive
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
     </>
+  );
+}
+
+/**
+ * Just the default serving. Opening the full form to fill in one number, with every
+ * macro sitting there waiting to be fat-fingered, is a poor trade for the field that
+ * decides whether a food can be logged in a single tap.
+ */
+function ServingDialog({ food, onClose, onSaved }: { food: Food; onClose: () => void; onSaved: () => void }) {
+  const [grams, setGrams] = useState(food.defaultServingGrams ? String(food.defaultServingGrams) : "");
+  const [saving, setSaving] = useState(false);
+  const per100 = Math.round(food.caloriesPerGram * 100);
+  const value = parseMacro(grams);
+  const preview = value && value > 0 ? Math.round(food.caloriesPerGram * value) : null;
+
+  const save = async () => {
+    if (value === null || value <= 0) return toast.error("Enter a serving size in grams");
+    setSaving(true);
+    try {
+      await api.patch(`/foods/${food._id}/serving`, { defaultServingGrams: value });
+      toast.success(`One tap now logs ${value}g`);
+      onSaved();
+    } catch (e) {
+      toast.error(getApiError(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="!w-[calc(100vw-1.5rem)] !max-w-[380px]">
+        <DialogHeader>
+          <DialogTitle>Default serving</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-2">
+          <p className="text-sm text-muted-foreground">
+            How much of {food.name} you usually eat at once. This is what one tap logs on the Calories page.
+          </p>
+          <div className="flex items-center gap-2">
+            <Input
+              type="number"
+              inputMode="decimal"
+              min="1"
+              step="5"
+              value={grams}
+              autoFocus
+              onChange={(e) => setGrams(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && void save()}
+              placeholder="100"
+              className="h-11 font-mono tabular-nums"
+            />
+            <span className="text-sm font-medium text-muted-foreground">grams</span>
+          </div>
+          <p className="font-mono text-[11px] tabular-nums text-muted-foreground">
+            {per100} cal per 100g{preview !== null ? `, so one serving is about ${preview} cal` : ""}
+          </p>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" size="default" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button variant="default" size="default" onClick={save} disabled={saving}>
+            Save
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -379,11 +648,14 @@ function FoodFormDialog({ open, onOpenChange, onSaved, existing, onDelete }: { o
         setName(existing.name);
         setCategory(existing.category);
         setEntryMode(existing.entryMode);
+        // Read the flag once, outside the mode branches. Reading it only in the
+        // per-unit branch meant opening a weighed food and pressing Save silently
+        // switched its kitchen tracking off.
+        setTrackInFridge(existing.trackInFridge);
         if (existing.entryMode === "perUnit") {
           setUnit("per100g");
           setServing("");
           setUnitLabel(existing.unitLabel);
-          setTrackInFridge(existing.trackInFridge);
           setCalories(existing.caloriesPerUnit.toString());
           setProtein(existing.proteinPerUnit.toString());
           setCarbs(existing.carbsPerUnit.toString());
@@ -392,7 +664,6 @@ function FoodFormDialog({ open, onOpenChange, onSaved, existing, onDelete }: { o
           setUnit("per100g");
           setServing(existing.defaultServingGrams?.toString() ?? "");
           setUnitLabel("");
-          setTrackInFridge(false);
           setCalories((existing.caloriesPerGram * 100).toString());
           setProtein((existing.proteinPerGram * 100).toString());
           setCarbs((existing.carbsPerGram * 100).toString());
@@ -414,14 +685,37 @@ function FoodFormDialog({ open, onOpenChange, onSaved, existing, onDelete }: { o
     }
   }, [open, existing]);
 
-  const cal = parseFloat(calories) || 0;
-  const p = parseFloat(protein) || 0;
-  const c = parseFloat(carbs) || 0;
-  const f = parseFloat(fat) || 0;
+  const cal = parseMacro(calories);
+  const p = parseMacro(protein);
+  const c = parseMacro(carbs);
+  const f = parseMacro(fat);
+
+  /**
+   * Convert the numbers on screen when the basis changes. Leaving them alone meant
+   * switching to "per 1g" reinterpreted per-100g figures as per-gram ones and saved
+   * a food a hundred times too calorific, with nothing to hint at it.
+   */
+  const changeUnit = (next: "per100g" | "per1g") => {
+    if (next === unit) return;
+    const factor = next === "per1g" ? 1 / 100 : 100;
+    const scale = (raw: string) => {
+      const v = parseMacro(raw);
+      if (v === null || v === 0) return raw;
+      return String(Math.round(v * factor * 10000) / 10000);
+    };
+    setCalories(scale(calories));
+    setProtein(scale(protein));
+    setCarbs(scale(carbs));
+    setFat(scale(fat));
+    setUnit(next);
+  };
 
   const save = async () => {
     if (!name.trim()) return toast.error("Name required");
-    if (cal < 0 || p < 0 || c < 0 || f < 0) return toast.error("Negative values");
+    for (const [label, v] of [["Calories", cal], ["Protein", p], ["Carbs", c], ["Fat", f]] as const) {
+      if (v === null) return toast.error(`${label} must be a number`);
+    }
+    if (cal === null || p === null || c === null || f === null) return;
 
     let nutrition;
     if (entryMode === "perUnit") {
@@ -453,7 +747,7 @@ function FoodFormDialog({ open, onOpenChange, onSaved, existing, onDelete }: { o
       name: name.trim(),
       category,
       nutrition,
-      trackInFridge: entryMode === "perUnit" ? trackInFridge : false,
+      trackInFridge,
     };
     try {
       if (existing) await api.patch(`/foods/${existing._id}`, body);
@@ -467,6 +761,9 @@ function FoodFormDialog({ open, onOpenChange, onSaved, existing, onDelete }: { o
   };
 
   const labelSuffix = entryMode === "perUnit" ? `per ${unitLabel.trim() || "unit"}` : unit === "per100g" ? "/100g" : "/g";
+  // Advisory only. A warning that blocked the save would be wrong for the odd food
+  // that genuinely does not follow 4/4/9, like a fibre-heavy vegetable.
+  const formMismatch = cal !== null && p !== null && c !== null && f !== null ? macroMismatch(cal, p, c, f) : null;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -524,7 +821,7 @@ function FoodFormDialog({ open, onOpenChange, onSaved, existing, onDelete }: { o
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1.5">
                     <Label className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Unit for entry</Label>
-                    <Select value={unit} onValueChange={(v) => setUnit((v ?? "per100g") as "per100g" | "per1g")}>
+                    <Select value={unit} onValueChange={(v) => changeUnit((v ?? "per100g") as "per100g" | "per1g")}>
                       <SelectTrigger className="w-full !h-8">
                         <SelectValue />
                       </SelectTrigger>
@@ -546,19 +843,24 @@ function FoodFormDialog({ open, onOpenChange, onSaved, existing, onDelete }: { o
                   <Label className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Unit label</Label>
                   <Input value={unitLabel} onChange={(e) => setUnitLabel(e.target.value)} placeholder="piece, bar, scoop... (optional, defaults to 'unit')" />
                 </div>
-                <label className="flex items-start gap-3 cursor-pointer group">
-                  <Checkbox checked={trackInFridge} onCheckedChange={(v) => setTrackInFridge(!!v)} id="kitchen" className="mt-0.5" />
-                  <div className="space-y-0.5">
-                    <span className="text-sm font-medium flex items-center gap-1.5">
-                      <ShoppingBasket className="h-3 w-3 text-muted-foreground" />
-                      Keep stock of this in the Kitchen
-                    </span>
-                    <span className="text-xs text-muted-foreground block">Track how many you have left and get reminded to restock. Logging it on the Calories page takes one off the shelf.</span>
-                  </div>
-                </label>
               </motion.div>
             )}
           </AnimatePresence>
+
+          {/* Weighed foods can be kept in stock too, counted in grams, so this sits
+              outside the mode-specific block rather than only under per-unit. */}
+          <label className="flex cursor-pointer items-start gap-3">
+            <Checkbox checked={trackInFridge} onCheckedChange={(v) => setTrackInFridge(!!v)} id="kitchen" className="mt-0.5" />
+            <div className="space-y-0.5">
+              <span className="flex items-center gap-1.5 text-sm font-medium">
+                <ShoppingBasket className="h-3 w-3 text-muted-foreground" />
+                Keep stock of this in the Kitchen
+              </span>
+              <span className="block text-xs text-muted-foreground">
+                Get reminded to restock. Logging it on the Calories page takes it off the shelf, {entryMode === "perGram" ? "by the gram" : "one at a time"}.
+              </span>
+            </div>
+          </label>
 
           <div className="border-t border-border" />
 
@@ -567,6 +869,15 @@ function FoodFormDialog({ open, onOpenChange, onSaved, existing, onDelete }: { o
             <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">
               Nutrition <span className="text-muted-foreground/60 lowercase">({labelSuffix})</span>
             </div>
+            {formMismatch !== null && (
+              <div className="flex items-start gap-1.5 rounded-lg border border-border-strong px-2 py-1.5">
+                <TriangleAlert className="mt-0.5 h-3 w-3 shrink-0" aria-hidden />
+                <span className="text-[11px] leading-snug text-muted-foreground">
+                  Protein, carbs and fat come to about <span className="font-mono font-semibold text-foreground">{formMismatch}</span> cal, not{" "}
+                  <span className="font-mono font-semibold text-foreground">{cal}</span>. One of the four is probably a typo. Saving anyway is fine.
+                </span>
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Calories</Label>

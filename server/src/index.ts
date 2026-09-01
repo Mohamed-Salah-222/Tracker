@@ -13,8 +13,14 @@ import tasksRouter from "./routes/tasks";
 import foodsRouter from "./routes/foods";
 import caloriesRouter from "./routes/calories";
 import kitchenRouter from "./routes/kitchen";
+import recipesRouter from "./routes/recipes";
+import habitsRouter from "./routes/habits";
+import goalsRouter from "./routes/goals";
 import dashboardRouter from "./routes/dashboard";
 import workoutsRouter from "./routes/workouts";
+import sleepRouter from "./routes/sleep";
+import journalRouter from "./routes/journal";
+import bodyRouter from "./routes/body";
 
 dotenv.config();
 
@@ -51,6 +57,10 @@ app.use(
   }),
 );
 
+app.use("/api/sleep", sleepRouter);
+app.use("/api/journal", journalRouter);
+app.use("/api/body", bodyRouter);
+
 app.use("/api/income", incomeRouter);
 
 app.use("/api/payments", paymentsRouter);
@@ -62,6 +72,9 @@ app.use("/api/foods", foodsRouter);
 app.use("/api/calories", caloriesRouter);
 
 app.use("/api/kitchen", kitchenRouter);
+app.use("/api/recipes", recipesRouter);
+app.use("/api/habits", habitsRouter);
+app.use("/api/goals", goalsRouter);
 
 app.use("/api/dashboard", dashboardRouter);
 

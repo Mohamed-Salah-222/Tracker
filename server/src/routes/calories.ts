@@ -1,4 +1,5 @@
 import { Router } from "express";
+import type { Types } from "mongoose";
 import { CalorieEntry, MEAL_SLOTS } from "../models/CalorieEntry";
 import { Food } from "../models/Food";
 // NOTE: the CalorieEntry field stays `fridgeDeductedAtLog`; it holds live data on
@@ -7,12 +8,16 @@ import { KitchenItem } from "../models/KitchenItem";
 import { CheatDay } from "../models/CheatDay";
 import { WaterEntry } from "../models/WaterEntry";
 import { Goal } from "../models/Goal";
+import { TrackerGoals, loadTrackerGoals, mergeLegacyGoal } from "../models/TrackerGoals";
+import { applyMeasurements, shapeEntry } from "../lib/body-log";
 import { WeightEntry } from "../models/WeightEntry";
 import { WeightGoal } from "../models/WeightGoal";
 import { isNonNegativeNumber, isObjectId, isPositiveNumber, objectIdParam, parseDayUTC } from "../lib/validation";
 import { pageOf, parsePageParams } from "../lib/pagination";
+import { deductFromKitchen, logFood, type FoodDoc } from "../lib/log-food";
 
 const router = Router();
+
 
 router.param("id", objectIdParam);
 
@@ -60,54 +65,13 @@ router.post("/", async (req, res) => {
   const food = await Food.findById(foodId);
   if (!food || food.archived) return res.status(404).json({ error: "food not found" });
 
-  if (food.entryMode === "perUnit") {
-    const n = isPositiveNumber(units) ? units : null;
-    if (!n) return res.status(400).json({ error: "units > 0 required" });
-
-    let deducted = 0;
-    if (food.trackInFridge) {
-      const item = await KitchenItem.findOne({ foodId: food._id });
-      if (item) {
-        deducted = Math.min(n, item.count);
-        if (deducted > 0) {
-          item.count -= deducted;
-          await item.save();
-        }
-      }
-    }
-
-    const entry = await CalorieEntry.create({
-      date: day,
-      foodId: food._id,
-      foodNameSnapshot: food.name,
-      meal,
-      entryMode: "perUnit",
-      units: n,
-      caloriesPerUnitSnapshot: food.caloriesPerUnit,
-      proteinPerUnitSnapshot: food.proteinPerUnit,
-      carbsPerUnitSnapshot: food.carbsPerUnit,
-      fatPerUnitSnapshot: food.fatPerUnit,
-      unitLabelSnapshot: food.unitLabel,
-      fridgeDeductedAtLog: deducted,
-    });
-    res.json(entry);
-  } else {
-    const g = isPositiveNumber(grams) ? grams : null;
-    if (!g) return res.status(400).json({ error: "grams > 0 required" });
-    const entry = await CalorieEntry.create({
-      date: day,
-      foodId: food._id,
-      foodNameSnapshot: food.name,
-      meal,
-      entryMode: "perGram",
-      grams: g,
-      caloriesPerGramSnapshot: food.caloriesPerGram,
-      proteinPerGramSnapshot: food.proteinPerGram,
-      carbsPerGramSnapshot: food.carbsPerGram,
-      fatPerGramSnapshot: food.fatPerGram,
-    });
-    res.json(entry);
+  const amount = food.entryMode === "perUnit" ? units : grams;
+  if (!isPositiveNumber(amount)) {
+    return res.status(400).json({ error: food.entryMode === "perUnit" ? "units > 0 required" : "grams > 0 required" });
   }
+
+  const { entry, shortfall } = await logFood(day, food as unknown as FoodDoc, meal as Parameters<typeof logFood>[2], amount);
+  res.json(shortfall > 0 ? { ...entry.toObject(), kitchenShortfall: shortfall } : entry);
 });
 
 router.patch("/weight-goal", async (req, res) => {
@@ -124,23 +88,28 @@ router.patch("/weight-goal", async (req, res) => {
 });
 
 router.patch("/goal", async (req, res) => {
-  const fields = ["caloriesTarget", "proteinTarget", "carbsTarget", "fatTarget", "waterMin", "waterTarget", "waterMax"] as const;
+  const fields = ["caloriesTarget", "caloriesMin", "proteinTarget", "carbsTarget", "fatTarget", "waterMin", "waterTarget", "waterMax"] as const;
   for (const f of fields) {
     if (req.body[f] !== undefined && !isNonNegativeNumber(req.body[f])) {
       return res.status(400).json({ error: `${f} must be a non-negative number` });
     }
   }
 
-  let goal = await Goal.findOne();
-  if (!goal) goal = await Goal.create({});
+  await mergeLegacyGoal(await Goal.findOne());
+  const doc = (await TrackerGoals.findOne()) ?? (await TrackerGoals.create({}));
 
+  // The page speaks in waterMin/waterTarget/waterMax; the store names them by unit.
+  const map: Record<string, string> = { caloriesMin: "caloriesMinTarget", waterMin: "waterMinMl", waterTarget: "waterTargetMl", waterMax: "waterMaxMl" };
   for (const f of fields) {
-    if (req.body[f] !== undefined) {
-      goal.set(f, req.body[f]);
-    }
+    if (req.body[f] === undefined) continue;
+    doc.set(map[f] ?? f, req.body[f]);
   }
-  await goal.save();
-  res.json(goal);
+  try {
+    await doc.save();
+  } catch (e) {
+    return res.status(400).json({ error: e instanceof Error ? e.message : "invalid targets" });
+  }
+  res.json(await goalPayload());
 });
 
 router.patch("/:id", async (req, res) => {
@@ -163,32 +132,37 @@ router.patch("/:id", async (req, res) => {
     entry.set("meal", meal);
   }
 
-  if (entry.entryMode === "perUnit") {
-    if (units !== undefined) {
-      const oldUnits = entry.units ?? 0;
-      entry.units = units;
+  // Sending grams for a per-unit entry used to answer 200 having changed nothing.
+  const wrongMode = entry.entryMode === "perUnit" ? grams : units;
+  if (wrongMode !== undefined) {
+    return res.status(400).json({ error: entry.entryMode === "perUnit" ? "this entry is counted in units, not grams" : "this entry is counted in grams, not units" });
+  }
 
-      if ((entry.fridgeDeductedAtLog ?? 0) > 0) {
-        const delta = units - oldUnits;
-        if (delta !== 0) {
-          const item = await KitchenItem.findOne({ foodId: entry.foodId });
-          if (item) {
-            if (delta > 0) {
-              const more = Math.min(delta, item.count);
-              item.count -= more;
-              entry.fridgeDeductedAtLog = (entry.fridgeDeductedAtLog ?? 0) + more;
-            } else {
-              const refund = Math.min(-delta, entry.fridgeDeductedAtLog ?? 0);
-              item.count += refund;
-              entry.fridgeDeductedAtLog = (entry.fridgeDeductedAtLog ?? 0) - refund;
-            }
-            await item.save();
+  const amountChanged = entry.entryMode === "perUnit" ? units : grams;
+  if (amountChanged !== undefined) {
+    const oldAmount = (entry.entryMode === "perUnit" ? entry.units : entry.grams) ?? 0;
+    if (entry.entryMode === "perUnit") entry.units = amountChanged;
+    else entry.grams = amountChanged;
+
+    // Eating more takes more off the shelf; eating less puts some back.
+    if ((entry.fridgeDeductedAtLog ?? 0) > 0) {
+      const delta = amountChanged - oldAmount;
+      if (delta !== 0) {
+        const item = await KitchenItem.findOne({ foodId: entry.foodId });
+        if (item) {
+          if (delta > 0) {
+            const more = Math.min(delta, item.count);
+            item.count -= more;
+            entry.fridgeDeductedAtLog = (entry.fridgeDeductedAtLog ?? 0) + more;
+          } else {
+            const refund = Math.min(-delta, entry.fridgeDeductedAtLog ?? 0);
+            item.count += refund;
+            entry.fridgeDeductedAtLog = (entry.fridgeDeductedAtLog ?? 0) - refund;
           }
+          await item.save();
         }
       }
     }
-  } else if (grams !== undefined) {
-    entry.grams = grams;
   }
 
   await entry.save();
@@ -201,7 +175,7 @@ router.delete("/:id", async (req, res) => {
   entry.deletedAt = new Date();
   await entry.save();
 
-  if (entry.entryMode === "perUnit" && (entry.fridgeDeductedAtLog ?? 0) > 0) {
+  if ((entry.fridgeDeductedAtLog ?? 0) > 0) {
     const item = await KitchenItem.findOne({ foodId: entry.foodId });
     if (item) {
       item.count += entry.fridgeDeductedAtLog ?? 0;
@@ -215,6 +189,83 @@ router.delete("/:id", async (req, res) => {
 // ===========================================================
 // CHEAT DAYS
 // ===========================================================
+
+/**
+ * Put a deleted entry back.
+ *
+ * Deletes were already soft, so the row never went anywhere; nothing exposed a way
+ * to reach it. A mis-tap on the bin was permanent for no reason.
+ */
+router.post("/:id/restore", async (req, res) => {
+  const entry = await CalorieEntry.findById(req.params.id);
+  if (!entry) return res.status(404).json({ error: "not found" });
+  if (!entry.deletedAt) return res.json(entry);
+
+  // Take the food back off the shelf, the way logging it the first time did.
+  if ((entry.fridgeDeductedAtLog ?? 0) > 0) {
+    const item = await KitchenItem.findOne({ foodId: entry.foodId });
+    if (item) {
+      const back = Math.min(entry.fridgeDeductedAtLog ?? 0, item.count);
+      item.count -= back;
+      entry.fridgeDeductedAtLog = back;
+      await item.save();
+    } else {
+      entry.fridgeDeductedAtLog = 0;
+    }
+  }
+  entry.deletedAt = null;
+  await entry.save();
+  res.json(entry);
+});
+
+/**
+ * Copy a day, or one meal of it, onto another day. Eating the same breakfast four
+ * days a week meant retyping it four times.
+ *
+ * Entries are re-logged rather than cloned, so each takes a fresh snapshot of the
+ * food as it is now and takes its own bite out of the kitchen.
+ */
+router.post("/copy", async (req, res) => {
+  const from = parseDayUTC(req.body?.from);
+  const to = parseDayUTC(req.body?.to);
+  if (!from || !to) return res.status(400).json({ error: "valid from and to dates required" });
+  if (from.getTime() === to.getTime()) return res.status(400).json({ error: "pick a different day to copy onto" });
+
+  const meal = req.body?.meal;
+  if (meal !== undefined && (typeof meal !== "string" || !isValidMeal(meal))) {
+    return res.status(400).json({ error: "invalid meal" });
+  }
+
+  const filter: Record<string, unknown> = { date: from, deletedAt: null };
+  if (meal) filter.meal = meal;
+  const source = await CalorieEntry.find(filter).sort({ createdAt: 1 });
+  if (source.length === 0) return res.status(400).json({ error: meal ? "nothing logged for that meal" : "nothing logged that day" });
+
+  const foods = await Food.find({ _id: { $in: source.map((e) => e.foodId) }, archived: false });
+  const byId = new Map(foods.map((f) => [String(f._id), f as unknown as FoodDoc]));
+
+  let copied = 0;
+  let skipped = 0;
+  const shortfalls: { name: string; amount: number; unit: "g" | "unit" }[] = [];
+  for (const e of source) {
+    const food = byId.get(String(e.foodId));
+    if (!food) {
+      skipped++;
+      continue;
+    }
+    const amount = (e.entryMode === "perUnit" ? e.units : e.grams) ?? 0;
+    if (amount <= 0) {
+      skipped++;
+      continue;
+    }
+    const { shortfall } = await logFood(to, food, e.meal, amount);
+    copied++;
+    if (shortfall > 0) shortfalls.push({ name: food.name, amount: shortfall, unit: food.entryMode === "perGram" ? "g" : "unit" });
+  }
+
+  if (copied === 0) return res.status(400).json({ error: "none of those foods still exist" });
+  res.json({ copied, skipped, shortfalls });
+});
 
 router.get("/cheat-day", async (req, res) => {
   const day = parseDayUTC(req.query.date);
@@ -251,11 +302,17 @@ router.get("/water/day", async (req, res) => {
   res.json(entries);
 });
 
+/** One glass, bottle or jug. Anything past this is a slipped decimal point. */
+const MAX_WATER_PER_LOG_ML = 5000;
+
 router.post("/water", async (req, res) => {
   const { date, ml } = req.body;
   const day = parseDayUTC(date);
   if (!day || !isPositiveNumber(ml)) {
     return res.status(400).json({ error: "valid date and positive ml required" });
+  }
+  if (ml > MAX_WATER_PER_LOG_ML) {
+    return res.status(400).json({ error: `${MAX_WATER_PER_LOG_ML}ml is the most one entry can hold; add another if you really drank more` });
   }
   const entry = await WaterEntry.create({ date: day, ml });
   res.json(entry);
@@ -273,12 +330,27 @@ router.delete("/water/:id", async (req, res) => {
 // GOALS
 // ===========================================================
 
+/**
+ * The page's view of the targets. They live in TrackerGoals now, the same document
+ * the dashboard reads, so the two cannot report different numbers at each other.
+ */
+async function goalPayload() {
+  await mergeLegacyGoal(await Goal.findOne());
+  const g = await loadTrackerGoals();
+  return {
+    caloriesTarget: g.caloriesTarget,
+    caloriesMin: g.caloriesMinTarget,
+    proteinTarget: g.proteinTarget,
+    carbsTarget: g.carbsTarget,
+    fatTarget: g.fatTarget,
+    waterMin: g.waterMinMl,
+    waterTarget: g.waterTargetMl,
+    waterMax: g.waterMaxMl,
+  };
+}
+
 router.get("/goal", async (_req, res) => {
-  let goal = await Goal.findOne();
-  if (!goal) {
-    goal = await Goal.create({});
-  }
-  res.json(goal);
+  res.json(await goalPayload());
 });
 
 // ===========================================================
@@ -293,7 +365,7 @@ router.get("/week-summary", async (req, res) => {
   const end = new Date(start);
   end.setUTCDate(end.getUTCDate() + 7); // exclusive
 
-  const [entries, cheatDays, waterEntries, goal] = await Promise.all([CalorieEntry.find({ date: { $gte: start, $lt: end }, deletedAt: null }).sort({ date: 1 }), CheatDay.find({ date: { $gte: start, $lt: end } }), WaterEntry.find({ date: { $gte: start, $lt: end }, deletedAt: null }).sort({ date: 1 }), Goal.findOne() ?? Goal.create({})]);
+  const [entries, cheatDays, waterEntries, goal] = await Promise.all([CalorieEntry.find({ date: { $gte: start, $lt: end }, deletedAt: null }).sort({ date: 1 }), CheatDay.find({ date: { $gte: start, $lt: end } }), WaterEntry.find({ date: { $gte: start, $lt: end }, deletedAt: null }).sort({ date: 1 }), goalPayload()]);
 
   const cheatSet = new Set(cheatDays.map((c) => c.date.toISOString().slice(0, 10)));
 
@@ -466,7 +538,7 @@ router.get("/coach-report", async (req, res) => {
     CalorieEntry.find({ date: { $gte: start, $lt: end }, deletedAt: null }).sort({ date: 1, createdAt: 1 }),
     CheatDay.find({ date: { $gte: start, $lt: end } }),
     WaterEntry.find({ date: { $gte: start, $lt: end }, deletedAt: null }).sort({ date: 1 }),
-    Goal.findOne(),
+    goalPayload(),
   ]);
 
   const cheatSet = new Set(cheatDays.map((c) => c.date.toISOString().slice(0, 10)));
@@ -594,52 +666,43 @@ router.get("/weight", async (req, res) => {
     WeightEntry.find(filter).sort({ date: -1 }).skip(page.offset).limit(page.limit),
     WeightEntry.countDocuments(filter),
   ]);
-  res.json(pageOf(entries, total, page));
+  res.json(pageOf(entries.map(shapeEntry), total, page));
 });
 
+/**
+ * The same collection the body log writes, so this goes through the same code.
+ *
+ * It used to take a weight and a note and drop everything else on the floor, which
+ * is why four body-composition fields sat on the model for months with no way to
+ * fill them in.
+ */
 router.post("/weight", async (req, res) => {
-  const { date, weightKg, note } = req.body;
-  const day = parseDayUTC(date);
+  const day = parseDayUTC(req.body?.date);
   if (!day) return res.status(400).json({ error: "valid date required" });
-  if (!isPositiveNumber(weightKg)) {
-    return res.status(400).json({ error: "positive weightKg required" });
-  }
-  if (note !== undefined && note !== null && typeof note !== "string") {
-    return res.status(400).json({ error: "note must be a string" });
-  }
 
-  const entry = await WeightEntry.findOneAndUpdate(
-    { date: day, deletedAt: null },
-    { weightKg, note: note ?? "" },
-    { upsert: true, new: true },
-  );
-  res.json(entry);
+  const existing = await WeightEntry.findOne({ date: day, deletedAt: null });
+  const doc = existing ?? new WeightEntry({ date: day });
+  const applied = applyMeasurements(doc, req.body ?? {}, { requireWeight: !existing });
+  if (!applied.ok) return res.status(400).json({ error: applied.error });
+
+  await doc.save();
+  res.json(shapeEntry(doc));
 });
 
 router.patch("/weight/:id", async (req, res) => {
-  const { weightKg, note, date } = req.body;
-
-  if ("weightKg" in req.body && !isPositiveNumber(weightKg)) {
-    return res.status(400).json({ error: "positive weightKg required" });
-  }
-  if ("note" in req.body && note !== null && note !== undefined && typeof note !== "string") {
-    return res.status(400).json({ error: "note must be a string" });
-  }
-  let day: Date | null = null;
-  if ("date" in req.body) {
-    day = parseDayUTC(date);
-    if (!day) return res.status(400).json({ error: "valid date required" });
-  }
-
   const entry = await WeightEntry.findById(req.params.id);
   if (!entry || entry.deletedAt) return res.status(404).json({ error: "not found" });
 
-  if ("weightKg" in req.body) entry.weightKg = weightKg;
-  if ("note" in req.body) entry.note = note ?? "";
-  if (day) entry.date = day;
+  if ("date" in req.body) {
+    const day = parseDayUTC(req.body.date);
+    if (!day) return res.status(400).json({ error: "valid date required" });
+    entry.date = day;
+  }
+  const applied = applyMeasurements(entry, req.body ?? {}, { requireWeight: false });
+  if (!applied.ok) return res.status(400).json({ error: applied.error });
 
   await entry.save();
-  res.json(entry);
+  res.json(shapeEntry(entry));
 });
 
 router.delete("/weight/:id", async (req, res) => {

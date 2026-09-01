@@ -9,6 +9,8 @@ import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
 import { TaskRow } from "../components/TaskRow";
+import SleepCard from "../components/SleepCard";
+import JournalCard from "../components/JournalCard";
 import { CalendarDays, Check, ChevronLeft, ChevronRight, ListChecks, Plus, Sparkles, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
 import { fullDate, getApiError, relativeDay, shiftDay, taskDay, weekdayLong, type Task } from "../lib/tasks";
@@ -271,6 +273,11 @@ export default function Today() {
         </Card>
       </motion.section>
 
+      {/* ===== Last night ===== */}
+      <motion.section {...stagger(2)} aria-label="Sleep">
+        <SleepCard date={selectedDate} />
+      </motion.section>
+
       {/* ===== Overdue ===== */}
       <AnimatePresence>
         {overdueVisible.length > 0 && (
@@ -411,6 +418,11 @@ export default function Today() {
           )}
         </>
       )}
+
+      {/* ===== The day in your own words ===== */}
+      <motion.section {...stagger(6)} aria-label="Journal">
+        <JournalCard key={selectedDate} date={selectedDate} />
+      </motion.section>
 
       {/* ===== Link out ===== */}
       <div className="flex justify-center pt-1">

@@ -34,6 +34,8 @@ export default function Tasks() {
   const [month, setMonth] = useState(now.getMonth() + 1);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [overdueCount, setOverdueCount] = useState(0);
+  /** Bumped only by edits that can change what is overdue: a date, a tick, a delete. */
+  const [overdueKey, setOverdueKey] = useState(0);
   const [loading, setLoading] = useState(true);
   const [pickedDate, setPickedDate] = useState<string | null>(null);
 
@@ -61,12 +63,21 @@ export default function Tasks() {
     void load();
   }, [load]);
 
+  /**
+   * Overdue spans every past month, so it cannot be counted from the loaded page and
+   * has to be asked for. Keyed on a counter rather than the tasks array, which is a
+   * fresh object on every optimistic write and so fired a request per checkbox.
+   */
   useEffect(() => {
+    let cancelled = false;
     api
       .get<Task[]>("/tasks/overdue", { params: { today: todayISO() } })
-      .then((r) => setOverdueCount(r.data.length))
-      .catch(() => setOverdueCount(0));
-  }, [tasks]);
+      .then((r) => !cancelled && setOverdueCount(r.data.length))
+      .catch(() => !cancelled && setOverdueCount(0));
+    return () => {
+      cancelled = true;
+    };
+  }, [overdueKey]);
 
   // Monday-start grid.
   const cells = useMemo(() => {
@@ -224,7 +235,10 @@ export default function Tasks() {
         <DayDialog
           date={pickedDate}
           tasks={tasksByDate[pickedDate] ?? []}
-          onClose={() => setPickedDate(null)}
+          onClose={() => {
+            setPickedDate(null);
+            setOverdueKey((k) => k + 1);
+          }}
           onLocalChange={writeTasks}
           readTasks={() => tasksRef.current}
         />

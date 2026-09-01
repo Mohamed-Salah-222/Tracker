@@ -5,7 +5,7 @@
 // actually change whether a set is any good. A movement missing from here still
 // renders, just without the reference section.
 //
-// Illustrations live in client/public/exercises/<id>.png and are looked up by the
+// Illustrations live in client/public/exercises/<id>.webp and are looked up by the
 // movement id. Any that are missing show a placeholder rather than a broken image.
 // =====================================================================
 
@@ -104,7 +104,7 @@ export const EXERCISE_INFO: Record<string, ExerciseInfo> = {
 
 /** Path convention for the anatomy illustration. Missing files fall back to a placeholder. */
 export function exerciseImagePath(movementId: string): string {
-  return `/exercises/${movementId}.png`;
+  return `/exercises/${movementId}.webp`;
 }
 
 export function exerciseInfo(movementId: string): ExerciseInfo | undefined {

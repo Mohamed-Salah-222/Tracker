@@ -8,7 +8,9 @@ import { Card, CardContent } from "../components/ui/card";
 import { Checkbox } from "../components/ui/checkbox";
 import { Skeleton } from "../components/ui/skeleton";
 import { toast } from "sonner";
-import { BookOpen, ChevronLeft, ChevronRight, Footprints, FolderKanban, Languages, type LucideIcon, MessageSquarePlus, Moon, Pill, HandHeart, LayoutDashboard, SkipForward } from "lucide-react";
+import { CheckCheck, ChevronLeft, ChevronRight, MessageSquarePlus, LayoutDashboard, Plus, Settings2, SkipForward } from "lucide-react";
+import HabitManager, { HabitForm } from "../components/HabitManager";
+import { HabitGlyph } from "../components/HabitGlyph";
 import { Input } from "../components/ui/input";
 import { getApiError, dayLabel, shiftDay } from "../lib/food";
 
@@ -19,13 +21,18 @@ type HabitItem = {
   label: string;
   description: string;
   icon: string;
-  /** "count" habits record a number (steps); the rest are a simple tick. */
+  /** "count" habits record a number; the rest are a simple tick. */
   input: "check" | "count";
+  /** What the number is called: "steps", "pages", "times". */
+  unit?: string;
   amount: number | null;
   target: number | null;
   state: HabitState;
   checked: boolean;
   note: string;
+  /** Where this habit stands in the month the shown day belongs to. */
+  monthDone: number;
+  monthTarget: number;
 };
 
 type HabitsDay = {
@@ -34,18 +41,6 @@ type HabitsDay = {
   skipped: number;
   total: number;
   items: HabitItem[];
-};
-
-/** Server sends an icon name; this maps it to something drawable. */
-const ICONS: Record<string, LucideIcon> = {
-  pill: Pill,
-  hands: HandHeart,
-  moon: Moon,
-  footprints: Footprints,
-  "footprints-count": Footprints,
-  "book-open": BookOpen,
-  "folder-kanban": FolderKanban,
-  languages: Languages,
 };
 
 const fadeUp = {
@@ -65,6 +60,8 @@ export default function Habits() {
   const [date, setDate] = useState(todayISO);
   const [day, setDay] = useState<HabitsDay | null>(null);
   const [loading, setLoading] = useState(true);
+  const [manageOpen, setManageOpen] = useState(false);
+  const [creatingHabit, setCreatingHabit] = useState(false);
 
   const dayRef = useRef<HabitsDay | null>(null);
   const writeDay = useCallback((next: HabitsDay) => {
@@ -140,6 +137,24 @@ export default function Habits() {
 
   return (
     <div className="w-full max-w-[720px] space-y-4">
+      {/* ===== Header ===== */}
+      <motion.header {...fadeUp} className="flex items-center justify-between gap-3">
+        <div className="hidden min-w-0 items-center gap-2 md:flex">
+          <CheckCheck className="h-5 w-5 shrink-0 text-muted-foreground" aria-hidden />
+          <h1 className="text-xl font-semibold tracking-tight">Habits</h1>
+        </div>
+        <h1 className="sr-only md:hidden">Habits</h1>
+        <div className="ml-auto flex items-center gap-2">
+          <Button variant="default" size="sm" className="h-9" onClick={() => setCreatingHabit(true)}>
+            <Plus className="h-4 w-4 mr-1.5" aria-hidden />
+            New habit
+          </Button>
+          <Button variant="outline" size="icon" className="h-9 w-9" aria-label="Manage habits" title="Reorder, edit or retire your habits" onClick={() => setManageOpen(true)}>
+            <Settings2 className="h-4 w-4" aria-hidden />
+          </Button>
+        </div>
+      </motion.header>
+
       {/* ===== Date nav ===== */}
       <motion.nav {...fadeUp} aria-label="Select day" className="flex items-center gap-1.5">
         <Button variant="outline" size="icon" className="h-10 w-10 shrink-0" aria-label="Previous day" onClick={() => setDate(shiftDay(date, -1))}>
@@ -177,7 +192,7 @@ export default function Habits() {
                 </div>
                 {skipped > 0 && <div className="mt-0.5 font-mono text-[11px] tabular-nums text-muted-foreground">{skipped} skipped on purpose</div>}
               </div>
-              <Link to="/" className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
+              <Link to="/" className="inline-flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
                 <LayoutDashboard className="h-3.5 w-3.5" aria-hidden />
                 See the month
               </Link>
@@ -196,6 +211,24 @@ export default function Habits() {
             <Skeleton key={i} className="h-[74px] rounded-xl" />
           ))}
         </div>
+      ) : items.length === 0 ? (
+        <motion.div {...stagger(2)}>
+          <Card>
+            <CardContent className="px-6 py-6 text-center">
+              <div className="mx-auto mb-3 grid h-12 w-12 place-items-center rounded-full bg-muted">
+                <CheckCheck className="h-5 w-5 text-muted-foreground" aria-hidden />
+              </div>
+              <div className="text-base font-semibold">Nothing to tick yet</div>
+              <p className="mx-auto mt-1 max-w-sm text-sm text-muted-foreground">
+                Add the things you want to do most days. Tick them off, or record a number if that suits it better, and the month fills in on the dashboard.
+              </p>
+              <Button variant="default" size="default" className="mt-4" onClick={() => setCreatingHabit(true)}>
+                <Plus className="h-4 w-4 mr-1.5" aria-hidden />
+                Add your first habit
+              </Button>
+            </CardContent>
+          </Card>
+        </motion.div>
       ) : (
         <div className="space-y-2">
           {items.map((item, i) => (
@@ -205,6 +238,18 @@ export default function Habits() {
       )}
 
       <p className="pt-1 text-center text-xs text-muted-foreground">Every tick here is the same one on the dashboard grid.</p>
+
+      <HabitManager open={manageOpen} onOpenChange={setManageOpen} onChanged={load} />
+      {creatingHabit && (
+        <HabitForm
+          habit={null}
+          onClose={() => setCreatingHabit(false)}
+          onSaved={() => {
+            setCreatingHabit(false);
+            void load();
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -213,11 +258,20 @@ export default function Habits() {
 // HabitCard
 // =====================================================================
 function HabitCard({ item, index, onSave }: { item: HabitItem; index: number; onSave: (item: HabitItem, patch: { state?: HabitState; note?: string; amount?: number }) => void }) {
-  const Icon = ICONS[item.icon] ?? Pill;
+
   const [note, setNote] = useState(item.note);
   const [noteOpen, setNoteOpen] = useState(item.note.length > 0);
   const [saved, setSaved] = useState(false);
   const isCount = item.input === "count";
+  // A step of 100 suits 10,000 steps and is absurd for 15 minutes, so it scales with
+  // the target rather than staying fixed to the one habit that used to be countable.
+  const countStep = (() => {
+    const target = item.target ?? 0;
+    if (target >= 5000) return 500;
+    if (target >= 500) return 50;
+    if (target >= 50) return 5;
+    return 1;
+  })();
   const [amount, setAmount] = useState(item.amount != null && item.amount > 0 ? String(item.amount) : "");
 
   useEffect(() => {
@@ -264,7 +318,7 @@ function HabitCard({ item, index, onSave }: { item: HabitItem; index: number; on
           <div className="flex items-center gap-2">
             {isCount ? (
               <span className={`grid h-11 w-11 shrink-0 place-items-center rounded-lg ${isDone ? "bg-foreground text-background" : "bg-muted text-muted-foreground"}`} aria-hidden>
-                <Icon className="h-4 w-4" />
+                <HabitGlyph name={item.icon} className="h-4 w-4" />
               </span>
             ) : (
               <label className="flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-lg transition-colors hover:bg-muted">
@@ -276,13 +330,18 @@ function HabitCard({ item, index, onSave }: { item: HabitItem; index: number; on
               <div className="flex min-w-0 flex-1 items-center gap-2">
                 <span className="min-w-0">
                   <span className={`block truncate text-sm font-semibold ${isSkipped ? "text-muted-foreground line-through" : ""}`}>{item.label}</span>
-                  <span className="block truncate font-mono text-[11px] tabular-nums text-muted-foreground">of {(item.target ?? 0).toLocaleString("en-US")}</span>
+                  <span className="block truncate font-mono text-[11px] tabular-nums text-muted-foreground">
+                    of {(item.target ?? 0).toLocaleString("en-US")}
+                    {item.unit ? ` ${item.unit}` : ""}
+                    {" · "}
+                    {item.monthDone}/{item.monthTarget} this month
+                  </span>
                 </span>
                 <Input
                   type="number"
                   inputMode="numeric"
                   min="0"
-                  step="100"
+                  step={countStep}
                   value={amount}
                   onChange={(e) => setAmount(e.target.value)}
                   onBlur={(e) => commitAmount(e.target.value)}
@@ -297,10 +356,14 @@ function HabitCard({ item, index, onSave }: { item: HabitItem; index: number; on
               </div>
             ) : (
               <button type="button" onClick={toggleDone} className="flex min-w-0 flex-1 items-center gap-2 text-left">
-                <Icon className={`h-4 w-4 shrink-0 ${isDone ? "text-foreground" : "text-muted-foreground"}`} aria-hidden />
+                <HabitGlyph name={item.icon} className={`h-4 w-4 shrink-0 ${isDone ? "text-foreground" : "text-muted-foreground"}`} />
                 <span className="min-w-0">
                   <span className={`block truncate text-sm font-semibold ${isSkipped ? "text-muted-foreground line-through" : ""}`}>{item.label}</span>
-                  <span className="block truncate text-[11px] text-muted-foreground">{isSkipped ? "Skipped on purpose" : item.description}</span>
+                  <span className="block truncate text-[11px] text-muted-foreground">
+                    {isSkipped ? "Skipped on purpose" : item.description}
+                    {item.description && !isSkipped ? " · " : ""}
+                    {!isSkipped && <span className="font-mono tabular-nums">{item.monthDone}/{item.monthTarget} this month</span>}
+                  </span>
                 </span>
               </button>
             )}

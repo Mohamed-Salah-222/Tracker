@@ -2,6 +2,7 @@ import { Suspense, lazy, useCallback, useEffect, useState } from "react";
 import { motion } from "motion/react";
 import { api } from "../lib/api";
 import { todayISO } from "../lib/today";
+import { loadSubscriptions } from "../lib/subscriptions";
 import { PAGE_LIMIT, pageRangeLabel, type Page } from "../lib/pagination";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -238,6 +239,9 @@ export default function Payments() {
   const [recapPeriod, setRecapPeriod] = useState<"week" | "month" | null>(null);
   const [movementsOpen, setMovementsOpen] = useState(false);
   const [subscriptionsOpen, setSubscriptionsOpen] = useState(false);
+  // How much recurring money is already owed. The point of the feature is noticing
+  // before it goes out, which only works if the count is visible without opening it.
+  const [subsDue, setSubsDue] = useState<{ owing: number; soon: number }>({ owing: 0, soon: 0 });
   const [wishlistOpen, setWishlistOpen] = useState(false);
 
   const loadWallets = useCallback(async () => {
@@ -324,11 +328,25 @@ export default function Payments() {
     void loadExpenses();
   }, [loadExpenses]);
 
+  const loadSubsDue = useCallback(async () => {
+    try {
+      const summary = await loadSubscriptions(todayISO());
+      setSubsDue({ owing: summary.counts.owing, soon: summary.counts.upcoming });
+    } catch {
+      // The badge is a nicety. A failure here must not take the page down with it.
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadSubsDue();
+  }, [loadSubsDue]);
+
   const reloadAll = () => {
     void loadWallets();
     void loadBanks();
     void loadExternalSources();
     void loadExpenses();
+    void loadSubsDue();
   };
 
   const walletTotalEGP = wallets.filter((w) => w.currency === "EGP").reduce((s, w) => s + w.balance, 0);
@@ -365,6 +383,11 @@ export default function Payments() {
           <Button variant="outline" size="sm" onClick={() => setSubscriptionsOpen(true)}>
             <Repeat className="h-3.5 w-3.5 mr-1.5" />
             Subscriptions
+            {subsDue.owing > 0 ? (
+              <span className="ml-1.5 rounded-full bg-foreground px-1.5 py-px font-mono text-[10px] tabular-nums text-background">{subsDue.owing} due</span>
+            ) : subsDue.soon > 0 ? (
+              <span className="ml-1.5 rounded-full border border-border-strong px-1.5 py-px font-mono text-[10px] tabular-nums text-muted-foreground">{subsDue.soon}</span>
+            ) : null}
           </Button>
           <Button variant="outline" size="sm" onClick={() => setWishlistOpen(true)}>
             <ShoppingBag className="h-3.5 w-3.5 mr-1.5" />

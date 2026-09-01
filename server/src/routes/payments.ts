@@ -5,6 +5,9 @@ import { ExternalSource } from "../models/ExternalSource";
 import { Expense, EXPENSE_CATEGORIES, EXPENSE_SOURCE_TYPES } from "../models/Expense";
 import { MoneyMovement, MOVEMENT_TYPES, MovementType } from "../models/MoneyMovement";
 import { Subscription, SUBSCRIPTION_SOURCE_TYPES } from "../models/Subscription";
+import { CYCLES, iso as isoDay, occurrenceAfter, type Cycle } from "../lib/recurrence";
+import { nextDueOf, scheduleOf, shapeSubscription, subscriptionsSummary } from "../lib/subscriptions";
+import { recordExpense } from "../lib/spend";
 import { WishlistItem, WISHLIST_PRIORITIES } from "../models/WishlistItem";
 import { validateMovementShape } from "../lib/movement-validation";
 import { toDayUTC } from "../lib/dates";
@@ -296,68 +299,11 @@ router.post("/expenses", async (req, res) => {
     return res.status(400).json({ error: "invalid sourceType" });
   }
 
-  if (sourceType === "wallet") {
-    const wallet = await Wallet.findById(sourceId);
-    if (!wallet || wallet.archived) return res.status(404).json({ error: "wallet not found" });
-
-    const session = await mongoose.startSession();
-    try {
-      let expense;
-      await session.withTransaction(async () => {
-        wallet.balance -= amount;
-        await wallet.save({ session });
-        const created = await Expense.create(
-          [{ name: cleanName, amount, category, sourceType, sourceId: wallet._id, sourceNameSnapshot: wallet.name, date: day }],
-          { session },
-        );
-        expense = created[0];
-      });
-      return res.json(expense);
-    } catch {
-      return res.status(500).json({ error: "failed to create expense" });
-    } finally {
-      await session.endSession();
-    }
-  }
-
-  if (sourceType === "bank") {
-    const bank = await Bank.findById(sourceId);
-    if (!bank || bank.archived) return res.status(404).json({ error: "bank not found" });
-
-    const session = await mongoose.startSession();
-    try {
-      let expense;
-      await session.withTransaction(async () => {
-        bank.balance -= amount;
-        await bank.save({ session });
-        const created = await Expense.create(
-          [{ name: cleanName, amount, category, sourceType, sourceId: bank._id, sourceNameSnapshot: bank.name, date: day }],
-          { session },
-        );
-        expense = created[0];
-      });
-      return res.json(expense);
-    } catch {
-      return res.status(500).json({ error: "failed to create expense" });
-    } finally {
-      await session.endSession();
-    }
-  }
-
-  // external, no balance change
-  const ext = await ExternalSource.findById(sourceId);
-  if (!ext || ext.archived) return res.status(404).json({ error: "external source not found" });
-
-  const expense = await Expense.create({
-    name: cleanName,
-    amount,
-    category,
-    sourceType,
-    sourceId: ext._id,
-    sourceNameSnapshot: ext.name,
-    date: day,
-  });
-  return res.json(expense);
+  // The balance change and the row that explains it now happen in one place, shared
+  // with the subscription charge. Two copies of this was one copy too many.
+  const result = await recordExpense({ name: cleanName, amount, category, sourceType, sourceId, date: day });
+  if (!result.ok) return res.status(result.status).json({ error: result.error });
+  return res.json(result.expense);
 });
 
 router.patch("/expenses/:id", async (req, res) => {
@@ -916,32 +862,67 @@ async function resolveSubscriptionSource(sourceType: SubscriptionSourceType, sou
   return { sourceId: ext._id, sourceNameSnapshot: ext.name };
 }
 
-router.get("/subscriptions", async (_req, res) => {
-  const subscriptions = await Subscription.find({ archived: false }).sort({ billingDay: 1, name: 1 });
-  res.json(subscriptions);
+const todayFromQuery = (v: unknown) => isoDay(parseDayUTC(v) ?? new Date());
+
+/** Cycle plus the one field that cycle needs. Read together so neither can go missing. */
+type CycleFields = { cycle: Cycle; billingDay: number; billingWeekday: number | null; billingMonth: number | null };
+type CycleRead = { ok: true; value: CycleFields } | { ok: false; error: string };
+
+function readCycle(body: Record<string, unknown>, current: Partial<CycleFields> | null): CycleRead {
+  const cycle = (body.cycle ?? current?.cycle ?? "monthly") as Cycle;
+  if (!(CYCLES as readonly string[]).includes(cycle)) return { ok: false, error: "invalid cycle" };
+
+  // Whole numbers only, and a value that is present but not a number is an error
+  // rather than something to fall back from: silently billing on the 1st because the
+  // day arrived as a string is worse than refusing it.
+  const whole = (v: unknown): number | null => (Number.isInteger(v) ? (v as number) : null);
+
+  const billingDay = whole(body.billingDay ?? current?.billingDay ?? 1);
+  if (billingDay === null || billingDay < 1 || billingDay > 31) return { ok: false, error: "invalid billingDay" };
+
+  let billingWeekday = whole(body.billingWeekday ?? current?.billingWeekday ?? null);
+  let billingMonth = whole(body.billingMonth ?? current?.billingMonth ?? null);
+
+  if (cycle === "weekly") {
+    if (billingWeekday === null || billingWeekday < 0 || billingWeekday > 6) return { ok: false, error: "a weekly subscription needs a day of the week" };
+    billingMonth = null;
+  } else if (cycle === "yearly") {
+    if (billingMonth === null || billingMonth < 1 || billingMonth > 12) return { ok: false, error: "a yearly subscription needs a month" };
+    billingWeekday = null;
+  } else {
+    billingWeekday = null;
+    billingMonth = null;
+  }
+
+  return { ok: true, value: { cycle, billingDay, billingWeekday, billingMonth } };
+}
+
+// =====================================================================
+// GET /payments/subscriptions?today=
+// Each one with its next due date, and the totals underneath. Recurring money is
+// the most predictable there is and the app could not see any of it coming.
+// =====================================================================
+router.get("/subscriptions", async (req, res) => {
+  res.json(await subscriptionsSummary(todayFromQuery(req.query.today), Math.min(Math.max(Number(req.query.horizon) || 30, 1), 365)));
 });
 
 router.post("/subscriptions", async (req, res) => {
-  const { name, price, sourceType, sourceId, billingDay } = req.body;
+  const { name, price, sourceType, sourceId, category, note, startDate } = req.body;
   const cleanName = trimmedString(name);
-  if (!cleanName) {
-    return res.status(400).json({ error: "name required" });
-  }
-  if (!isNonNegativeNumber(price)) {
-    return res.status(400).json({ error: "invalid price" });
-  }
-  if (!SUBSCRIPTION_SOURCE_TYPES.includes(sourceType)) {
-    return res.status(400).json({ error: "invalid sourceType" });
-  }
-  if (!isObjectId(sourceId)) {
-    return res.status(400).json({ error: "invalid sourceId" });
-  }
-  if (!Number.isInteger(billingDay) || billingDay < 1 || billingDay > 31) {
-    return res.status(400).json({ error: "invalid billingDay" });
-  }
+  if (!cleanName) return res.status(400).json({ error: "name required" });
+  if (!isNonNegativeNumber(price)) return res.status(400).json({ error: "invalid price" });
+  if (!SUBSCRIPTION_SOURCE_TYPES.includes(sourceType)) return res.status(400).json({ error: "invalid sourceType" });
+  if (!isObjectId(sourceId)) return res.status(400).json({ error: "invalid sourceId" });
+  if (category !== undefined && !EXPENSE_CATEGORIES.includes(category)) return res.status(400).json({ error: "invalid category" });
+
+  const timing = readCycle(req.body, null);
+  if (!timing.ok) return res.status(400).json({ error: timing.error });
+
+  const start = startDate === undefined ? toDayUTC(new Date()) : parseDayUTC(startDate);
+  if (!start) return res.status(400).json({ error: "valid startDate required" });
 
   const source = await resolveSubscriptionSource(sourceType, sourceId);
-  if (!source) return res.status(404).json({ error: `${sourceType} not found` });
+  if (!source) return res.status(404).json({ error: sourceType + " not found" });
 
   const subscription = await Subscription.create({
     name: cleanName,
@@ -949,55 +930,133 @@ router.post("/subscriptions", async (req, res) => {
     sourceType,
     sourceId: source.sourceId,
     sourceNameSnapshot: source.sourceNameSnapshot,
-    billingDay,
+    ...timing.value,
+    startDate: start,
+    category: category ?? "bills",
+    note: typeof note === "string" ? note.trim().slice(0, 200) : "",
   });
-  res.json(subscription);
+  res.json(shapeSubscription(subscription, todayFromQuery(req.body.today)));
 });
 
 router.patch("/subscriptions/:id", async (req, res) => {
-  const { name, price, sourceType, sourceId, billingDay } = req.body;
-
-  let cleanName: string | null = null;
-  if ("name" in req.body) {
-    cleanName = trimmedString(name);
-    if (!cleanName) return res.status(400).json({ error: "name required" });
-  }
-  if ("price" in req.body && !isNonNegativeNumber(price)) {
-    return res.status(400).json({ error: "invalid price" });
-  }
+  const { name, price, sourceType, sourceId, category, note, startDate } = req.body;
 
   const subscription = await Subscription.findById(req.params.id);
   if (!subscription || subscription.archived) return res.status(404).json({ error: "not found" });
 
-  if (cleanName) subscription.name = cleanName;
-  if ("price" in req.body) subscription.price = price;
+  if ("name" in req.body) {
+    const cleanName = trimmedString(name);
+    if (!cleanName) return res.status(400).json({ error: "name required" });
+    subscription.name = cleanName;
+  }
+  if ("price" in req.body) {
+    if (!isNonNegativeNumber(price)) return res.status(400).json({ error: "invalid price" });
+    subscription.price = price;
+  }
+  if ("category" in req.body) {
+    if (!EXPENSE_CATEGORIES.includes(category)) return res.status(400).json({ error: "invalid category" });
+    subscription.category = category;
+  }
+  if ("note" in req.body) subscription.note = typeof note === "string" ? note.trim().slice(0, 200) : "";
+  if ("startDate" in req.body) {
+    const start = parseDayUTC(startDate);
+    if (!start) return res.status(400).json({ error: "valid startDate required" });
+    subscription.startDate = start;
+  }
 
   const sourceTypeProvided = "sourceType" in req.body;
   const sourceIdProvided = "sourceId" in req.body;
-  if (sourceTypeProvided !== sourceIdProvided) {
-    return res.status(400).json({ error: "sourceType and sourceId must be provided together" });
-  }
+  if (sourceTypeProvided !== sourceIdProvided) return res.status(400).json({ error: "sourceType and sourceId must be provided together" });
   if (sourceTypeProvided && sourceIdProvided) {
-    if (!SUBSCRIPTION_SOURCE_TYPES.includes(sourceType)) {
-      return res.status(400).json({ error: "invalid sourceType" });
-    }
+    if (!SUBSCRIPTION_SOURCE_TYPES.includes(sourceType)) return res.status(400).json({ error: "invalid sourceType" });
     if (!isObjectId(sourceId)) return res.status(400).json({ error: "invalid sourceId" });
     const source = await resolveSubscriptionSource(sourceType, sourceId);
-    if (!source) return res.status(404).json({ error: `${sourceType} not found` });
+    if (!source) return res.status(404).json({ error: sourceType + " not found" });
     subscription.sourceType = sourceType;
     subscription.sourceId = source.sourceId;
     subscription.sourceNameSnapshot = source.sourceNameSnapshot;
   }
 
-  if ("billingDay" in req.body) {
-    if (!Number.isInteger(billingDay) || billingDay < 1 || billingDay > 31) {
-      return res.status(400).json({ error: "invalid billingDay" });
-    }
-    subscription.billingDay = billingDay;
+  if ("cycle" in req.body || "billingDay" in req.body || "billingWeekday" in req.body || "billingMonth" in req.body) {
+    const timing = readCycle(req.body, subscription);
+    if (!timing.ok) return res.status(400).json({ error: timing.error });
+    Object.assign(subscription, timing.value);
   }
 
   await subscription.save();
-  res.json(subscription);
+  res.json(shapeSubscription(subscription, todayFromQuery(req.body.today)));
+});
+
+// =====================================================================
+// POST /payments/subscriptions/:id/charge
+//
+// Settle the oldest payment owed: a real expense against the real account, which is
+// the step that never existed. Deliberately a button rather than something that
+// happens on its own, because money leaving an account without being asked is not a
+// convenience.
+//
+// Idempotent by construction: paidThrough moves to the due date just settled, so a
+// second press finds the next one is not owed yet and refuses.
+// =====================================================================
+router.post("/subscriptions/:id/charge", async (req, res) => {
+  const subscription = await Subscription.findById(req.params.id);
+  if (!subscription || subscription.archived) return res.status(404).json({ error: "not found" });
+
+  const todayIso = todayFromQuery(req.body?.today);
+  const due = nextDueOf(subscription);
+  if (due > todayIso && req.body?.force !== true) {
+    return res.status(400).json({ error: subscription.name + " is not due until " + due });
+  }
+
+  const result = await recordExpense({
+    name: subscription.name,
+    amount: subscription.price,
+    category: subscription.category,
+    sourceType: subscription.sourceType,
+    sourceId: subscription.sourceId,
+    date: parseDayUTC(due) ?? toDayUTC(new Date()),
+  });
+  if (!result.ok) return res.status(result.status).json({ error: result.error });
+
+  subscription.paidThrough = parseDayUTC(due);
+  await subscription.save();
+
+  res.json({ ok: true, charged: due, expense: result.expense, subscription: shapeSubscription(subscription, todayIso) });
+});
+
+/**
+ * POST /payments/subscriptions/:id/skip
+ * Mark a period settled without recording an expense: a free month, or one already
+ * paid outside the app. The schedule moves on, the money does not.
+ */
+router.post("/subscriptions/:id/skip", async (req, res) => {
+  const subscription = await Subscription.findById(req.params.id);
+  if (!subscription || subscription.archived) return res.status(404).json({ error: "not found" });
+
+  const due = nextDueOf(subscription);
+  subscription.paidThrough = parseDayUTC(due);
+  await subscription.save();
+  res.json({ ok: true, skipped: due, subscription: shapeSubscription(subscription, todayFromQuery(req.body?.today)) });
+});
+
+/** Undo the last settle. The expense, if there was one, is deleted separately. */
+router.post("/subscriptions/:id/unsettle", async (req, res) => {
+  const subscription = await Subscription.findById(req.params.id);
+  if (!subscription || subscription.archived) return res.status(404).json({ error: "not found" });
+  if (!subscription.paidThrough) return res.status(400).json({ error: "nothing has been settled yet" });
+
+  // Step back one occurrence, or clear it if that lands before the start.
+  const schedule = scheduleOf(subscription);
+  const settled = isoDay(subscription.paidThrough);
+  let previous = null;
+  let cursor = schedule.startDate;
+  while (cursor < settled) {
+    previous = cursor;
+    cursor = occurrenceAfter(schedule, cursor);
+  }
+  subscription.paidThrough = previous ? parseDayUTC(previous) : null;
+  await subscription.save();
+  res.json({ ok: true, subscription: shapeSubscription(subscription, todayFromQuery(req.body?.today)) });
 });
 
 router.delete("/subscriptions/:id", async (req, res) => {

@@ -1,37 +1,15 @@
 import { Schema, model } from "mongoose";
 
-export const DASHBOARD_TRACKER_KINDS = [
-  "sleep",
-  "gym",
-  "english",
-  "vitamins",
-  "steps",
-  "work",
-  "protein",
-  "water",
-  "calories",
-  "tasks",
-  "projects",
-  "projectGym",
-  "projectMedical",
-  "workout",
-] as const;
-export type DashboardTrackerKind = (typeof DASHBOARD_TRACKER_KINDS)[number];
-
 /**
- * The small day-to-day habits the Habits page focuses on. They are ordinary tracker
- * kinds, so ticking one there and ticking it on the dashboard grid write the same
- * row. There is no second source of truth.
+ * One habit's record for one day.
  *
- * `projectMedical` and `projectGym` are Prayer and Books. The keys are leftovers from
- * when those two slots meant something else; they carry months of real history, so
- * the keys stay and only the labels describe what they actually are.
+ * `kind` used to be a fixed enum, which made the database the reason a new habit
+ * needed a deploy. It is now a free slug validated against the Habit collection at
+ * the route layer, so definitions can be created without a schema change. Rows are
+ * keyed by it and carry months of history, so a habit's key never changes once made.
  */
-export const HABIT_PAGE_KINDS = ["vitamins", "projectMedical", "sleep", "steps", "projectGym", "projects", "english"] as const;
-export type HabitPageKind = (typeof HABIT_PAGE_KINDS)[number];
-
 type DashboardTrackerDoc = {
-  kind: DashboardTrackerKind;
+  kind: string;
   date: Date;
   checked: boolean;
   amount: number | null;
@@ -42,7 +20,7 @@ type DashboardTrackerDoc = {
 
 const dashboardTrackerSchema = new Schema<DashboardTrackerDoc>(
   {
-    kind: { type: String, enum: DASHBOARD_TRACKER_KINDS, required: true },
+    kind: { type: String, required: true, trim: true },
     date: { type: Date, required: true, index: true },
     checked: { type: Boolean, default: false },
     amount: { type: Number, default: null, min: 0 },

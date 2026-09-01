@@ -31,16 +31,28 @@ export type PendingSet = {
 export type SyncedSet = { sessionId: string; exerciseId: string; setNumber: number; _id?: string };
 
 export type QueueState = {
-  /** "sessionId|exerciseId|setNumber" for every write still owed to the server. */
+  /**
+   * Only the writes worth interrupting someone for: one that has already come back
+   * failed, or anything at all while the phone is offline. A write that left a
+   * moment ago and is simply in flight is not in here, because saving normally
+   * should be silent.
+   */
   keys: Set<string>;
   count: number;
+  /** Everything still owed, in flight included. */
+  owed: number;
   syncing: boolean;
   /** Set when the server refused a write outright, so it will never be retried. */
   lastError: string | null;
 };
 
+export type DroppedSet = { sessionId: string; exerciseId: string; setNumber: number; reason: string };
+
 const STORAGE_KEY = "workout:pending-sets:v1";
 const BACKOFF_MS = [1_000, 3_000, 8_000, 20_000, 45_000];
+// Axios waits forever by default. On a dying signal a hung request would sit there
+// looking like success; this turns it into a failure the queue can retry.
+const REQUEST_TIMEOUT_MS = 15_000;
 
 export function pendingKey(sessionId: string, exerciseId: string, setNumber: number): string {
   return `${sessionId}|${exerciseId}|${setNumber}`;
@@ -52,16 +64,20 @@ export function pendingKey(sessionId: string, exerciseId: string, setNumber: num
 const entries = new Map<string, PendingSet>();
 const listeners = new Set<() => void>();
 const syncListeners = new Set<(s: SyncedSet) => void>();
+const dropListeners = new Set<(d: DroppedSet) => void>();
 
 let syncing = false;
 let lastError: string | null = null;
 let retryTimer: number | null = null;
 
 // Rebuilt on every change so useSyncExternalStore can compare by reference.
-let snapshot: QueueState = { keys: new Set(), count: 0, syncing: false, lastError: null };
+let snapshot: QueueState = { keys: new Set(), count: 0, owed: 0, syncing: false, lastError: null };
 
 function rebuild() {
-  snapshot = { keys: new Set(entries.keys()), count: entries.size, syncing, lastError };
+  const offline = typeof navigator !== "undefined" && navigator.onLine === false;
+  const keys = new Set<string>();
+  for (const [key, e] of entries) if (offline || e.attempts > 0) keys.add(key);
+  snapshot = { keys, count: keys.size, owed: entries.size, syncing, lastError };
   for (const l of listeners) l();
 }
 
@@ -136,7 +152,7 @@ export async function flush(): Promise<void> {
         exerciseId: entry.exerciseId,
         setNumber: entry.setNumber,
         ...entry.fields,
-      });
+      }, { timeout: REQUEST_TIMEOUT_MS });
       // Only clear the slot if nothing newer was queued while this was in flight.
       const current = entries.get(key);
       if (current && current.updatedAt === entry.updatedAt) entries.delete(key);
@@ -144,8 +160,12 @@ export async function flush(): Promise<void> {
       for (const l of syncListeners) l(synced);
     } catch (err) {
       if (isPermanent(err)) {
+        // Never coming back. Nobody would notice it vanish from the queue, so this
+        // is the one case the page is told about outright.
         entries.delete(key);
         lastError = describe(err);
+        const dropped: DroppedSet = { sessionId: entry.sessionId, exerciseId: entry.exerciseId, setNumber: entry.setNumber, reason: lastError };
+        for (const l of dropListeners) l(dropped);
       } else {
         entry.attempts += 1;
       }
@@ -155,6 +175,11 @@ export async function flush(): Promise<void> {
   syncing = false;
   persist();
   rebuild();
+
+  // A set ticked while this pass was in flight has not been tried even once. Making
+  // it sit out a backoff step meant for failures would delay a save that has no
+  // reason to be slow, so it goes straight round again.
+  if ([...entries.values()].some((e) => e.attempts === 0)) return void flush();
   schedule();
 }
 
@@ -197,6 +222,12 @@ export function onSetSynced(cb: (s: SyncedSet) => void): () => void {
   return () => syncListeners.delete(cb);
 }
 
+/** Fires when the server refuses a write for good, so the page can say so. */
+export function onSetDropped(cb: (d: DroppedSet) => void): () => void {
+  dropListeners.add(cb);
+  return () => dropListeners.delete(cb);
+}
+
 export function useSetQueue(): QueueState {
   return useSyncExternalStore(
     (cb) => {
@@ -213,7 +244,13 @@ rebuild();
 
 if (typeof window !== "undefined") {
   // Coming back into signal, or back into the foreground, is the moment worth retrying.
-  window.addEventListener("online", () => void flush());
+  window.addEventListener("online", () => {
+    rebuild();
+    void flush();
+  });
+  // Losing signal makes everything already queued worth showing, without waiting for
+  // a request to fail first.
+  window.addEventListener("offline", rebuild);
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") void flush();
   });
