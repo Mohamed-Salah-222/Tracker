@@ -6,6 +6,7 @@ import { useSidebar } from "../components/ui/sidebar-context";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "../components/ui/sheet";
 import { Sprout } from "lucide-react";
 import { isItemActive, navSections } from "../lib/navigation";
+import { StreakPill } from "./StreakPill";
 
 /** The dark nav card. Identical on desktop and inside the mobile drawer. */
 function NavCard({ pathname, onNavigate }: { pathname: string; onNavigate?: () => void }) {
@@ -68,6 +69,8 @@ function NavCard({ pathname, onNavigate }: { pathname: string; onNavigate?: () =
           </SidebarGroup>
         ))}
       </SidebarContent>
+
+      <StreakPill onNavigate={onNavigate} />
     </div>
   );
 }

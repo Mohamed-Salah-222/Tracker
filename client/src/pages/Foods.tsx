@@ -57,10 +57,19 @@ function getApiError(e: unknown): string {
  * because of the `|| 0` that followed it. A typo should stop the save, not be
  * quietly stored as a real macro value.
  */
+/**
+ * A macro figure off the form. Blank counts as zero, anything not a non-negative
+ * number is rejected.
+ *
+ * This used to run the text past a regex first. The backslashes were lost from that
+ * pattern at some point, leaving /^d*.?d+$/, which matches the letter d rather than a
+ * digit: every real number was refused and the form could not be saved at all. Number
+ * already rejects everything the pattern was there to catch, so there is no pattern
+ * any more, which is one fewer thing that can rot.
+ */
 function parseMacro(raw: string): number | null {
   const t = raw.trim();
   if (t === "") return 0;
-  if (!/^d*.?d+$/.test(t)) return null;
   const v = Number(t);
   return Number.isFinite(v) && v >= 0 ? v : null;
 }

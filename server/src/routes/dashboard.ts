@@ -7,7 +7,9 @@ import { CalorieEntry } from "../models/CalorieEntry";
 import { WaterEntry } from "../models/WaterEntry";
 import { CheatDay } from "../models/CheatDay";
 import { SleepEntry } from "../models/SleepEntry";
+import { IncomeEntry } from "../models/IncomeEntry";
 import { durationLabel, inBand } from "../lib/sleep";
+import { caloriesHit, proteinHit, waterHit } from "../lib/daily-facts";
 import { Task } from "../models/Task";
 import { kitchenSummary } from "../lib/kitchen-summary";
 import { DEFAULT_MONTHLY, TrackerGoals, loadTrackerGoals, type TrackerGoalValues } from "../models/TrackerGoals";
@@ -281,6 +283,24 @@ router.get("/", async (req, res) => {
    * range nothing could read or outside it. The log holds the duration now and the
    * row is filled in from it, the way GYM is filled in from the workout log.
    */
+  /**
+   * What was earned each day, from the income log.
+   *
+   * The WORK row used to be its own little ledger: a number typed into the grid that
+   * had nothing to do with the day's earnings recorded on the Income page. Logging a
+   * shift left the row empty, so the same money had to be entered twice or the row
+   * simply lied.
+   */
+  const incomeRows = await IncomeEntry.find({ date: { $gte: rangeStart, $lt: monthEnd }, deletedAt: null }).select({ date: 1, amount: 1, minutes: 1 });
+  const incomeByDay = new Map<string, { amount: number; minutes: number }>();
+  for (const row of incomeRows) {
+    const key = iso(row.date);
+    const found = incomeByDay.get(key) ?? { amount: 0, minutes: 0 };
+    found.amount += row.amount;
+    found.minutes += row.minutes;
+    incomeByDay.set(key, found);
+  }
+
   const sleepRows = await SleepEntry.find({ date: { $gte: rangeStart, $lt: monthEnd } });
   const sleepByDay = new Map<string, (typeof sleepRows)[number]>();
   for (const row of sleepRows) sleepByDay.set(iso(row.date), row);
@@ -343,32 +363,33 @@ router.get("/", async (req, res) => {
   function intakeCellFor(kind: string, dayIso: string, isToday: boolean): { state: "done" | "excused" | null; detail: string } | null {
     if (kind === "water") {
       const ml = waterByDay.get(dayIso) ?? 0;
-      if (ml <= 0) return null;
+      const hit = waterHit(ml, goals);
+      if (hit === null) return null;
       const target = goals.waterTargetMl;
       const litres = (v: number) => (v % 1000 === 0 ? `${v / 1000}L` : `${(v / 1000).toFixed(1)}L`);
-      return ml >= target ? { state: "done", detail: `${litres(ml)} drunk` } : { state: null, detail: `${litres(ml)} of ${litres(target)}` };
+      return hit ? { state: "done", detail: `${litres(ml)} drunk` } : { state: null, detail: `${litres(ml)} of ${litres(target)}` };
     }
 
     const intake = intakeByDay.get(dayIso);
     if (!intake || intake.cal <= 0) return null;
-    if (cheatDays.has(dayIso)) return { state: "excused", detail: "Cheat day" };
+    const cheat = cheatDays.has(dayIso);
+    if (cheat) return { state: "excused", detail: "Cheat day" };
 
     if (kind === "calories") {
       const cal = Math.round(intake.cal);
       const floor = goals.caloriesMinTarget;
+      const hit = caloriesHit(intake.cal, goals, { isToday, cheat });
+      // Under the ceiling is the whole test, so today says how much room is left
+      // rather than waiting for the day to be over before it will tick.
+      if (hit) return { state: "done", detail: isToday ? `${cal} cal, ${goals.caloriesTarget - cal} left` : `${cal} cal logged` };
+      // The wording says which way it missed, which the verdict on its own cannot.
       if (cal > goals.caloriesTarget) return { state: null, detail: `${cal} cal, over by ${cal - goals.caloriesTarget}` };
-      // A ceiling can only be judged once the day is over. Marking it done at
-      // breakfast would show a green tick for a day still being eaten.
-      if (isToday) return { state: null, detail: `${cal} cal so far, ${goals.caloriesTarget - cal} left` };
-      // With a floor set, eating far too little is a miss rather than a win.
       if (floor > 0 && cal < floor) return { state: null, detail: `${cal} cal, ${floor - cal} under the floor` };
-      return { state: "done", detail: `${cal} cal logged` };
+      return { state: null, detail: `${cal} cal logged` };
     }
     if (kind === "protein") {
-      // A floor, unlike calories: once it is reached the day cannot un-reach it, so
-      // today is allowed to tick as soon as you get there.
       const p = Math.round(intake.protein);
-      return p >= goals.proteinTarget ? { state: "done", detail: `${p}g protein` } : { state: null, detail: `${p}g of ${goals.proteinTarget}g` };
+      return proteinHit(intake.protein, goals) ? { state: "done", detail: `${p}g protein` } : { state: null, detail: `${p}g of ${goals.proteinTarget}g` };
     }
     return null;
   }
@@ -437,9 +458,27 @@ router.get("/", async (req, res) => {
       const workGoal = activeDays.filter((day) => !day.weekend).length * goals.workDayMoney;
       const cells: AmountCell[] = days.map((day) => {
         const doc = trackerByKindDay.get(`${kind}:${day.iso}`);
-        const amount = doc?.amount ?? 0;
-        const state = day.active ? (day.weekend && !doc ? "excused" : trackerState(doc, amount > 0)) : "done";
+        // The income log decides where it has something to say. A day it knows
+        // nothing about keeps whatever was typed into the grid, so the months that
+        // were only ever recorded here are not wiped.
+        const earned = incomeByDay.get(day.iso) ?? null;
+        const amount = earned ? Math.round(earned.amount * 100) / 100 : (doc?.amount ?? 0);
+        const state = day.active ? (earned ? "done" : day.weekend && !doc ? "excused" : trackerState(doc, amount > 0)) : "done";
         const checked = day.active ? day.weekend || dailySatisfied(state) : true;
+
+        const hours = earned ? Math.round((earned.minutes / 60) * 10) / 10 : 0;
+        const detail = !day.active
+          ? "Prefilled warm-up day"
+          : earned
+            ? `${amount} from ${hours}h on the income page`
+            : state === "excused"
+              ? "Intentional skip. Add money if you worked."
+              : amount
+                ? `${amount}`
+                : day.weekend
+                  ? "Weekend auto-checked. Add money if you worked."
+                  : "Log money";
+
         return {
           date: day.iso,
           amount,
@@ -449,7 +488,7 @@ router.get("/", async (req, res) => {
           target: goals.workDayMoney,
           weekend: day.weekend,
           state,
-          detail: day.active ? (state === "excused" ? "Intentional skip. Add money if you worked." : amount ? `$${amount}` : day.weekend ? "Weekend auto-checked. Add money if you worked." : "Log money") : "Prefilled warm-up day",
+          detail,
         };
       });
       const actual = Math.round(cells.reduce((sum, cell) => sum + (cell.editable ? cell.amount : 0), 0) * 100) / 100;
@@ -912,6 +951,18 @@ router.put("/tracker/:kind/:date", async (req, res) => {
   const amount = req.body.amount === null || req.body.amount === undefined || req.body.amount === "" ? null : Number(req.body.amount);
   if (amount !== null && (!Number.isFinite(amount) || amount < 0)) {
     return res.status(400).json({ error: "Amount must be a positive number" });
+  }
+
+  /**
+   * A day whose money came from the income log cannot be overtyped here.
+   *
+   * The row reads from that log wherever it has something to say, so a number entered
+   * against the same day would be stored, ignored on the next load, and quietly
+   * disappear. Refusing it and saying where the figure lives is the honest answer.
+   */
+  if (kind === "work" && req.body.amount !== undefined) {
+    const logged = await IncomeEntry.exists({ date, deletedAt: null });
+    if (logged) return res.status(400).json({ error: "That day's money comes from the income page. Edit it there." });
   }
 
   const doc = await DashboardTracker.findOneAndUpdate(

@@ -1,5 +1,5 @@
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
-import { Suspense, lazy, type CSSProperties } from "react";
+import { Suspense, lazy, useEffect, type CSSProperties } from "react";
 import { SidebarProvider } from "./components/ui/sidebar";
 import { useSidebar } from "./components/ui/sidebar-context";
 import { Toaster } from "./components/ui/sonner";
@@ -7,6 +7,7 @@ import { AppSidebar } from "./components/AppSidebar";
 import { currentPageTitle } from "./lib/navigation";
 import { PrivateRoute } from "./components/PrivateRoute";
 import { InstallHint, OfflinePill } from "./components/ConnectionStatus";
+import { pingUsage, watchWrites } from "./lib/streak";
 import { Menu } from "lucide-react";
 
 // Route-level code splitting: each page becomes its own chunk, so opening the app
@@ -22,6 +23,8 @@ const Kitchen = lazy(() => import("./pages/Kitchen"));
 const Habits = lazy(() => import("./pages/Habits"));
 const Goals = lazy(() => import("./pages/Goals"));
 const Journal = lazy(() => import("./pages/Journal"));
+const Badges = lazy(() => import("./pages/Badges"));
+const Settings = lazy(() => import("./pages/Settings"));
 const GoalPage = lazy(() => import("./pages/GoalPage"));
 const Workout = lazy(() => import("./pages/Workout"));
 
@@ -61,6 +64,16 @@ function MobileTopBar() {
 function AppContent() {
   const location = useLocation();
   const isDashboard = location.pathname === "/";
+
+  /**
+   * Keeping the tracker is itself the habit, so opening it counts, and so does every
+   * write from here on. Both funnel into one ping that the server only counts once a
+   * day, and a failure here is swallowed: no streak is worth a broken page.
+   */
+  useEffect(() => {
+    watchWrites();
+    void pingUsage("open");
+  }, []);
 
   return (
     <SidebarProvider className="h-svh overflow-hidden" style={{ "--sidebar-width": "15rem" } as CSSProperties}>
@@ -106,6 +119,8 @@ function AppContent() {
               <Route path="/goals/:id" element={<GoalPage />} />
               <Route path="/today" element={<Today />} />
               <Route path="/journal" element={<Journal />} />
+              <Route path="/badges" element={<Badges />} />
+              <Route path="/settings" element={<Settings />} />
               <Route path="/calories" element={<Calories />} />
               <Route path="/kitchen" element={<Kitchen />} />
               {/* Old bookmarks keep working. */}

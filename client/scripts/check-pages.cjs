@@ -73,7 +73,13 @@ const server = http.createServer((req, res) => {
 
   await visit("/", "dashboard");
   await visit("/today", "today (sleep + journal)");
-  await visit("/today", "today, open sleep editor", () => click("Log this night"));
+  // The sleep card offers "Log this night" only when the night is blank, and an
+  // "Edit this night" pencil once it is not. Either opens the same editor.
+  await visit("/today", "today, open sleep editor", async () => {
+    const log = page.getByRole("button", { name: "Log this night", exact: false }).first();
+    if (await log.count()) return click("Log this night");
+    return click("Edit this night");
+  });
   await visit("/journal", "journal archive");
   await visit("/calories", "calories");
   await visit("/calories", "calories + body modal", () => click("Body"));

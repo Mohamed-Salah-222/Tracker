@@ -21,6 +21,7 @@ import workoutsRouter from "./routes/workouts";
 import sleepRouter from "./routes/sleep";
 import journalRouter from "./routes/journal";
 import bodyRouter from "./routes/body";
+import streakRouter from "./routes/streak";
 
 dotenv.config();
 
@@ -60,6 +61,7 @@ app.use(
 app.use("/api/sleep", sleepRouter);
 app.use("/api/journal", journalRouter);
 app.use("/api/body", bodyRouter);
+app.use("/api/streak", streakRouter);
 
 app.use("/api/income", incomeRouter);
 
