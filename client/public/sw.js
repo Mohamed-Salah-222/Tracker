@@ -14,7 +14,7 @@
  *
  * Bump SHELL_VERSION whenever this file changes. Old caches are dropped on activate.
  */
-const SHELL_VERSION = "v1";
+const SHELL_VERSION = "v2";
 const SHELL_CACHE = `lifetracker-shell-${SHELL_VERSION}`;
 const ASSET_CACHE = `lifetracker-assets-${SHELL_VERSION}`;
 const API_CACHE = `lifetracker-api-${SHELL_VERSION}`;
@@ -81,6 +81,101 @@ self.addEventListener("activate", (event) => {
 /** The page asks for the new worker as soon as the user agrees to reload. */
 self.addEventListener("message", (event) => {
   if (event.data === "skip-waiting") void self.skipWaiting();
+});
+
+/* =====================================================================
+   Reminders
+   =====================================================================
+   A push arrives whether or not the app is open, which is the entire point: a
+   habit tracker that can only nudge you while you are already looking at it is
+   not a reminder, it is a label.
+   ===================================================================== */
+self.addEventListener("push", (event) => {
+  let payload = { title: "LifeTracker", body: "", url: "/" };
+  try {
+    if (event.data) payload = { ...payload, ...event.data.json() };
+  } catch {
+    // A push with no readable body still deserves to appear.
+    payload.body = event.data ? event.data.text() : "";
+  }
+
+  event.waitUntil(
+    self.registration.showNotification(payload.title, {
+      body: payload.body || undefined,
+      icon: "/icons/icon-192.png",
+      badge: "/icons/icon-192.png",
+      // Same tag replaces an older copy rather than stacking three of them.
+      tag: payload.tag || "lifetracker",
+      renotify: Boolean(payload.tag),
+      data: { url: payload.url || "/" },
+    }),
+  );
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const target = new URL(event.notification.data?.url || "/", self.location.origin).href;
+
+  event.waitUntil(
+    (async () => {
+      const clients = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+      // Reuse a tab that is already open rather than piling up windows.
+      for (const client of clients) {
+        if (client.url.startsWith(self.location.origin)) {
+          await client.focus();
+          if ("navigate" in client) await client.navigate(target);
+          return;
+        }
+      }
+      await self.clients.openWindow(target);
+    })(),
+  );
+});
+
+/**
+ * Where the API lives.
+ *
+ * The worker is a static file, so it cannot be built with the API base in it, and the
+ * API is on another origin. The page tells it once and it is kept in the cache, which
+ * is the only storage here that survives the worker being stopped and restarted.
+ */
+const API_KEY_URL = "/__lifetracker_api__";
+
+async function rememberApiBase(base) {
+  const cache = await caches.open(SHELL_CACHE);
+  await cache.put(API_KEY_URL, new Response(base));
+}
+
+async function apiBase() {
+  const hit = await caches.match(API_KEY_URL);
+  return hit ? hit.text() : "";
+}
+
+self.addEventListener("message", (event) => {
+  if (event.data && event.data.type === "api-base" && typeof event.data.base === "string") {
+    event.waitUntil(rememberApiBase(event.data.base));
+  }
+});
+
+/**
+ * The browser can retire a subscription on its own, usually after an update. It says
+ * so once, and this is the only chance to hand the server the replacement before the
+ * old endpoint starts bouncing.
+ */
+self.addEventListener("pushsubscriptionchange", (event) => {
+  event.waitUntil(
+    (async () => {
+      const base = await apiBase();
+      if (!base) return; // The page will re-report on its next load.
+      const options = event.oldSubscription?.options ?? { userVisibleOnly: true };
+      const fresh = await self.registration.pushManager.subscribe(options);
+      await fetch(base + "/reminders/subscribe", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ...fresh.toJSON(), timezone: Intl.DateTimeFormat().resolvedOptions().timeZone }),
+      });
+    })(),
+  );
 });
 
 const isApi = (url) => url.pathname.startsWith("/api/") || url.pathname.includes("/api/");

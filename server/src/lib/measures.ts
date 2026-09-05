@@ -20,6 +20,7 @@ import { WaterEntry } from "../models/WaterEntry";
 import { BODY_METRICS } from "./body-metrics";
 import { countWhere, dailyFacts, longestRun, sumOf, type DayFact } from "./daily-facts";
 import { streakSummary } from "./streak";
+import { loadSettings } from "../models/Settings";
 
 /**
  * Every number a badge can be measured against.
@@ -70,6 +71,7 @@ export async function allMeasures(todayIso: string, force = false): Promise<{ me
 
   const facts = await dailyFacts(todayIso);
   const usage = await streakSummary(todayIso);
+  const weekStartsOn = (await loadSettings()).week.startsOn;
 
   const [
     tasks,
@@ -193,8 +195,11 @@ export async function allMeasures(todayIso: string, force = false): Promise<{ me
     workoutSessions: completedSessions.length,
     workoutSets: lifting.sets,
     workoutVolume: Math.round(lifting.volume),
-    workoutWeeks: new Set(completedSessions.map((s) => weekKey(s.date))).size,
-    workoutBestWeek: bestPerWeek(completedSessions.map((s) => s.date)),
+    workoutWeeks: new Set(completedSessions.map((s) => weekKey(s.date, weekStartsOn))).size,
+    workoutBestWeek: bestPerWeek(
+      completedSessions.map((s) => s.date),
+      weekStartsOn,
+    ),
 
     // ---- body ----
     bodyReadings: weights.length,
@@ -227,19 +232,23 @@ export async function allMeasures(todayIso: string, force = false): Promise<{ me
   return { measures, facts };
 }
 
-/** The Monday-keyed week a date belongs to. */
-function weekKey(date: Date): string {
+/**
+ * The week a date belongs to, keyed by the date its week started.
+ *
+ * Which day that is comes from the settings, so "sessions in one week" means the same
+ * week the rest of the app is talking about rather than an assumed Monday.
+ */
+function weekKey(date: Date, startsOn: number): string {
   const d = new Date(date);
-  const dow = d.getUTCDay();
-  d.setUTCDate(d.getUTCDate() - (dow === 0 ? 6 : dow - 1));
+  d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() - startsOn + 7) % 7));
   return iso(d);
 }
 
 /** The most sessions ever done inside one week. */
-function bestPerWeek(dates: Date[]): number {
+function bestPerWeek(dates: Date[], startsOn: number): number {
   const byWeek = new Map<string, number>();
   for (const date of dates) {
-    const key = weekKey(date);
+    const key = weekKey(date, startsOn);
     byWeek.set(key, (byWeek.get(key) ?? 0) + 1);
   }
   return [...byWeek.values()].reduce((best, n) => Math.max(best, n), 0);

@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { AnimatePresence, motion } from "motion/react";
 import { api } from "../lib/api";
 import { todayISO } from "../lib/today";
+import { useSettings } from "../lib/useSettings";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Card, CardContent } from "../components/ui/card";
@@ -148,8 +149,6 @@ function nextDayInCycle(splitId: string, last: LastSession): string {
 }
 
 const REST_PRESETS = [60, 90, 120, 180];
-const REST_STORAGE_KEY = "workout:rest-seconds";
-const REST_ENABLED_KEY = "workout:rest-timer-enabled";
 
 // =====================================================================
 // MAIN
@@ -731,16 +730,23 @@ function ExerciseInfoModal({
           <DialogTitle>{movementName(movementId)}</DialogTitle>
         </DialogHeader>
 
-        {/* Anatomy illustration. Drop a file at public/exercises/<id>.webp and it
-            appears here; until then this is a labelled placeholder. */}
-        <div className="grid aspect-[4/3] w-full place-items-center overflow-hidden rounded-xl border border-dashed border-border bg-muted/40">
+        {/*
+          Anatomy illustration. Drop a file at public/exercises/<id>.webp and it
+          appears here; until then this is a labelled placeholder.
+
+          The background stays white in both themes. These are transparent line
+          drawings in near-black ink, so on a dark surface the exercise simply was not
+          there. Tinting the artwork is not an option when it is a fixed image, so the
+          panel it sits on is the thing that stays light.
+        */}
+        <div className="grid aspect-[4/3] w-full place-items-center overflow-hidden rounded-xl border border-dashed border-border bg-white">
           {imgOk ? (
             <img src={exerciseImagePath(movementId)} alt={`Muscles worked by ${movementName(movementId)}`} onError={() => setImgOk(false)} className="h-full w-full object-contain" />
           ) : (
             <div className="px-6 text-center">
-              <ImageIcon className="mx-auto mb-2 h-6 w-6 text-muted-foreground" aria-hidden />
-              <div className="text-xs font-medium text-muted-foreground">Illustration coming</div>
-              <div className="mt-0.5 font-mono text-[10px] text-muted-foreground/70">public/exercises/{movementId}.webp</div>
+              <ImageIcon className="mx-auto mb-2 h-6 w-6 text-neutral-400" aria-hidden />
+              <div className="text-xs font-medium text-neutral-500">Illustration coming</div>
+              <div className="mt-0.5 font-mono text-[10px] text-neutral-400">public/exercises/{movementId}.webp</div>
             </div>
           )}
         </div>
@@ -1704,12 +1710,11 @@ type RestTimer = ReturnType<typeof useRestTimer>;
  */
 function useRestTimer() {
   // Off is a perfectly reasonable way to train, so the whole feature is a switch.
-  // Persisted per device: it is a preference about this phone, not about the plan.
-  const [enabled, setEnabled] = useState(() => localStorage.getItem(REST_ENABLED_KEY) !== "0");
-  const [duration, setDuration] = useState(() => {
-    const stored = Number(localStorage.getItem(REST_STORAGE_KEY));
-    return REST_PRESETS.includes(stored) ? stored : 90;
-  });
+  // It used to be saved per device, which meant turning it off twice: once on the
+  // phone at the gym and again on the laptop. It is a setting now, like the rest.
+  const { settings, update } = useSettings();
+  const enabled = settings.workout.restTimerEnabled;
+  const duration = REST_PRESETS.includes(settings.workout.restSeconds) ? settings.workout.restSeconds : 90;
   const [endsAt, setEndsAt] = useState<number | null>(null);
   const [paused, setPaused] = useState<number | null>(null); // seconds left while paused
 
@@ -1744,20 +1749,24 @@ function useRestTimer() {
     setPaused((p) => (p === null ? p : Math.max(0, p + delta)));
   }, []);
 
-  const changeDuration = useCallback((seconds: number) => {
-    setDuration(seconds);
-    localStorage.setItem(REST_STORAGE_KEY, String(seconds));
-  }, []);
+  const changeDuration = useCallback(
+    (seconds: number) => {
+      void update({ workout: { restSeconds: seconds } });
+    },
+    [update],
+  );
 
-  const changeEnabled = useCallback((on: boolean) => {
-    setEnabled(on);
-    localStorage.setItem(REST_ENABLED_KEY, on ? "1" : "0");
-    if (on) primeBeep();
-    else {
-      setEndsAt(null);
-      setPaused(null);
-    }
-  }, []);
+  const changeEnabled = useCallback(
+    (on: boolean) => {
+      void update({ workout: { restTimerEnabled: on } });
+      if (on) primeBeep();
+      else {
+        setEndsAt(null);
+        setPaused(null);
+      }
+    },
+    [update],
+  );
 
   return useMemo(
     () => ({ enabled, setEnabled: changeEnabled, duration, changeDuration, endsAt, pausedAt: paused, running, start, stop, toggle, adjust }),

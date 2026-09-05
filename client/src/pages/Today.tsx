@@ -10,10 +10,13 @@ import { Skeleton } from "../components/ui/skeleton";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
 import { TaskRow } from "../components/TaskRow";
 import SleepCard from "../components/SleepCard";
+import { TaskWhenDialog } from "../components/TaskWhen";
+import { AheadCard } from "../components/AheadCard";
 import JournalCard from "../components/JournalCard";
 import { CalendarDays, Check, ChevronLeft, ChevronRight, ListChecks, Plus, Sparkles, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
 import { fullDate, getApiError, relativeDay, shiftDay, taskDay, weekdayLong, type Task } from "../lib/tasks";
+import { useSettings } from "../lib/useSettings";
 
 // ===== Motion =====
 const fadeUp = {
@@ -51,6 +54,7 @@ function spawnConfetti(originEl: HTMLElement) {
 // MAIN
 // =====================================================================
 export default function Today() {
+  const { enabled } = useSettings();
   const [selectedDate, setSelectedDate] = useState(todayISO);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [overdue, setOverdue] = useState<Task[]>([]);
@@ -71,6 +75,24 @@ export default function Today() {
   }, []);
 
   const isToday = selectedDate === todayISO();
+
+  /**
+   * The time and reminder editor. One dialog for whichever row asked for it, rather
+   * than one mounted per task.
+   */
+  const [whenFor, setWhenFor] = useState<Task | null>(null);
+  const saveWhen = async (patch: { time: string | null; remindAt: string | null }) => {
+    if (!whenFor) return;
+    const target = whenFor;
+    writeTasks(tasksRef.current.map((t) => (t._id === target._id ? { ...t, ...patch, remindedAt: null } : t)));
+    try {
+      await api.patch(`/tasks/${target._id}`, patch);
+    } catch (e) {
+      toast.error(getApiError(e));
+      void load();
+    }
+  };
+
 
   // ----- Load -----
   const load = useCallback(async () => {
@@ -106,7 +128,26 @@ export default function Today() {
   }, [loadOverdue]);
 
   // ----- Derived -----
-  const incomplete = useMemo(() => tasks.filter((t) => !t.done), [tasks]);
+  /**
+   * The day in the order it happens.
+   *
+   * Anything with a time comes first, earliest first; everything else keeps the order
+   * it was added in. A list that ignores the times it was given is not a plan for the
+   * day, it is just a list.
+   */
+  const incomplete = useMemo(
+    () =>
+      tasks
+        .filter((t) => !t.done)
+        .slice()
+        .sort((a, b) => {
+          if (a.time && b.time) return a.time.localeCompare(b.time);
+          if (a.time) return -1;
+          if (b.time) return 1;
+          return 0;
+        }),
+    [tasks],
+  );
   const completed = useMemo(() => tasks.filter((t) => t.done), [tasks]);
   const total = tasks.length;
   const doneCount = completed.length;
@@ -274,9 +315,11 @@ export default function Today() {
       </motion.section>
 
       {/* ===== Last night ===== */}
-      <motion.section {...stagger(2)} aria-label="Sleep">
-        <SleepCard date={selectedDate} />
-      </motion.section>
+      {enabled("sleep") && (
+        <motion.section {...stagger(2)} aria-label="Sleep">
+          <SleepCard date={selectedDate} />
+        </motion.section>
+      )}
 
       {/* ===== Overdue ===== */}
       <AnimatePresence>
@@ -391,7 +434,7 @@ export default function Today() {
                 <CardContent className="px-2 py-0">
                   <AnimatePresence initial={false}>
                     {incomplete.map((t) => (
-                      <TaskRow key={t._id} task={t} onToggle={toggle} onRename={rename} onMove={move} onDelete={setPendingDelete} moveLabel={isToday ? "Move to tomorrow" : "Move to next day"} />
+                      <TaskRow key={t._id} task={t} onToggle={toggle} onRename={rename} onMove={move} onDelete={setPendingDelete} onSetWhen={setWhenFor} moveLabel={isToday ? "Move to tomorrow" : "Move to next day"} />
                     ))}
                   </AnimatePresence>
                 </CardContent>
@@ -409,7 +452,7 @@ export default function Today() {
                 <CardContent className="px-2 py-0">
                   <AnimatePresence initial={false}>
                     {completed.map((t) => (
-                      <TaskRow key={t._id} task={t} onToggle={toggle} onRename={rename} onDelete={setPendingDelete} />
+                      <TaskRow key={t._id} task={t} onToggle={toggle} onRename={rename} onDelete={setPendingDelete} onSetWhen={setWhenFor} />
                     ))}
                   </AnimatePresence>
                 </CardContent>
@@ -419,10 +462,19 @@ export default function Today() {
         </>
       )}
 
+      {/* ===== What is coming ===== */}
+      {isToday && (
+        <motion.section {...stagger(5)} aria-label="Coming up">
+          <AheadCard today={selectedDate} />
+        </motion.section>
+      )}
+
       {/* ===== The day in your own words ===== */}
-      <motion.section {...stagger(6)} aria-label="Journal">
-        <JournalCard key={selectedDate} date={selectedDate} />
-      </motion.section>
+      {enabled("journal") && (
+        <motion.section {...stagger(6)} aria-label="Journal">
+          <JournalCard key={selectedDate} date={selectedDate} />
+        </motion.section>
+      )}
 
       {/* ===== Link out ===== */}
       <div className="flex justify-center pt-1">
@@ -431,6 +483,8 @@ export default function Today() {
           Open the month calendar
         </Link>
       </div>
+
+      {whenFor && <TaskWhenDialog task={whenFor} open onOpenChange={(o) => !o && setWhenFor(null)} onSave={saveWhen} />}
 
       <AlertDialog open={!!pendingDelete} onOpenChange={(o) => !o && setPendingDelete(null)}>
         <AlertDialogContent>

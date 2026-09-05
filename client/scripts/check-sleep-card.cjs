@@ -29,7 +29,15 @@ const server = http.createServer((q, r) => {
   r.end(fs.readFileSync(f));
 });
 
-const today = new Date().toISOString().slice(0, 10);
+/**
+ * The local calendar day, not the UTC one.
+ *
+ * Between local midnight and the UTC offset the two disagree, and everything the app
+ * labels "today" comes from the browser's clock. A script that asks UTC tests the
+ * wrong day for the first few hours of every day, and passes for the other twenty.
+ */
+const localDay = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const today = localDay(new Date());
 const shift = (iso, by) => new Date(Date.parse(iso + "T00:00:00Z") + by * 86400000).toISOString().slice(0, 10);
 const DATES = [today, shift(today, -1), shift(today, -2)];
 

@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { CloudOff, Download } from "lucide-react";
+import { CloudOff, CloudUpload, Download } from "lucide-react";
 import { toast } from "sonner";
 import { useInstallPrompt, useInstalled, useOnline } from "../lib/pwa";
+import { subscribeToQueue, type QueueSnapshot } from "../lib/offlineQueue";
 
 /**
  * The offline pill.
@@ -14,6 +15,9 @@ import { useInstallPrompt, useInstalled, useOnline } from "../lib/pwa";
 export function OfflinePill({ className = "" }: { className?: string }) {
   const online = useOnline();
   const wasOffline = useRef(false);
+  const [queue, setQueue] = useState<QueueSnapshot>({ pending: 0, syncing: false, oldestAt: null, lastError: null });
+
+  useEffect(() => subscribeToQueue(setQueue), []);
 
   useEffect(() => {
     if (!online) {
@@ -26,12 +30,23 @@ export function OfflinePill({ className = "" }: { className?: string }) {
     }
   }, [online]);
 
-  if (online) return null;
+  // Anything still waiting is worth saying even once the network is back, because it
+  // is the difference between "saved" and "about to be saved".
+  if (online && queue.pending === 0) return null;
+
+  if (online) {
+    return (
+      <span className={`inline-flex items-center gap-1.5 rounded-full border border-border-strong px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${className}`}>
+        <CloudUpload className="h-3 w-3" aria-hidden />
+        {queue.syncing ? "Saving" : "Waiting"} {queue.pending}
+      </span>
+    );
+  }
 
   return (
     <span className={`inline-flex items-center gap-1.5 rounded-full border border-foreground px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${className}`}>
       <CloudOff className="h-3 w-3" aria-hidden />
-      Offline
+      Offline{queue.pending > 0 ? ` · ${queue.pending}` : ""}
     </span>
   );
 }

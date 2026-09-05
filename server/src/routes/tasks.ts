@@ -7,6 +7,34 @@ const router = Router();
 
 router.param("id", objectIdParam);
 
+const CLOCK = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+/**
+ * The optional "when" half of a task: a time of day, and when to be reminded.
+ *
+ * Both are cleared by sending null, which is how the bell is switched back off.
+ */
+function readWhen(body: Record<string, unknown>): { ok: true; value: { time?: string | null; remindAt?: Date | null } } | { ok: false; error: string } {
+  const value: { time?: string | null; remindAt?: Date | null } = {};
+
+  if (body.time !== undefined) {
+    if (body.time === null || body.time === "") value.time = null;
+    else if (typeof body.time === "string" && CLOCK.test(body.time)) value.time = body.time;
+    else return { ok: false, error: "the time has to look like 15:00" };
+  }
+
+  if (body.remindAt !== undefined) {
+    if (body.remindAt === null || body.remindAt === "") value.remindAt = null;
+    else {
+      const at = new Date(String(body.remindAt));
+      if (Number.isNaN(at.getTime())) return { ok: false, error: "that reminder time does not look right" };
+      value.remindAt = at;
+    }
+  }
+
+  return { ok: true, value };
+}
+
 function startOfToday() {
   return toDayUTC(new Date());
 }
@@ -111,7 +139,10 @@ router.post("/", async (req, res) => {
   if (!cleanTitle) return res.status(400).json({ error: "title required" });
   if (!day) return res.status(400).json({ error: "valid date required" });
 
-  const task = await Task.create({ title: cleanTitle, date: day });
+  const when = readWhen(req.body);
+  if (!when.ok) return res.status(400).json({ error: when.error });
+
+  const task = await Task.create({ title: cleanTitle, date: day, ...when.value });
   res.json(task);
 });
 
@@ -136,8 +167,17 @@ router.patch("/:id", async (req, res) => {
   const task = await Task.findById(req.params.id);
   if (!task) return res.status(404).json({ error: "not found" });
 
+  const when = readWhen(req.body);
+  if (!when.ok) return res.status(400).json({ error: when.error });
+
   if (cleanTitle) task.title = cleanTitle;
   if (day) task.date = day;
+  if ("time" in req.body) task.time = when.value.time ?? null;
+  if ("remindAt" in req.body) {
+    task.remindAt = when.value.remindAt ?? null;
+    // A reminder that has been moved has not happened yet.
+    task.remindedAt = null;
+  }
   if (typeof done === "boolean") {
     task.done = done;
     task.completedAt = done ? new Date() : null;

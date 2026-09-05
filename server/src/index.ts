@@ -1,6 +1,9 @@
 import dns from "dns";
 dns.setServers(["8.8.8.8", "1.1.1.1"]);
 
+// Must come before any model is imported: a global Mongoose plugin only reaches
+// schemas created after it is registered.
+import "./trash-bootstrap";
 import express, { type ErrorRequestHandler } from "express";
 import mongoose from "mongoose";
 import cors from "cors";
@@ -22,6 +25,14 @@ import sleepRouter from "./routes/sleep";
 import journalRouter from "./routes/journal";
 import bodyRouter from "./routes/body";
 import streakRouter from "./routes/streak";
+import settingsRouter from "./routes/settings";
+import exportRouter from "./routes/export";
+import remindersRouter from "./routes/reminders";
+import { startReminderRunner } from "./lib/reminder-runner";
+import { idempotency } from "./lib/idempotency";
+import trashRouter from "./routes/trash";
+import aheadRouter from "./routes/ahead";
+import { trashScope } from "./lib/trash";
 
 dotenv.config();
 
@@ -58,10 +69,19 @@ app.use(
   }),
 );
 
+app.use("/api", idempotency);
+// Anything a single request deletes becomes one undoable batch.
+app.use("/api", trashScope);
+
 app.use("/api/sleep", sleepRouter);
 app.use("/api/journal", journalRouter);
 app.use("/api/body", bodyRouter);
 app.use("/api/streak", streakRouter);
+app.use("/api/settings", settingsRouter);
+app.use("/api/export", exportRouter);
+app.use("/api/reminders", remindersRouter);
+app.use("/api/trash", trashRouter);
+app.use("/api/ahead", aheadRouter);
 
 app.use("/api/income", incomeRouter);
 
@@ -130,5 +150,8 @@ mongoose
   .then(() => {
     console.log("MongoDB connected");
     app.listen(PORT, () => console.log(`Server running on ${PORT}`));
+    // The clock behind the reminders. Starts only once the database is up, since
+    // every pass reads what is due from it.
+    startReminderRunner();
   })
   .catch((err) => console.error("Mongo error:", err));

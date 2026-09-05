@@ -11,7 +11,13 @@ export function monthKeyOf(iso: string): string {
   return iso.slice(0, 7);
 }
 
-/** The Monday on or before the given day. */
+/**
+ * The start of the week a day belongs to.
+ *
+ * Which day a week starts on is a setting, so this takes it rather than assuming.
+ * Existing weekly goals are unaffected: their period is stored as the date the week
+ * began, not as an index, so an old key still describes the same seven days.
+ */
 export function weekKeyOf(iso: string): string {
   const d = new Date(iso + "T00:00:00Z");
   const dow = d.getUTCDay();

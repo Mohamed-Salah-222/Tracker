@@ -1,11 +1,36 @@
 import { Router } from "express";
-import { Habit, HABIT_TYPES, type HabitType } from "../models/Habit";
+import { Habit, HABIT_TYPES, TIMES_OF_DAY, type HabitType, type TimeOfDay } from "../models/Habit";
+import { DEFAULT_SCHEDULE, describeSchedule, normalizeSchedule, type Schedule } from "../lib/habit-schedule";
 import { DashboardTracker } from "../models/DashboardTracker";
 import { ensureHabits } from "../lib/habit-seed";
-import { isNonNegativeNumber, objectIdParam, trimmedString } from "../lib/validation";
+import { isNonNegativeNumber, objectIdParam, parseDayUTC, trimmedString } from "../lib/validation";
+import { habitStats } from "../lib/habit-stats";
+import { loadSettings } from "../models/Settings";
 
 const router = Router();
 router.param("id", objectIdParam);
+
+const today = () => new Date().toISOString().slice(0, 10);
+/** "Today" is the browser's local day, so the client says which one it means. */
+const todayFrom = (v: unknown) => (parseDayUTC(v) ?? new Date()).toISOString().slice(0, 10);
+const isTimeOfDay = (v: unknown): v is TimeOfDay => typeof v === "string" && (TIMES_OF_DAY as readonly string[]).includes(v);
+
+/**
+ * A pause ends on a day, not at an instant. Anything else means "back on Tuesday"
+ * silently becomes "back on Tuesday at whatever time you happened to set it".
+ */
+function readPausedUntil(v: unknown): { value: Date | null } | { error: string } {
+  if (v === null || v === "") return { value: null };
+  if (typeof v !== "string") return { error: "paused until must be a day like 2026-09-20" };
+  // Checked by parsing and reading back rather than by a pattern. An anchored date
+  // pattern in this codebase has now lost its backslashes to a patch script four
+  // times, and a silently broken one rejects every real day.
+  const parsed = new Date(v + "T00:00:00Z");
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== v) {
+    return { error: "paused until must be a day like 2026-09-20" };
+  }
+  return { value: parsed };
+}
 
 const isType = (v: unknown): v is HabitType => typeof v === "string" && (HABIT_TYPES as readonly string[]).includes(v);
 
@@ -16,6 +41,17 @@ function slugify(label: string): string {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 40);
+}
+
+/**
+ * Copied field by field rather than spread. A Mongoose subdocument carries internals
+ * that have no business going over the wire, and a habit stored before schedules
+ * existed has no subdocument at all.
+ */
+function scheduleOf(h: InstanceType<typeof Habit>): Schedule {
+  const s = h.schedule;
+  if (!s) return { ...DEFAULT_SCHEDULE };
+  return { type: s.type, days: [...(s.days ?? [])], times: s.times, n: s.n, anchor: s.anchor ?? null };
 }
 
 function shape(h: InstanceType<typeof Habit>) {
@@ -29,6 +65,10 @@ function shape(h: InstanceType<typeof Habit>) {
     dailyTarget: h.dailyTarget,
     unit: h.unit,
     monthlyTarget: h.monthlyTarget,
+    schedule: scheduleOf(h),
+    scheduleLabel: describeSchedule(scheduleOf(h)),
+    timeOfDay: h.timeOfDay,
+    pausedUntil: h.pausedUntil ? h.pausedUntil.toISOString().slice(0, 10) : null,
     onHabitsPage: h.onHabitsPage,
     order: h.order,
     archived: h.archived,
@@ -55,6 +95,10 @@ router.post("/", async (req, res) => {
   const monthlyTarget = req.body?.monthlyTarget ?? 0;
   if (!isNonNegativeNumber(monthlyTarget)) return res.status(400).json({ error: "monthly target must be zero or more" });
 
+  const scheduled = normalizeSchedule(req.body?.schedule, today());
+  if ("error" in scheduled) return res.status(400).json({ error: scheduled.error });
+  if (req.body?.timeOfDay !== undefined && !isTimeOfDay(req.body.timeOfDay)) return res.status(400).json({ error: "unknown time of day" });
+
   const base = slugify(label);
   if (!base) return res.status(400).json({ error: "name needs at least one letter or number" });
   // A key collision means the same habit already exists, including an archived one
@@ -74,6 +118,8 @@ router.post("/", async (req, res) => {
     dailyTarget: type === "count" ? dailyTarget : 0,
     unit: type === "count" ? (trimmedString(req.body?.unit) ?? "") : "",
     monthlyTarget,
+    schedule: scheduled.schedule,
+    timeOfDay: isTimeOfDay(req.body?.timeOfDay) ? req.body.timeOfDay : "anytime",
     onHabitsPage: req.body?.onHabitsPage !== false,
     order: (last?.order ?? 0) + 1,
   });
@@ -110,6 +156,22 @@ router.patch("/:id", async (req, res) => {
     if (!isNonNegativeNumber(req.body.monthlyTarget)) return res.status(400).json({ error: "monthly target must be zero or more" });
     habit.monthlyTarget = req.body.monthlyTarget;
   }
+  if (req.body?.schedule !== undefined) {
+    // The existing anchor is the fallback, so re-saving a habit does not shift its cycle.
+    const next = normalizeSchedule(req.body.schedule, habit.schedule?.anchor ?? today());
+    if ("error" in next) return res.status(400).json({ error: next.error });
+    habit.set("schedule", next.schedule);
+  }
+  if (req.body?.timeOfDay !== undefined) {
+    if (!isTimeOfDay(req.body.timeOfDay)) return res.status(400).json({ error: "unknown time of day" });
+    habit.timeOfDay = req.body.timeOfDay;
+  }
+  if (req.body?.pausedUntil !== undefined) {
+    const paused = readPausedUntil(req.body.pausedUntil);
+    if ("error" in paused) return res.status(400).json({ error: paused.error });
+    habit.pausedUntil = paused.value;
+  }
+
   if (habit.type === "check") {
     habit.dailyTarget = 0;
     habit.unit = "";
@@ -163,6 +225,23 @@ router.put("/order", async (req, res) => {
   if (!Array.isArray(ids)) return res.status(400).json({ error: "ids must be an array" });
   await Promise.all(ids.map((id, index) => Habit.updateOne({ _id: id }, { $set: { order: index } })));
   res.json({ ok: true });
+});
+
+/**
+ * One habit over time.
+ *
+ * Looked up by key rather than id, because a key is what the tracker rows carry and
+ * what a bookmarked link should survive a rebuild with.
+ */
+router.get("/:key/stats", async (req, res) => {
+  await ensureHabits();
+  const habit = await Habit.findOne({ key: req.params.key });
+  if (!habit) return res.status(404).json({ error: "no habit by that name" });
+
+  const days = Math.min(Math.max(Number(req.query.days) || 365, 7), 730);
+  const settings = await loadSettings();
+  const stats = await habitStats(habit, { todayIso: todayFrom(req.query.today), days, startsOn: settings.week.startsOn });
+  res.json({ habit: shape(habit), stats });
 });
 
 export default router;

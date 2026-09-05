@@ -126,9 +126,232 @@
   --color-workout-rest-bg: #f4f4f5;
   --color-workout-rest-fg: #71717a;
 
+  /* The filled "done" state, and the greys the grid is built from. These were hex
+     literals inside Dashboard.tsx, which is why the grid could not follow a theme. */
+  --color-done: #18181b;
+  --color-done-strong: #000000;
+  --color-done-soft: #d4d4d4;
+  --color-done-faint: #f5f5f5;
+  --color-done-ring: #a3a3a3;
+
+  /* The dark banner above the habit grid and the analysis block. */
+  --color-grid-header: #262626;
+  --color-grid-header-strong: #171717;
+  --color-grid-header-fg: #fafafa;
+
+  /* Card shadow. Lifted off the page in light, invisible in dark where a shadow
+     against near-black is just a smudge. */
+  --shadow-card: 0 14px 36px rgba(15, 23, 42, 0.06);
+
+  /* The habit grid. A cell has four states and each one is a colour here rather than
+     a literal in the component, which is why the grid was the one part of the app
+     that could not follow a theme: an empty August came out as a wall of white boxes
+     on a black page. */
+  --color-cell: #ffffff;
+  --color-cell-off: #f5f5f5;
+  --color-cell-border: #a3a3a3;
+  --color-cell-border-off: #d4d4d4;
+  /* The tick sitting on a filled cell. Always the opposite of what it sits on. */
+  --color-done-fg: #ffffff;
+  --color-excused: #a3a3a3;
+  --color-excused-border: #737373;
+  --color-excused-fg: #ffffff;
+  --color-grid-day: #ffffff;
+  --color-grid-weekend: #f5f5f5;
+  /* Chart scaffolding: axis lines and the unfilled part of a ring. */
+  --color-chart-grid: #e5e5e5;
+  --color-chart-track: #e5e5e5;
+
   /* Fonts */
   --font-sans: "Geist", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
+}
+
+/* =====================================================================
+   Themes
+   =====================================================================
+   The light palette above is the source of truth for what each token means. Dark
+   only restates values, never introduces a token, so a colour cannot exist in one
+   theme and be missing from the other.
+
+   Three states: an explicit choice stamps data-theme on the root, and "system"
+   stamps nothing and lets the media query answer.
+   ===================================================================== */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+  --color-background: #09090b;
+  --color-foreground: #fafafa;
+  --color-card: #131316;
+  --color-card-foreground: #fafafa;
+  --color-popover: #18181b;
+  --color-popover-foreground: #fafafa;
+  --color-primary: #fafafa;
+  --color-primary-foreground: #09090b;
+  --color-secondary: #1f1f23;
+  --color-secondary-foreground: #fafafa;
+  --color-muted: #1f1f23;
+  --color-muted-foreground: #a1a1aa;
+  --color-accent: #1f1f23;
+  --color-accent-foreground: #fafafa;
+  --color-destructive: #f87171;
+  --color-destructive-foreground: #09090b;
+  --color-border: #27272a;
+  --color-border-strong: #3f3f46;
+  --color-input: #27272a;
+  --color-ring: #fafafa;
+
+  --color-income: #fafafa;
+  --color-income-bg: #1f1f23;
+  --color-income-border: #3f3f46;
+  --color-expense: #a1a1aa;
+  --color-expense-bg: #1f1f23;
+  --color-success: #fafafa;
+  --color-warning: #a1a1aa;
+
+  --color-sidebar: #09090b;
+  --color-sidebar-foreground: #fafafa;
+  --color-sidebar-border: #27272a;
+
+  --color-done: #fafafa;
+  --color-done-strong: #ffffff;
+  --color-done-soft: #3f3f46;
+  --color-done-faint: #1f1f23;
+  --color-done-ring: #52525b;
+
+  /* The banner sits above the card in dark, not below it: emphasis reads as lighter
+     against a dark ground, and keeping these darker than the card made the habit
+     name column and the week header disappear into the page. */
+  --color-grid-header: #26262c;
+  --color-grid-header-strong: #33333b;
+  --color-grid-header-fg: #fafafa;
+
+  --shadow-card: 0 1px 0 rgba(255, 255, 255, 0.03);
+
+  --color-cell: #131316;
+  --color-cell-off: #17171a;
+  --color-cell-border: #52525b;
+  --color-cell-border-off: #2d2d31;
+  --color-done-fg: #09090b;
+  --color-excused: #3f3f46;
+  --color-excused-border: #52525b;
+  --color-excused-fg: #d4d4d8;
+  --color-grid-day: #131316;
+  --color-grid-weekend: #1a1a1e;
+  --color-chart-grid: #27272a;
+  --color-chart-track: #27272a;
+  }
+}
+
+:root[data-theme="dark"] {
+  --color-background: #09090b;
+  --color-foreground: #fafafa;
+  --color-card: #131316;
+  --color-card-foreground: #fafafa;
+  --color-popover: #18181b;
+  --color-popover-foreground: #fafafa;
+  --color-primary: #fafafa;
+  --color-primary-foreground: #09090b;
+  --color-secondary: #1f1f23;
+  --color-secondary-foreground: #fafafa;
+  --color-muted: #1f1f23;
+  --color-muted-foreground: #a1a1aa;
+  --color-accent: #1f1f23;
+  --color-accent-foreground: #fafafa;
+  --color-destructive: #f87171;
+  --color-destructive-foreground: #09090b;
+  --color-border: #27272a;
+  --color-border-strong: #3f3f46;
+  --color-input: #27272a;
+  --color-ring: #fafafa;
+
+  --color-income: #fafafa;
+  --color-income-bg: #1f1f23;
+  --color-income-border: #3f3f46;
+  --color-expense: #a1a1aa;
+  --color-expense-bg: #1f1f23;
+  --color-success: #fafafa;
+  --color-warning: #a1a1aa;
+
+  --color-sidebar: #09090b;
+  --color-sidebar-foreground: #fafafa;
+  --color-sidebar-border: #27272a;
+
+  --color-done: #fafafa;
+  --color-done-strong: #ffffff;
+  --color-done-soft: #3f3f46;
+  --color-done-faint: #1f1f23;
+  --color-done-ring: #52525b;
+
+  --color-grid-header: #1f1f23;
+  --color-grid-header-strong: #131316;
+  --color-grid-header-fg: #fafafa;
+
+  --shadow-card: 0 1px 0 rgba(255, 255, 255, 0.03);
+
+  --color-cell: #131316;
+  --color-cell-off: #17171a;
+  --color-cell-border: #52525b;
+  --color-cell-border-off: #2d2d31;
+  --color-done-fg: #09090b;
+  --color-excused: #3f3f46;
+  --color-excused-border: #52525b;
+  --color-excused-fg: #d4d4d8;
+  --color-grid-day: #131316;
+  --color-grid-weekend: #1a1a1e;
+  --color-chart-grid: #27272a;
+  --color-chart-track: #27272a;
+}
+
+/* =====================================================================
+   Fonts
+   Geist is the default. The rest are here because the right typeface for a dense
+   grid of numbers is a matter of taste, and it costs one variable.
+   ===================================================================== */
+:root[data-font="system"] {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+:root[data-font="serif"] {
+  --font-sans: ui-serif, Georgia, Cambria, "Times New Roman", serif;
+}
+:root[data-font="mono"] {
+  --font-sans: var(--font-mono);
+}
+
+/* =====================================================================
+   Density
+   Tailwind computes every padding, margin and gap from --spacing, so tightening
+   that one number tightens the whole app without touching a single component.
+   Text size is left alone: compact should fit more in, not shrink the words.
+   ===================================================================== */
+:root[data-density="compact"] {
+  --spacing: 0.2rem;
+}
+
+/* =====================================================================
+   Accent
+   Only the filled "done" colour moves. Everything else stays told apart by weight,
+   which is the visual language of the whole app: colouring one state is an accent,
+   colouring all of them would be a different design.
+   ===================================================================== */
+:root[data-accent="blue"] {
+  --color-done: #1d4ed8;
+  --color-done-strong: #1e40af;
+  --color-done-fg: #ffffff;
+}
+:root[data-accent="green"] {
+  --color-done: #15803d;
+  --color-done-strong: #166534;
+  --color-done-fg: #ffffff;
+}
+:root[data-accent="amber"] {
+  --color-done: #b45309;
+  --color-done-strong: #92400e;
+  --color-done-fg: #ffffff;
+}
+:root[data-accent="violet"] {
+  --color-done: #6d28d9;
+  --color-done-strong: #5b21b6;
+  --color-done-fg: #ffffff;
 }
 
 html,

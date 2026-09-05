@@ -44,14 +44,14 @@ export function StreakPill({ onNavigate }: { onNavigate?: () => void }) {
       to="/badges"
       onClick={onNavigate}
       aria-label={`Streak: ${data.current} ${data.current === 1 ? "day" : "days"}, ${data.usedToday ? "counted today" : "not counted today yet"}`}
-      className="mx-2 mb-2 flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 transition-colors hover:bg-white/10"
+      className="mx-2 mb-2 flex items-center gap-2 rounded-lg border border-border bg-muted/60 px-3 py-2 transition-colors hover:bg-muted"
     >
-      <Flame className={`h-4 w-4 shrink-0 ${data.usedToday ? "text-white" : "text-white/50"}`} strokeWidth={2.1} aria-hidden />
+      <Flame className={`h-4 w-4 shrink-0 ${data.usedToday ? "text-foreground" : "text-muted-foreground"}`} strokeWidth={2.1} aria-hidden />
       <span className="min-w-0 flex-1">
-        <span className="block font-mono text-sm font-semibold leading-none tabular-nums text-white">
-          {data.current} <span className="text-[11px] font-normal text-white/60">{data.current === 1 ? "day" : "days"}</span>
+        <span className="block font-mono text-sm font-semibold leading-none tabular-nums">
+          {data.current} <span className="text-[11px] font-normal text-muted-foreground">{data.current === 1 ? "day" : "days"}</span>
         </span>
-        <span className="mt-0.5 block truncate text-[10px] leading-none text-white/45">{data.usedToday ? "counted today" : "not counted yet"}</span>
+        <span className="mt-0.5 block truncate text-[10px] leading-none text-muted-foreground">{data.usedToday ? "counted today" : "not counted yet"}</span>
       </span>
     </Link>
   );

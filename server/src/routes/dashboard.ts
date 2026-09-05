@@ -15,6 +15,9 @@ import { kitchenSummary } from "../lib/kitchen-summary";
 import { DEFAULT_MONTHLY, TrackerGoals, loadTrackerGoals, type TrackerGoalValues } from "../models/TrackerGoals";
 import { monthRange, toDayUTC } from "../lib/dates";
 import { isNonNegativeNumber, parseDayUTC } from "../lib/validation";
+import { loadSettings } from "../models/Settings";
+import { hiddenRowKeys } from "../lib/modules";
+import { DEFAULT_SCHEDULE, describeSchedule, isOffDay, isPaused, type Schedule } from "../lib/habit-schedule";
 
 const router = Router();
 
@@ -50,6 +53,9 @@ type HabitDef = {
   monthlyTarget: number;
   onHabitsPage: boolean;
   derivedFrom: string | null;
+  schedule: Schedule;
+  timeOfDay: string;
+  pausedUntil: Date | null;
 };
 
 async function loadHabits(): Promise<HabitDef[]> {
@@ -66,6 +72,9 @@ async function loadHabits(): Promise<HabitDef[]> {
     monthlyTarget: d.monthlyTarget,
     onHabitsPage: d.onHabitsPage,
     derivedFrom: d.derivedFrom ?? null,
+    schedule: d.schedule ? { type: d.schedule.type, days: [...(d.schedule.days ?? [])], times: d.schedule.times, n: d.schedule.n, anchor: d.schedule.anchor ?? null } : { ...DEFAULT_SCHEDULE },
+    timeOfDay: d.timeOfDay ?? "anytime",
+    pausedUntil: d.pausedUntil ?? null,
   }));
 }
 
@@ -222,20 +231,27 @@ router.get("/", async (req, res) => {
   const { start: monthStart, end: monthEnd } = monthRange(year, month);
   const rangeStart = monthStart;
   const todayIso = iso(today);
+
+  const goals = await loadTrackerGoals();
+  const settings = await loadSettings();
+  const weekendDays = new Set(settings.week.weekendDays);
+
   const days: Day[] = Array.from({ length: Math.round((monthEnd.getTime() - monthStart.getTime()) / 86400000) }, (_, index) => {
     const date = addDays(monthStart, index);
     return {
       iso: iso(date),
       label: date.toLocaleDateString("en-US", { weekday: "short", timeZone: "UTC" }),
       day: date.getUTCDate(),
-      weekend: date.getUTCDay() === 0 || date.getUTCDay() === 6,
+      // Which days are the weekend is a setting, not a fact about the calendar.
+      // Hardcoding Saturday and Sunday auto-excused Sundays in Cairo, where the
+      // weekend is Friday and Saturday, and marked every Friday as a missed workday.
+      weekend: weekendDays.has(date.getUTCDay()),
       week: Math.floor(index / 7) + 1,
       active: date >= rangeStart,
     };
   });
   const activeDays = days.filter((day) => day.active);
 
-  const goals = await loadTrackerGoals();
   const habits = await loadHabits();
   const monthlyTargetOf = (key: string) => {
     const habit = habits.find((h) => h.key === key);
@@ -610,7 +626,12 @@ router.get("/", async (req, res) => {
   // the two cannot drift, which they did while each had its own copy of the rule.
   const kitchen = await kitchenSummary(12);
 
-  const rows = manualRows;
+  /**
+   * Rows belonging to a switched-off module never reach the page. Hiding the nav link
+   * while leaving its rows on the grid is what "off" must not mean.
+   */
+  const offRows = hiddenRowKeys(settings.modules);
+  const rows = manualRows.filter((row) => !offRows.has(row.id));
   const primaryRows = rows;
   const totalGoal = primaryRows.reduce((sum, row) => sum + row.goal, 0);
   const totalActual = primaryRows.reduce((sum, row) => sum + Math.min(row.actual, row.goal), 0);
@@ -871,6 +892,7 @@ router.get("/habits", async (req, res) => {
   const day = parseDayUTC(req.query.date);
   if (!day) return res.status(400).json({ error: "valid date required" });
 
+  const dayIso = iso(day);
   const goals = await loadTrackerGoals();
   const habits = (await loadHabits()).filter((h) => h.onHabitsPage);
   const keys = habits.map((h) => h.key);
@@ -916,17 +938,24 @@ router.get("/habits", async (req, res) => {
       state,
       checked: dailySatisfied(state),
       note: doc?.note ?? "",
+      timeOfDay: habit.timeOfDay,
+      scheduleLabel: describeSchedule(habit.schedule),
+      /** Not this habit's day. It reads as blank rather than as something you failed. */
+      offDay: isOffDay(habit.schedule, dayIso),
+      paused: isPaused(habit.pausedUntil, dayIso),
       monthDone: monthDone.get(habit.key) ?? 0,
       /** 0 on the definition means every day, so it resolves to the month's length. */
       monthTarget: habit.monthlyTarget > 0 ? habit.monthlyTarget : daysThisMonth,
     };
   });
 
+  // A day off and a pause are not owed, so they are not in the day's denominator.
+  const owed = items.filter((i) => !i.offDay && !i.paused);
   res.json({
-    date: iso(day),
-    done: items.filter((i) => i.state === "done").length,
-    skipped: items.filter((i) => i.state === "excused").length,
-    total: items.length,
+    date: dayIso,
+    done: owed.filter((i) => i.state === "done").length,
+    skipped: owed.filter((i) => i.state === "excused").length,
+    total: owed.length,
     items,
   });
 });

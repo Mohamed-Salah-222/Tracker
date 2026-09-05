@@ -10,6 +10,7 @@ import { Skeleton } from "../components/ui/skeleton";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
 import { TaskRow } from "../components/TaskRow";
+import { TaskWhenDialog } from "../components/TaskWhen";
 import { Check, ChevronLeft, ChevronRight, Plus, Sun, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
 import { WEEKDAY_SHORT, dayLong, getApiError, isWeekend, shiftDay, taskDay, type Task } from "../lib/tasks";
@@ -58,6 +59,8 @@ export default function Tasks() {
       setLoading(false);
     }
   }, [year, month, writeTasks]);
+
+
 
   useEffect(() => {
     void load();
@@ -318,8 +321,19 @@ function DayDialog({
   const [title, setTitle] = useState("");
   const [adding, setAdding] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<Task | null>(null);
+  /** The time and reminder editor, one dialog for whichever row asked for it. */
+  const [whenFor, setWhenFor] = useState<Task | null>(null);
 
   const done = tasks.filter((t) => t.done).length;
+
+  const saveWhen = async (patch: { time: string | null; remindAt: string | null }) => {
+    if (!whenFor) return;
+    const target = whenFor;
+    await mutate(
+      readTasks().map((t) => (t._id === target._id ? { ...t, ...patch, remindedAt: null } : t)),
+      () => api.patch(`/tasks/${target._id}`, patch),
+    );
+  };
 
   /** Optimistic month-level edit; rolls back the whole list if the request fails. */
   const mutate = async (next: Task[], request: () => Promise<unknown>) => {
@@ -416,13 +430,15 @@ function DayDialog({
             ) : (
               <AnimatePresence initial={false}>
                 {tasks.map((t) => (
-                  <TaskRow key={t._id} task={t} onToggle={toggle} onRename={rename} onMove={moveToNextDay} onDelete={setPendingDelete} moveLabel="Move to next day" />
+                  <TaskRow key={t._id} task={t} onToggle={toggle} onRename={rename} onMove={moveToNextDay} onDelete={setPendingDelete} onSetWhen={setWhenFor} moveLabel="Move to next day" />
                 ))}
               </AnimatePresence>
             )}
           </div>
         </DialogContent>
       </Dialog>
+
+      {whenFor && <TaskWhenDialog task={whenFor} open onOpenChange={(o) => !o && setWhenFor(null)} onSave={saveWhen} />}
 
       <AlertDialog open={!!pendingDelete} onOpenChange={(o) => !o && setPendingDelete(null)}>
         <AlertDialogContent>

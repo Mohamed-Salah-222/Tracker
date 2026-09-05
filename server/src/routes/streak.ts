@@ -2,6 +2,8 @@ import { Router } from "express";
 import { markUsed, nextUp, streakSummary, syncBadges } from "../lib/streak";
 import { allMeasures, invalidateMeasures } from "../lib/measures";
 import { GROUP_LABELS, GROUP_ORDER } from "../lib/badges";
+import { loadSettings } from "../models/Settings";
+import { hiddenBadgeGroups } from "../lib/modules";
 import { backfillUsage } from "../lib/usage-backfill";
 import { parseDayUTC } from "../lib/validation";
 
@@ -72,7 +74,9 @@ router.get("/badges", async (req, res) => {
   const { measures } = await allMeasures(todayIso);
   const { badges } = await syncBadges(measures, todayIso);
 
-  const groups = GROUP_ORDER.map((group) => {
+  // A module that is off keeps its badges earned and out of sight.
+  const offGroups = hiddenBadgeGroups((await loadSettings()).modules);
+  const groups = GROUP_ORDER.filter((group) => !offGroups.has(group)).map((group) => {
     const inGroup = badges.filter((b) => b.group === group);
     return {
       key: group,
@@ -83,13 +87,16 @@ router.get("/badges", async (req, res) => {
     };
   }).filter((g) => g.total > 0);
 
+  // The headline count follows what is on screen, or it would read 28 of 142 while
+  // showing forty.
+  const shown = badges.filter((b) => !offGroups.has(b.group));
   res.json({
     ...summary,
     measures,
     groups,
-    badges,
-    earned: badges.filter((b) => b.earned).length,
-    total: badges.length,
+    badges: shown,
+    earned: shown.filter((b) => b.earned).length,
+    total: shown.length,
     next: nextUp(measures),
   });
 });

@@ -8,11 +8,12 @@ import { Card, CardContent } from "../components/ui/card";
 import { Checkbox } from "../components/ui/checkbox";
 import { Skeleton } from "../components/ui/skeleton";
 import { toast } from "sonner";
-import { CheckCheck, ChevronLeft, ChevronRight, MessageSquarePlus, LayoutDashboard, Plus, Settings2, SkipForward } from "lucide-react";
+import { BarChart3, CheckCheck, ChevronLeft, ChevronRight, MessageSquarePlus, LayoutDashboard, Plus, Settings2, SkipForward } from "lucide-react";
 import HabitManager, { HabitForm } from "../components/HabitManager";
 import { HabitGlyph } from "../components/HabitGlyph";
 import { Input } from "../components/ui/input";
 import { getApiError, dayLabel, shiftDay } from "../lib/food";
+import { TIMES_OF_DAY, TIME_OF_DAY_LABEL, type TimeOfDay } from "../lib/habits";
 
 type HabitState = "done" | "excused" | null;
 
@@ -33,6 +34,11 @@ type HabitItem = {
   /** Where this habit stands in the month the shown day belongs to. */
   monthDone: number;
   monthTarget: number;
+  timeOfDay: TimeOfDay;
+  scheduleLabel: string;
+  /** Not this habit's day. Blank rather than a failure. */
+  offDay: boolean;
+  paused: boolean;
 };
 
 type HabitsDay = {
@@ -53,6 +59,9 @@ const stagger = (i: number) => ({
   transition: { ...fadeUp.transition, delay: Math.min(i, 7) * 0.03 },
 });
 
+/** A day off and a pause are not owed, so neither counts against the day. */
+const isOwed = (item: HabitItem) => !item.offDay && !item.paused;
+
 // =====================================================================
 // MAIN
 // =====================================================================
@@ -62,6 +71,7 @@ export default function Habits() {
   const [loading, setLoading] = useState(true);
   const [manageOpen, setManageOpen] = useState(false);
   const [creatingHabit, setCreatingHabit] = useState(false);
+  const [showNotToday, setShowNotToday] = useState(false);
 
   const dayRef = useRef<HabitsDay | null>(null);
   const writeDay = useCallback((next: HabitsDay) => {
@@ -91,9 +101,9 @@ export default function Habits() {
   const withItems = (items: HabitItem[]): HabitsDay => ({
     date,
     items,
-    total: items.length,
-    done: items.filter((i) => i.state === "done").length,
-    skipped: items.filter((i) => i.state === "excused").length,
+    total: items.filter(isOwed).length,
+    done: items.filter((i) => isOwed(i) && i.state === "done").length,
+    skipped: items.filter((i) => isOwed(i) && i.state === "excused").length,
   });
 
   const save = async (item: HabitItem, patch: { state?: HabitState; note?: string; amount?: number }) => {
@@ -130,6 +140,17 @@ export default function Habits() {
   };
 
   const items = day?.items ?? [];
+
+  /**
+   * Grouped by the part of the day they belong to, so opening the page in the morning
+   * shows the morning rather than a wall of everything. Empty slots are left out, and
+   * the headings only appear once there is more than one slot to tell apart.
+   */
+  const owedItems = items.filter(isOwed);
+  const notToday = items.filter((i) => !isOwed(i));
+  const groups = TIMES_OF_DAY.map((slot) => ({ slot, items: owedItems.filter((i) => i.timeOfDay === slot) })).filter((g) => g.items.length > 0);
+  const showSlotHeadings = groups.length > 1;
+
   const done = day?.done ?? 0;
   const skipped = day?.skipped ?? 0;
   const total = day?.total ?? 0;
@@ -230,10 +251,36 @@ export default function Habits() {
           </Card>
         </motion.div>
       ) : (
-        <div className="space-y-2">
-          {items.map((item, i) => (
-            <HabitCard key={item.kind} item={item} index={i + 2} onSave={save} />
+        <div className="space-y-4">
+          {groups.map((group) => (
+            <section key={group.slot} aria-label={TIME_OF_DAY_LABEL[group.slot]} className="space-y-2">
+              {showSlotHeadings && (
+                <h2 className="px-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  {TIME_OF_DAY_LABEL[group.slot]}
+                  <span className="ml-1.5 font-mono tabular-nums opacity-60">
+                    {group.items.filter((i) => i.state === "done").length}/{group.items.length}
+                  </span>
+                </h2>
+              )}
+              {group.items.map((item, i) => (
+                <HabitCard key={item.kind} item={item} index={i + 2} onSave={save} />
+              ))}
+            </section>
           ))}
+
+          {notToday.length > 0 && (
+            <section aria-label="Not today" className="space-y-2">
+              <button
+                type="button"
+                onClick={() => setShowNotToday((v) => !v)}
+                aria-expanded={showNotToday}
+                className="px-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground transition-colors hover:text-foreground"
+              >
+                {showNotToday ? "Hide" : "Show"} {notToday.length} not due today
+              </button>
+              {showNotToday && notToday.map((item, i) => <HabitCard key={item.kind} item={item} index={i + 2} onSave={save} />)}
+            </section>
+          )}
         </div>
       )}
 
@@ -307,13 +354,14 @@ function HabitCard({ item, index, onSave }: { item: HabitItem; index: number; on
 
   const isDone = item.state === "done";
   const isSkipped = item.state === "excused";
+  const owed = isOwed(item);
 
   const toggleDone = () => onSave(item, { state: isDone ? null : "done" });
   const toggleSkip = () => onSave(item, { state: isSkipped ? null : "excused" });
 
   return (
     <motion.section {...stagger(index)} aria-label={item.label}>
-      <Card style={isDone ? { boxShadow: "inset 3px 0 0 0 var(--color-foreground)" } : undefined}>
+      <Card className={owed ? undefined : "opacity-60"} style={isDone ? { boxShadow: "inset 3px 0 0 0 var(--color-foreground)" } : undefined}>
         <CardContent className="px-3 py-0 sm:px-4">
           <div className="flex items-center gap-2">
             {isCount ? (
@@ -360,15 +408,29 @@ function HabitCard({ item, index, onSave }: { item: HabitItem; index: number; on
                 <span className="min-w-0">
                   <span className={`block truncate text-sm font-semibold ${isSkipped ? "text-muted-foreground line-through" : ""}`}>{item.label}</span>
                   <span className="block truncate text-[11px] text-muted-foreground">
-                    {isSkipped ? "Skipped on purpose" : item.description}
-                    {item.description && !isSkipped ? " · " : ""}
-                    {!isSkipped && <span className="font-mono tabular-nums">{item.monthDone}/{item.monthTarget} this month</span>}
+                    {!owed
+                      ? item.paused
+                        ? "Paused"
+                        : `Not today · ${item.scheduleLabel}`
+                      : isSkipped
+                        ? "Skipped on purpose"
+                        : item.description}
+                    {owed && item.description && !isSkipped ? " · " : ""}
+                    {owed && !isSkipped && <span className="font-mono tabular-nums">{item.monthDone}/{item.monthTarget} this month</span>}
                   </span>
                 </span>
               </button>
             )}
 
             <div className="flex shrink-0 items-center gap-0.5">
+              <Link
+                to={`/habits/${item.kind}`}
+                aria-label={`${item.label} over time`}
+                title="History and streaks"
+                className="grid h-9 w-9 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              >
+                <BarChart3 className="h-3.5 w-3.5" aria-hidden />
+              </Link>
               <button
                 type="button"
                 onClick={toggleSkip}

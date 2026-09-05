@@ -15,6 +15,12 @@ export type Task = {
   /** ISO datetime from the API; the calendar day is the first 10 characters. */
   date: string;
   done: boolean;
+  /** "15:00", or null for some time that day. */
+  time?: string | null;
+  /** An absolute instant to be nudged at, or null for no reminder. */
+  remindAt?: string | null;
+  /** Set once the notification has gone out. */
+  remindedAt?: string | null;
   completedAt?: string | null;
   /** The anchor task every day is seeded with. Cannot be renamed or deleted. */
   isDefault?: boolean;

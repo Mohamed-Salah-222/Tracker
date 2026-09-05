@@ -2,8 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { motion } from "motion/react";
 import { Checkbox } from "./ui/checkbox";
 import { Input } from "./ui/input";
-import { ArrowRight, Pencil, Trash2 } from "lucide-react";
+import { ArrowRight, Clock, Pencil, Trash2 } from "lucide-react";
 import { relativeDay, taskDay, type Task } from "../lib/tasks";
+import { TaskWhenBadges } from "./TaskWhen";
 
 // =====================================================================
 // One task row, shared by Today and the Tasks calendar.
@@ -18,6 +19,7 @@ export function TaskRow({
   onRename,
   onDelete,
   onMove,
+  onSetWhen,
   moveLabel = "Move to tomorrow",
   showDate = false,
 }: {
@@ -26,6 +28,8 @@ export function TaskRow({
   onRename: (task: Task, title: string) => void;
   onDelete: (task: Task) => void;
   onMove?: (task: Task) => void;
+  /** Opens the time and reminder editor. Absent where a row is read only. */
+  onSetWhen?: (task: Task) => void;
   moveLabel?: string;
   showDate?: boolean;
 }) {
@@ -90,6 +94,7 @@ export function TaskRow({
         >
           <span className="flex items-center gap-1.5">
             <span className={`truncate text-sm ${task.done ? "text-muted-foreground line-through" : "text-foreground"}`}>{task.title}</span>
+            <TaskWhenBadges task={task} />
             {locked && (
               <span className="shrink-0 rounded-full border border-border px-1.5 py-px text-[9px] font-semibold uppercase tracking-wider text-muted-foreground" title="Added automatically each day">
                 Daily
@@ -110,6 +115,17 @@ export function TaskRow({
               className="grid h-9 w-9 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
             >
               <Pencil className="h-3.5 w-3.5" aria-hidden />
+            </button>
+          )}
+          {onSetWhen && !locked && (
+            <button
+              type="button"
+              onClick={() => onSetWhen(task)}
+              aria-label={`Set a time or reminder for "${task.title}"`}
+              title="Time and reminder"
+              className="grid h-9 w-9 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              <Clock className="h-3.5 w-3.5" aria-hidden />
             </button>
           )}
           {onMove && !task.done && !locked && (

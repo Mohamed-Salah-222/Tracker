@@ -8,13 +8,13 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Input } from "../components/ui/input";
 import { Checkbox } from "../components/ui/checkbox";
 import { Skeleton } from "../components/ui/skeleton";
-import { toast } from "sonner";
-import { getApiError } from "../lib/food";
 
 // A year of history and every habit's whole life. Only wanted when asked for, so it
 // stays out of the bundle until the button is pressed.
 const DashboardRecapModal = lazy(() => import("../components/DashboardRecapModal"));
 import { todayISO } from "../lib/today";
+import { TargetsEditor } from "../components/settings/TargetsEditor";
+import { useSettings } from "../lib/useSettings";
 import {
   BarChart3,
   Beef,
@@ -132,14 +132,6 @@ type AmountEdit = {
   target: number;
 };
 
-const LEGACY_VISIBILITY_KEY = "lifetracker.dashboard.visibleRows.v5";
-/**
- * What to hide, rather than what to show. The old list named every row it wanted, so
- * a habit created afterwards was missing from the grid with nothing to explain why,
- * and it still named projectMedical and projectGym months after those were renamed.
- */
-const TRACKER_HIDDEN_KEY = "lifetracker.dashboard.hiddenRows.v1";
-
 const fadeUp = {
   initial: { opacity: 0, y: 8 },
   animate: { opacity: 1, y: 0 },
@@ -164,31 +156,26 @@ const iconMap = {
   "check-square": CheckSquare,
 };
 
-const ACCENT_TONE = { base: "#18181b", dark: "#000000", soft: "#d4d4d4", faint: "#f5f5f5", ring: "#a3a3a3" };
-const ROW_CHROME = { base: "#262626", dark: "#171717" };
+/**
+ * The grid's palette, as tokens rather than hex literals.
+ *
+ * These were fixed colours, which is why the busiest screen in the app was the one
+ * that could not follow a theme. They are variables now, so dark mode restates them
+ * and the accent moves only the filled "done" colour.
+ */
+const ACCENT_TONE = {
+  base: "var(--color-done)",
+  dark: "var(--color-done-strong)",
+  soft: "var(--color-done-soft)",
+  faint: "var(--color-done-faint)",
+  ring: "var(--color-done-ring)",
+};
+const ROW_CHROME = { base: "var(--color-grid-header)", dark: "var(--color-grid-header-strong)" };
 
 // Every row currently shares one accent; kept as a function so per-row tones can
 // come back without touching the call sites.
 function trackerTone() {
   return ACCENT_TONE;
-}
-
-function readHiddenRows(): string[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const raw = window.localStorage.getItem(TRACKER_HIDDEN_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      return Array.isArray(parsed) && parsed.every((item) => typeof item === "string") ? parsed : [];
-    }
-    // Nothing hidden by default. The old allow-list is dropped rather than inverted:
-    // it cannot be inverted without knowing every row, and it named keys that no
-    // longer exist.
-    window.localStorage.removeItem(LEGACY_VISIBILITY_KEY);
-    return [];
-  } catch {
-    return [];
-  }
 }
 
 function shiftMonth(monthKey: string, amount: number) {
@@ -246,7 +233,14 @@ export default function Dashboard() {
   const [goalsOpen, setGoalsOpen] = useState(false);
   const [recapOpen, setRecapOpen] = useState(false);
   const [recapMounted, setRecapMounted] = useState(false);
-  const [hiddenIds, setHiddenIds] = useState<string[]>(readHiddenRows);
+  /**
+   * Which rows are hidden lives in the settings document now, not in this browser.
+   * Hiding a row on the laptop used to leave it showing on the phone.
+   */
+  const { settings, update } = useSettings();
+  const hiddenIds = settings.dashboard.hiddenRows;
+  const setHiddenIds = (next: string[] | ((current: string[]) => string[])) =>
+    void update({ dashboard: { hiddenRows: typeof next === "function" ? next(hiddenIds) : next } });
 
   const load = useCallback(async () => {
     // The local calendar day travels with the request. Left to its own UTC clock the
@@ -261,10 +255,6 @@ export default function Dashboard() {
   useEffect(() => {
     void load();
   }, [load]);
-
-  useEffect(() => {
-    window.localStorage.setItem(TRACKER_HIDDEN_KEY, JSON.stringify(hiddenIds));
-  }, [hiddenIds]);
 
   // `data?.rows ?? []` built a fresh array on every render while data was null,
   // so it never matched as a dependency and every downstream useMemo recomputed.
@@ -419,7 +409,7 @@ export default function Dashboard() {
   const isAtMinMonth = monthKeyToNumber(data.month.key) <= monthKeyToNumber(data.metrics.earliestMonth);
 
   return (
-    <div className="w-full max-w-[1680px] md:max-h-[calc(100svh-3rem)] flex flex-col gap-3 overflow-visible md:overflow-hidden rounded-[18px] md:rounded-[24px] border border-border bg-card p-2.5 md:p-4 text-foreground shadow-[0_18px_50px_rgba(15,23,42,0.06)]">
+    <div className="w-full max-w-[1680px] md:max-h-[calc(100svh-3rem)] flex flex-col gap-3 overflow-visible md:overflow-hidden rounded-[18px] md:rounded-[24px] border border-border bg-card p-2.5 md:p-4 text-foreground shadow-[var(--shadow-card)]">
       <motion.div {...fadeUp} className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <div className="text-[10px] uppercase tracking-[0.22em] font-semibold text-muted-foreground">Habit Tracker</div>
@@ -467,24 +457,24 @@ export default function Dashboard() {
       </motion.div>
 
       <motion.div {...fadeUp} className="grid grid-cols-1 2xl:grid-cols-[minmax(0,1fr)_256px] gap-3 items-start">
-        <Card className="overflow-hidden py-0 gap-0 rounded-xl min-w-0 border-border bg-card shadow-[0_14px_36px_rgba(15,23,42,0.06)]">
+        <Card className="overflow-hidden py-0 gap-0 rounded-xl min-w-0 border-border bg-card shadow-[var(--shadow-card)]">
           <CardContent className="p-0">
             <div className="overflow-x-auto overscroll-x-contain">
               <div className="w-full" style={{ minWidth: monthGridMinWidth(data.month.days.length) }}>
                 <div className="grid items-stretch border-b border-border bg-muted text-[10px] font-semibold uppercase tracking-wide text-muted-foreground" style={{ gridTemplateColumns: monthGridTemplate(data.month.days.length) }}>
-                  <div className="px-3 md:px-4 py-2 border-r border-white/10 bg-neutral-900 text-white row-span-3 flex items-center justify-center text-center text-sm md:text-base font-bold tracking-tight">My Habits</div>
+                  <div className="px-3 md:px-4 py-2 border-r border-white/10 bg-[var(--color-grid-header-strong)] text-[var(--color-grid-header-fg)] row-span-3 flex items-center justify-center text-center text-sm md:text-base font-bold tracking-tight">My Habits</div>
                   {monthGroups.map((group) => (
-                    <div key={group.week} className="h-7 flex items-center justify-center text-center border-r border-white/15 bg-neutral-800 text-white" style={{ gridColumn: `span ${group.days.length}` }}>
+                    <div key={group.week} className="h-7 flex items-center justify-center text-center border-r border-white/15 bg-[var(--color-grid-header)] text-white" style={{ gridColumn: `span ${group.days.length}` }}>
                       Week {group.week}
                     </div>
                   ))}
                   {data.month.days.map((day, index) => (
-                    <div key={`${day.iso}-label`} className={`h-7 flex items-center justify-center border-r border-t border-white/15 text-[11px] font-semibold normal-case bg-neutral-700 text-neutral-50 ${index === 0 || monthWeekStartDates.has(day.iso) ? "border-l border-l-white/25" : ""} ${!day.active ? "opacity-70" : ""}`}>
+                    <div key={`${day.iso}-label`} className={`h-7 flex items-center justify-center border-r border-t border-white/15 text-[11px] font-semibold normal-case bg-[var(--color-grid-header)] text-neutral-50 ${index === 0 || monthWeekStartDates.has(day.iso) ? "border-l border-l-white/25" : ""} ${!day.active ? "opacity-70" : ""}`}>
                       {day.label.slice(0, 2)}
                     </div>
                   ))}
                   {data.month.days.map((day, index) => (
-                    <div key={`${day.iso}-number`} className={`h-7 flex items-center justify-center border-r border-t border-white/15 text-[11px] font-semibold tabular-nums bg-neutral-600 text-neutral-50 ${index === 0 || monthWeekStartDates.has(day.iso) ? "border-l border-l-white/25" : ""} ${!day.active ? "opacity-70" : ""}`}>
+                    <div key={`${day.iso}-number`} className={`h-7 flex items-center justify-center border-r border-t border-white/15 text-[11px] font-semibold tabular-nums bg-[var(--color-grid-header)] text-[var(--color-grid-header-fg)] ${index === 0 || monthWeekStartDates.has(day.iso) ? "border-l border-l-white/25" : ""} ${!day.active ? "opacity-70" : ""}`}>
                       {day.day}
                     </div>
                   ))}
@@ -517,7 +507,7 @@ export default function Dashboard() {
         </DialogContent>
       </Dialog>
 
-      <GoalsDialog open={goalsOpen} onOpenChange={setGoalsOpen} onSaved={load} />
+      <TargetsEditor open={goalsOpen} onOpenChange={setGoalsOpen} onSaved={load} />
       {recapMounted && (
         <Suspense fallback={null}>
           <DashboardRecapModal open={recapOpen} onOpenChange={setRecapOpen} />
@@ -552,214 +542,11 @@ export default function Dashboard() {
   );
 }
 
-// =====================================================================
-// GoalsDialog: edit the targets every row is measured against
-// =====================================================================
-type GoalsResponse = {
-  caloriesTarget: number;
-  proteinTarget: number;
-  waterTargetMl: number;
-  stepsTarget: number;
-  workDayMoney: number;
-  sleepMinMinutes: number;
-  sleepMaxMinutes: number;
-  monthlyByKind: Record<string, number>;
-  editableKinds: { kind: string; label: string; monthly: number | null }[];
-};
-
-const DAILY_FIELDS: { key: keyof GoalsResponse & string; label: string; suffix: string }[] = [
-  { key: "caloriesTarget", label: "Calories", suffix: "cal / day" },
-  { key: "proteinTarget", label: "Protein", suffix: "g / day" },
-  { key: "waterTargetMl", label: "Water", suffix: "ml / day" },
-  { key: "stepsTarget", label: "Steps", suffix: "steps / day" },
-  { key: "workDayMoney", label: "Work", suffix: "$ / weekday" },
-];
-
-const hoursOf = (minutes: number) => String(Math.round((minutes / 60) * 100) / 100);
-
-function GoalsDialog({ open, onOpenChange, onSaved }: { open: boolean; onOpenChange: (b: boolean) => void; onSaved: () => void }) {
-  const [goals, setGoals] = useState<GoalsResponse | null>(null);
-  const [daily, setDaily] = useState<Record<string, string>>({});
-  const [monthly, setMonthly] = useState<Record<string, string>>({});
-  const [sleepMin, setSleepMin] = useState("6");
-  const [sleepMax, setSleepMax] = useState("8");
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    if (!open) return;
-    let cancelled = false;
-    void (async () => {
-      try {
-        const r = await api.get<GoalsResponse>("/dashboard/goals");
-        if (cancelled) return;
-        setGoals(r.data);
-        setDaily(Object.fromEntries(DAILY_FIELDS.map((f) => [f.key, String(r.data[f.key] ?? 0)])));
-        // Blank means "every day of the month" rather than zero.
-        setMonthly(Object.fromEntries(r.data.editableKinds.map((k) => [k.kind, k.monthly === null ? "" : String(k.monthly)])));
-        setSleepMin(hoursOf(r.data.sleepMinMinutes));
-        setSleepMax(hoursOf(r.data.sleepMaxMinutes));
-      } catch (e) {
-        toast.error(getApiError(e));
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [open]);
-
-  const save = async () => {
-    if (!goals || saving) return;
-    const body: Record<string, unknown> = {};
-
-    for (const f of DAILY_FIELDS) {
-      const n = Number(daily[f.key]);
-      if (!Number.isFinite(n) || n < 0) return toast.error(`${f.label} must be zero or more`);
-      body[f.key] = n;
-    }
-
-    const min = Number(sleepMin);
-    const max = Number(sleepMax);
-    if (!Number.isFinite(min) || !Number.isFinite(max) || min < 0 || max <= 0) return toast.error("The sleep range must be hours");
-    if (min > max) return toast.error("The shortest night cannot be longer than the longest");
-    body.sleepMinMinutes = Math.round(min * 60);
-    body.sleepMaxMinutes = Math.round(max * 60);
-
-    const byKind: Record<string, number | null> = {};
-    for (const k of goals.editableKinds) {
-      const raw = (monthly[k.kind] ?? "").trim();
-      if (raw === "") {
-        byKind[k.kind] = null;
-        continue;
-      }
-      const n = Number(raw);
-      if (!Number.isFinite(n) || n < 0) return toast.error(`${k.label} must be zero or more`);
-      byKind[k.kind] = n;
-    }
-    body.monthlyByKind = byKind;
-
-    setSaving(true);
-    try {
-      await api.patch("/dashboard/goals", body);
-      onOpenChange(false);
-      onSaved();
-    } catch (e) {
-      toast.error(getApiError(e));
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="!w-[calc(100vw-1rem)] !max-w-[560px] max-h-[90svh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle>Goals</DialogTitle>
-        </DialogHeader>
-
-        {!goals ? (
-          <div className="space-y-2 py-2">
-            {[0, 1, 2, 3, 4].map((i) => (
-              <Skeleton key={i} className="h-11 rounded-lg" />
-            ))}
-          </div>
-        ) : (
-          <div className="space-y-5">
-            <section>
-              <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Daily amounts</h3>
-              <p className="mb-2.5 text-[11px] text-muted-foreground">What counts as hitting it on a given day.</p>
-              <div className="space-y-2">
-                {DAILY_FIELDS.map((f) => (
-                  <div key={f.key} className="flex items-center gap-3">
-                    <span className="w-20 shrink-0 text-sm font-medium">{f.label}</span>
-                    <Input
-                      type="number"
-                      inputMode="numeric"
-                      min="0"
-                      value={daily[f.key] ?? ""}
-                      onChange={(e) => setDaily((d) => ({ ...d, [f.key]: e.target.value }))}
-                      onFocus={(e) => e.currentTarget.select()}
-                      aria-label={`${f.label} target`}
-                      className="h-11 flex-1 font-mono tabular-nums"
-                    />
-                    <span className="w-24 shrink-0 text-[11px] text-muted-foreground">{f.suffix}</span>
-                  </div>
-                ))}
-              </div>
-            </section>
-
-            <section className="border-t border-border pt-4">
-              <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Sleep range</h3>
-              <p className="mb-2.5 text-[11px] text-muted-foreground">A night inside this counts. The old habit spelled it into its own label, where nothing could read it.</p>
-              <div className="flex items-center gap-3">
-                <span className="w-20 shrink-0 text-sm font-medium">Hours</span>
-                <Input
-                  type="number"
-                  inputMode="decimal"
-                  min="0"
-                  step="0.5"
-                  value={sleepMin}
-                  onChange={(e) => setSleepMin(e.target.value)}
-                  onFocus={(e) => e.currentTarget.select()}
-                  aria-label="Shortest night that counts"
-                  className="h-11 flex-1 font-mono tabular-nums"
-                />
-                <span className="shrink-0 text-[11px] text-muted-foreground">to</span>
-                <Input
-                  type="number"
-                  inputMode="decimal"
-                  min="0"
-                  step="0.5"
-                  value={sleepMax}
-                  onChange={(e) => setSleepMax(e.target.value)}
-                  onFocus={(e) => e.currentTarget.select()}
-                  aria-label="Longest night that counts"
-                  className="h-11 flex-1 font-mono tabular-nums"
-                />
-              </div>
-            </section>
-
-            <section className="border-t border-border pt-4">
-              <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Days per month</h3>
-              <p className="mb-2.5 text-[11px] text-muted-foreground">How many days this month you mean to do it. Leave blank for every day.</p>
-              <div className="space-y-2">
-                {goals.editableKinds.map((k) => (
-                  <div key={k.kind} className="flex items-center gap-3">
-                    <span className="min-w-0 flex-1 truncate text-sm font-medium">{k.label}</span>
-                    <Input
-                      type="number"
-                      inputMode="numeric"
-                      min="0"
-                      placeholder="every day"
-                      value={monthly[k.kind] ?? ""}
-                      onChange={(e) => setMonthly((m) => ({ ...m, [k.kind]: e.target.value }))}
-                      onFocus={(e) => e.currentTarget.select()}
-                      aria-label={`${k.label} days per month`}
-                      className="h-11 w-32 shrink-0 text-right font-mono tabular-nums"
-                    />
-                  </div>
-                ))}
-              </div>
-            </section>
-          </div>
-        )}
-
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancel
-          </Button>
-          <Button onClick={save} disabled={!goals || saving}>
-            Save goals
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
 
 
 function ChartPanel({ title, icon: Icon, children }: { title: string; icon: React.ElementType; children: React.ReactNode }) {
   return (
-    <Card className="py-0 rounded-xl h-full border-border bg-card shadow-[0_14px_36px_rgba(15,23,42,0.06)]">
+    <Card className="py-0 rounded-xl h-full border-border bg-card shadow-[var(--shadow-card)]">
       <CardContent className="p-2.5 h-full">
         <div className="flex items-center gap-1.5 text-xs font-semibold mb-2 text-foreground">
           <span className="flex h-5 w-5 items-center justify-center rounded-md bg-muted text-foreground">
@@ -810,7 +597,7 @@ function PercentBarChart({ items, barWidth, plotHeight }: { items: { key: string
       <div className="relative" style={{ height: plotHeight + 20 }}>
         <svg className="absolute left-0 right-0 top-0 w-full overflow-visible" style={{ height: plotHeight }} viewBox={`0 0 ${plotWidth} ${plotHeight}`} preserveAspectRatio="none" role="img">
           {[0, 25, 50, 75, 100].map((tick) => (
-            <line key={tick} x1="0" x2={plotWidth} y1={plotHeight - (tick / 100) * plotHeight} y2={plotHeight - (tick / 100) * plotHeight} stroke="#e5e5e5" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+            <line key={tick} x1="0" x2={plotWidth} y1={plotHeight - (tick / 100) * plotHeight} y2={plotHeight - (tick / 100) * plotHeight} stroke="var(--color-chart-grid)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
           ))}
           {items.map((item, index) => {
             const x = step * index + step / 2 - svgBarWidth / 2;
@@ -870,14 +657,14 @@ function ProgressDonut({ percent, completed, total }: { percent: number; complet
   const circumference = 2 * Math.PI * radius;
   const dash = circumference * (Math.min(percent, 100) / 100);
   return (
-    <Card className="py-0 rounded-xl h-full border-border bg-card shadow-[0_14px_36px_rgba(15,23,42,0.06)]">
+    <Card className="py-0 rounded-xl h-full border-border bg-card shadow-[var(--shadow-card)]">
       <CardContent className="p-2.5 h-full">
         <h3 className="text-xs font-semibold text-foreground">Overall Stats</h3>
         <div className="mt-1.5 flex items-center gap-3">
           <div className="relative shrink-0" style={{ width: size, height: size }}>
             <svg width={size} height={size} className="-rotate-90">
-              <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke="#e5e5e5" strokeWidth={stroke} />
-              <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke="#18181b" strokeWidth={stroke} strokeDasharray={`${dash} ${circumference}`} strokeLinecap="round" />
+              <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke="var(--color-chart-grid)" strokeWidth={stroke} />
+              <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke="var(--color-done)" strokeWidth={stroke} strokeDasharray={`${dash} ${circumference}`} strokeLinecap="round" />
             </svg>
             <div className="absolute inset-0 flex items-center justify-center text-lg font-semibold tracking-tight tabular-nums text-foreground">{percent}%</div>
           </div>
@@ -910,7 +697,7 @@ function KitchenRing({ kitchen }: { kitchen?: DashboardResponse["kitchen"] }) {
   const dash = circumference * (denom > 0 ? Math.min(need / denom, 1) : 0);
 
   return (
-    <Card className="py-0 rounded-xl h-full border-border bg-card shadow-[0_14px_36px_rgba(15,23,42,0.06)]">
+    <Card className="py-0 rounded-xl h-full border-border bg-card shadow-[var(--shadow-card)]">
       <CardContent className="p-2.5 h-full">
         <div className="flex items-center justify-between gap-2">
           <h3 className="text-xs font-semibold text-foreground">Restock</h3>
@@ -931,8 +718,8 @@ function KitchenRing({ kitchen }: { kitchen?: DashboardResponse["kitchen"] }) {
           <div className="mt-1.5 flex items-center gap-3">
             <div className="relative shrink-0" style={{ width: size, height: size }}>
               <svg width={size} height={size} className="-rotate-90">
-                <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke="#e5e5e5" strokeWidth={stroke} />
-                <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke="#18181b" strokeWidth={stroke} strokeDasharray={`${dash} ${circumference}`} strokeLinecap="round" />
+                <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke="var(--color-chart-grid)" strokeWidth={stroke} />
+                <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke="var(--color-done)" strokeWidth={stroke} strokeDasharray={`${dash} ${circumference}`} strokeLinecap="round" />
               </svg>
               <div className="absolute inset-0 flex flex-col items-center justify-center leading-none">
                 <span className="text-lg font-semibold tabular-nums tracking-tight text-foreground">{need}</span>
@@ -985,7 +772,6 @@ function TrackerRowView({
 }) {
   const Icon = iconMap[row.icon as keyof typeof iconMap] ?? Target;
   const weekStartDates = new Set(weekGroups.map((group) => group.days[0]?.iso).filter(Boolean));
-  const tone = trackerTone();
   return (
     <div className="grid items-center border-b border-border/70 last:border-b-0 transition-colors hover:brightness-[0.99]" style={{ gridTemplateColumns: monthGridTemplate(days.length) }} title={row.description}>
       <div className="h-full min-h-9 px-3 py-1.5 border-r border-white/10 text-white flex items-center gap-2 min-w-0" style={{ backgroundColor: ROW_CHROME.base }}>
@@ -1000,7 +786,7 @@ function TrackerRowView({
           <div
             key={day.iso}
             className={`h-full min-h-9 flex items-center justify-center border-r border-border/70 ${index === 0 || weekStartDates.has(day.iso) ? "border-l border-l-border-strong" : ""}`}
-            style={{ backgroundColor: day.weekend ? tone.faint : "rgba(255,255,255,0.72)" }}
+            style={{ backgroundColor: day.weekend ? "var(--color-grid-weekend)" : "var(--color-grid-day)" }}
           >
             {cell ? <TrackerCell row={row} cell={cell} onSetState={onSetState} onAmountClick={onAmountClick} /> : null}
           </div>
@@ -1057,9 +843,17 @@ function TrackerCell({
   const handleCellClick = useSingleOrDoubleClick();
 
   const cellStyle = (targetCell: DailyCell | AmountCell) => {
-    if (targetCell.state === "excused") return { backgroundColor: "#a3a3a3", borderColor: "#737373", color: "#ffffff" };
-    if (targetCell.checked) return { backgroundColor: tone.base, borderColor: tone.dark, color: "#ffffff" };
-    return { backgroundColor: targetCell.editable ? "#ffffff" : "#f5f5f5", borderColor: targetCell.editable ? tone.ring : "#d4d4d4", color: tone.dark };
+    if (targetCell.state === "excused") {
+      return { backgroundColor: "var(--color-excused)", borderColor: "var(--color-excused-border)", color: "var(--color-excused-fg)" };
+    }
+    // The tick is drawn in done-fg, not white: on a white cell in dark mode a white
+    // tick is invisible, which is exactly what the grid was doing.
+    if (targetCell.checked) return { backgroundColor: tone.base, borderColor: tone.dark, color: "var(--color-done-fg)" };
+    return {
+      backgroundColor: targetCell.editable ? "var(--color-cell)" : "var(--color-cell-off)",
+      borderColor: targetCell.editable ? "var(--color-cell-border)" : "var(--color-cell-border-off)",
+      color: tone.dark,
+    };
   };
 
   if (row.kind === "steps-count" || row.kind === "work-money") {
@@ -1100,9 +894,9 @@ const ANALYSIS_COLUMNS = "64px 60px minmax(110px, 132px)";
 
 function AnalysisBlock({ rows }: { rows: TrackerRow[] }) {
   return (
-    <Card className="overflow-hidden py-0 gap-0 rounded-xl border-border bg-card shadow-[0_14px_36px_rgba(15,23,42,0.06)]">
+    <Card className="overflow-hidden py-0 gap-0 rounded-xl border-border bg-card shadow-[var(--shadow-card)]">
       <CardContent className="p-0">
-        <div className="grid border-b border-white/10 bg-neutral-900 text-white text-[10px] font-semibold uppercase tracking-wide" style={{ gridTemplateColumns: ANALYSIS_COLUMNS }}>
+        <div className="grid border-b border-white/10 bg-[var(--color-grid-header-strong)] text-[var(--color-grid-header-fg)] text-[10px] font-semibold uppercase tracking-wide" style={{ gridTemplateColumns: ANALYSIS_COLUMNS }}>
           <div className="h-7 flex items-center justify-center border-r border-white/20" style={{ gridColumn: "span 3" }}>
             Analysis
           </div>

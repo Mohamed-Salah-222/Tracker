@@ -1,13 +1,21 @@
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { Suspense, lazy, useEffect, type CSSProperties } from "react";
 import { SidebarProvider } from "./components/ui/sidebar";
+import { SettingsProvider } from "./components/SettingsProvider";
+import { ThemeApplier } from "./components/ThemeApplier";
 import { useSidebar } from "./components/ui/sidebar-context";
+import { toast } from "sonner";
 import { Toaster } from "./components/ui/sonner";
 import { AppSidebar } from "./components/AppSidebar";
 import { currentPageTitle } from "./lib/navigation";
 import { PrivateRoute } from "./components/PrivateRoute";
 import { InstallHint, OfflinePill } from "./components/ConnectionStatus";
+import { moduleForRoute } from "./lib/modules";
+import { useSettings } from "./lib/useSettings";
 import { pingUsage, watchWrites } from "./lib/streak";
+import { refreshSubscription } from "./lib/reminders";
+import { installOfflineQueue } from "./lib/offlineQueue";
+import { installUndo } from "./lib/undo";
 import { Menu } from "lucide-react";
 
 // Route-level code splitting: each page becomes its own chunk, so opening the app
@@ -21,6 +29,7 @@ const Today = lazy(() => import("./pages/Today"));
 const Calories = lazy(() => import("./pages/Calories"));
 const Kitchen = lazy(() => import("./pages/Kitchen"));
 const Habits = lazy(() => import("./pages/Habits"));
+const HabitPage = lazy(() => import("./pages/HabitPage"));
 const Goals = lazy(() => import("./pages/Goals"));
 const Journal = lazy(() => import("./pages/Journal"));
 const Badges = lazy(() => import("./pages/Badges"));
@@ -34,9 +43,12 @@ function PageFallback() {
 
 export default function App() {
   return (
-    <BrowserRouter>
-      <AppContent />
-    </BrowserRouter>
+    <SettingsProvider>
+      <ThemeApplier />
+      <BrowserRouter>
+        <AppContent />
+      </BrowserRouter>
+    </SettingsProvider>
   );
 }
 
@@ -61,6 +73,24 @@ function MobileTopBar() {
   );
 }
 
+/**
+ * A page belonging to a module that is switched off is not reachable, even by typing
+ * the address. Leaving it open would mean a "simple" setup could still be walked into
+ * by an old bookmark, and the page would be there with its data and no way back to it
+ * in the nav.
+ *
+ * Nothing is deleted, so this is a redirect and not an error.
+ */
+function ModuleRoute({ children }: { children: React.ReactNode }) {
+  const location = useLocation();
+  const { enabled, loaded } = useSettings();
+  const owner = moduleForRoute(location.pathname);
+  // Until the settings have loaded every module counts as on, or a slow answer would
+  // bounce you off the page you asked for.
+  if (loaded && owner && !enabled(owner.key)) return <Navigate to="/" replace />;
+  return <>{children}</>;
+}
+
 function AppContent() {
   const location = useLocation();
   const isDashboard = location.pathname === "/";
@@ -71,8 +101,34 @@ function AppContent() {
    * day, and a failure here is swallowed: no streak is worth a broken page.
    */
   useEffect(() => {
+    // Before anything else can fail: a write that leaves in a dead zone is kept and
+    // replayed rather than lost.
+    installOfflineQueue();
+    // Every delete in the app now offers to be taken back, without any page knowing.
+    installUndo();
     watchWrites();
     void pingUsage("open");
+    // Push endpoints rotate. Re-reporting what the browser holds keeps the server
+    // from quietly pushing into a dead one.
+    void refreshSubscription();
+
+    /**
+     * Everything queued offline has landed.
+     *
+     * Rows created while offline are still on screen with placeholder ids, so the
+     * refresh is offered rather than forced: nobody wants the page pulled out from
+     * under them mid sentence.
+     */
+    const onSynced = (event: Event) => {
+      const count = (event as CustomEvent<{ count: number }>).detail?.count ?? 0;
+      if (count <= 0) return;
+      toast.success(`Saved ${count} change${count === 1 ? "" : "s"}`, {
+        description: "Made while you were offline.",
+        action: { label: "Refresh", onClick: () => window.location.reload() },
+      });
+    };
+    window.addEventListener("lifetracker:synced", onSynced);
+    return () => window.removeEventListener("lifetracker:synced", onSynced);
   }, []);
 
   return (
@@ -95,6 +151,7 @@ function AppContent() {
         >
           <InstallHint />
           <Suspense fallback={<PageFallback />}>
+            <ModuleRoute>
             <Routes>
               <Route path="/" element={<Dashboard />} />
               <Route
@@ -115,6 +172,7 @@ function AppContent() {
               />
               <Route path="/tasks" element={<Tasks />} />
               <Route path="/habits" element={<Habits />} />
+              <Route path="/habits/:key" element={<HabitPage />} />
               <Route path="/goals" element={<Goals />} />
               <Route path="/goals/:id" element={<GoalPage />} />
               <Route path="/today" element={<Today />} />
@@ -128,6 +186,7 @@ function AppContent() {
               <Route path="/foods" element={<Foods />} />
               <Route path="/workout" element={<Workout />} />
             </Routes>
+            </ModuleRoute>
           </Suspense>
         </div>
       </main>

@@ -71,8 +71,11 @@ const server = http.createServer((req, res) => {
 
   // Does the data survive the dead zone too, or only the shell?
   const apiOffline = await page.evaluate(async () => {
-    const cache = await caches.open("lifetracker-api-v1");
-    const keys = (await cache.keys()).map((r) => r.url);
+    // Found rather than named: this check hardcoded a cache version once and quietly
+    // stopped testing anything the day the worker bumped it.
+    const name = (await caches.keys()).find((k) => k.includes("api"));
+    if (!name) return { ok: false, error: "no api cache at all" };
+    const keys = (await (await caches.open(name)).keys()).map((r) => r.url);
     if (keys.length === 0) return { ok: false, error: "nothing cached" };
     try {
       const r = await fetch(keys[0]);
